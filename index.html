@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ARCHIPELAGO — light aircraft simulator</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🛩️</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=B612+Mono:wght@400;700&family=B612:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #e8edf2;
+    --ink-dim: #9aa7b2;
+    --panel: rgba(16, 21, 26, 0.62);
+    --panel-line: rgba(232, 237, 242, 0.28);
+    --amber: #ffb300;
+    --warn: #ff453a;
+    --good: #63d97c;
+    --mag: #ff5fd2;
+    --menu-bg: #0b0f13;
+    font-size: clamp(13px, 1.1vw, 16px);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: var(--menu-bg); }
+  body { font-family: "B612", system-ui, sans-serif; color: var(--ink); }
+  canvas { display: block; }
+  .mono { font-family: "B612 Mono", ui-monospace, monospace; }
+
+  /* ---------- HUD ---------- */
+  #hud { position: fixed; inset: 0; pointer-events: none; user-select: none;
+         font-family: "B612 Mono", ui-monospace, monospace; opacity: 0; transition: opacity .5s; }
+  #hud.on { opacity: 1; }
+
+  .tape { position: absolute; top: 50%; transform: translateY(-50%);
+          width: 4.6rem; height: 17rem; background: var(--panel);
+          border: 1px solid var(--panel-line); overflow: hidden; }
+  #tape-spd { left: max(2vw, 1rem); }
+  #tape-alt { right: max(2vw, 1rem); }
+  .tape .strip { position: absolute; left: 0; width: 100%; will-change: transform; }
+  .tape .tick { position: absolute; width: 100%; height: 0; }
+  .tape .tick i { position: absolute; top: -1px; width: .55rem; height: 2px; background: var(--ink); }
+  #tape-spd .tick i { right: 0; } #tape-alt .tick i { left: 0; }
+  .tape .tick span { position: absolute; top: -.55em; font-size: .8rem; color: var(--ink); }
+  #tape-spd .tick span { right: .8rem; } #tape-alt .tick span { left: .8rem; }
+  .tape .cursor { position: absolute; top: 50%; left: -1px; right: -1px; transform: translateY(-50%);
+          height: 2rem; background: #10151a; border: 2px solid var(--ink);
+          display: flex; align-items: center; justify-content: center;
+          font-size: 1.25rem; font-weight: 700; letter-spacing: .02em; }
+  .tape .unit { position: absolute; left: 0; right: 0; bottom: .3rem; text-align: center;
+          font-size: .65rem; color: var(--ink-dim); letter-spacing: .12em; }
+
+  #heading { position: absolute; top: max(1.5vh, .6rem); left: 50%; transform: translateX(-50%);
+          width: 24rem; height: 2.6rem; background: var(--panel); border: 1px solid var(--panel-line);
+          overflow: hidden; }
+  #heading .strip { position: absolute; top: 0; height: 100%; will-change: transform; }
+  #heading .htick { position: absolute; top: 0; width: 0; height: 100%; }
+  #heading .htick i { position: absolute; left: -1px; top: 0; width: 2px; height: .5rem; background: var(--ink); }
+  #heading .htick span { position: absolute; top: .7rem; left: 0; transform: translateX(-50%);
+          font-size: .85rem; color: var(--ink); }
+  #heading .lubber { position: absolute; left: 50%; top: 0; width: 0; height: 0; transform: translateX(-50%);
+          border-left: .45rem solid transparent; border-right: .45rem solid transparent;
+          border-top: .55rem solid var(--amber); }
+  #hdg-num { position: absolute; top: calc(max(1.5vh, .6rem) + 2.9rem); left: 50%; transform: translateX(-50%);
+          font-size: 1rem; font-weight: 700; background: var(--panel); border: 1px solid var(--panel-line);
+          padding: .1rem .6rem; }
+
+  .datum { position: absolute; font-size: .8rem; }
+  #vsi   { left: calc(max(2vw, 1rem) + 5.2rem); top: calc(50% - 8.5rem); color: var(--ink-dim); }
+  #vsi b, #aoa b { color: var(--ink); font-weight: 400; }
+  #aoa   { left: calc(max(2vw, 1rem) + 5.2rem); top: calc(50% + 7.6rem); color: var(--ink-dim); }
+  #gmeter{ right: calc(max(2vw, 1rem) + 5.2rem); top: calc(50% + 7.6rem); color: var(--ink-dim); text-align: right;}
+  #radalt{ right: calc(max(2vw, 1rem) + 5.2rem); top: calc(50% - 8.5rem); color: var(--ink-dim); text-align: right;}
+
+  #status { position: absolute; left: max(2vw, 1rem); bottom: max(2.5vh, 1rem);
+          display: flex; gap: 1.4rem; font-size: .85rem; background: var(--panel);
+          border: 1px solid var(--panel-line); padding: .45rem .9rem; }
+  #status .lbl { color: var(--ink-dim); font-size: .62rem; letter-spacing: .14em; display: block; }
+  #status .val { font-weight: 700; }
+  #status .val.set { color: var(--good); }
+  #thr-bar { display: inline-block; width: 3.4rem; height: .45rem; border: 1px solid var(--ink-dim);
+          vertical-align: baseline; margin-left: .2rem; position: relative; }
+  #thr-bar i { position: absolute; inset: 1px auto 1px 1px; background: var(--ink); width: 0%; }
+
+  #annunciator { position: absolute; top: 24%; left: 50%; transform: translateX(-50%);
+          display: flex; flex-direction: column; gap: .4rem; align-items: center; }
+  .ann { font-size: 1.1rem; font-weight: 700; letter-spacing: .3em; padding: .25rem 1.1rem .25rem 1.4rem;
+          display: none; }
+  .ann.show { display: block; }
+  #ann-stall { color: var(--warn); border: 2px solid var(--warn); animation: blink .5s steps(1) infinite; }
+  #ann-over  { color: var(--amber); border: 2px solid var(--amber); }
+  #ann-gear  { color: var(--amber); border: 2px solid var(--amber); }
+  @keyframes blink { 50% { opacity: .15; } }
+  @media (prefers-reduced-motion: reduce) {
+    #ann-stall { animation: none; }
+    #msg, #hud { transition: none; }
+  }
+
+  #race { position: absolute; right: max(2vw, 1rem); top: max(1.5vh, .6rem); text-align: right;
+          background: var(--panel); border: 1px solid var(--panel-line); padding: .5rem .9rem; display: none; }
+  #race.show { display: block; }
+  #race .t { font-size: 1.5rem; font-weight: 700; }
+  #race .rings { font-size: .8rem; color: var(--mag); margin-top: .1rem; }
+  #race .best { font-size: .7rem; color: var(--ink-dim); margin-top: .15rem; }
+
+  #msg { position: absolute; bottom: 18%; left: 50%; transform: translateX(-50%);
+          font-family: "B612", sans-serif; font-size: 1.05rem; color: var(--ink);
+          background: var(--panel); border: 1px solid var(--panel-line); padding: .5rem 1.2rem;
+          opacity: 0; transition: opacity .4s; white-space: nowrap; }
+  #msg.show { opacity: 1; }
+
+  /* ---------- Flight school ---------- */
+  #instructor { position: absolute; bottom: max(9vh, 4.5rem); left: 50%; transform: translateX(-50%);
+          width: min(38rem, 86vw); background: var(--panel); border: 1px solid var(--panel-line);
+          border-left: 3px solid var(--amber); padding: .6rem 1rem .55rem; display: none;
+          font-family: "B612", sans-serif; }
+  #instructor.show { display: block; }
+  #instructor .kicker { font-family: "B612 Mono", monospace; font-size: .6rem; letter-spacing: .3em;
+          color: var(--amber); margin-bottom: .25rem; }
+  #instructor .text { font-size: .95rem; line-height: 1.45; }
+  #instructor .text b { font-family: "B612 Mono", monospace; font-weight: 400;
+          background: rgba(232,237,242,.12); padding: 0 .35em; border-radius: 2px; }
+  #instructor .steps { margin-top: .4rem; display: flex; gap: .3rem; }
+  #instructor .steps i { width: 1.1rem; height: .22rem; background: rgba(232,237,242,.18); }
+  #instructor .steps i.done { background: var(--good); }
+  #instructor .steps i.cur { background: var(--amber); }
+
+  #papi { position: absolute; left: calc(max(2vw, 1rem) + 5.6rem); top: 50%;
+          transform: translateY(-50%); display: none; flex-direction: column; gap: .35rem; }
+  #papi.show { display: flex; }
+  #papi i { width: .8rem; height: .8rem; border-radius: 50%; background: #fff;
+          border: 1px solid rgba(0,0,0,.4); }
+  #papi i.red { background: var(--warn); }
+  #papi .lbl { font-size: .55rem; color: var(--ink-dim); letter-spacing: .2em; text-align: center; }
+
+  #slip { position: absolute; top: calc(max(1.5vh, .6rem) + 5.2rem); left: 50%; transform: translateX(-50%);
+          width: 7rem; height: .9rem; background: var(--panel); border: 1px solid var(--panel-line);
+          display: none; }
+  #slip.show { display: block; }
+  #slip .ball { position: absolute; top: .09rem; left: 50%; width: .62rem; height: .62rem;
+          border-radius: 50%; background: var(--ink); transition: transform .1s linear; }
+  #slip .mark { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--panel-line); }
+
+  #help { position: absolute; right: max(2vw, 1rem); bottom: max(2.5vh, 1rem);
+          font-size: .72rem; color: var(--ink-dim); text-align: right; line-height: 1.75; display: none; }
+  #help.show { display: block; }
+  #help b { color: var(--ink); font-weight: 400; background: rgba(232,237,242,.12);
+          padding: 0 .35em; border-radius: 2px; }
+
+  /* ---------- Screens (menu / pause / crash / results) ---------- */
+  .screen { position: fixed; inset: 0; display: none; background:
+          linear-gradient(160deg, #0b0f13 0%, #0d1319 55%, #101a22 100%); z-index: 10; }
+  .screen.show { display: block; }
+  .screen .inner { position: absolute; left: clamp(2rem, 10vw, 12rem); top: 50%; transform: translateY(-50%);
+          max-width: 34rem; }
+  .kicker { font-family: "B612 Mono", monospace; font-size: .72rem; letter-spacing: .38em;
+          color: var(--amber); margin-bottom: 1.1rem; }
+  .screen h1 { font-size: clamp(2.6rem, 6vw, 4.2rem); font-weight: 700; letter-spacing: .01em;
+          line-height: .95; margin-bottom: .4rem; }
+  .screen h1 em { font-style: italic; font-weight: 400; color: var(--ink-dim); }
+  .screen .sub { color: var(--ink-dim); font-size: .95rem; margin-bottom: 2.6rem; max-width: 26rem; }
+  .btnrow { display: flex; flex-direction: column; gap: .1rem; align-items: flex-start; }
+  .btn { pointer-events: auto; cursor: pointer; background: none; border: none; text-align: left;
+          font-family: "B612 Mono", monospace; font-size: 1.15rem; color: var(--ink);
+          padding: .55rem 0; display: flex; align-items: baseline; gap: .9rem; }
+  .btn .no { color: var(--amber); font-size: .75rem; }
+  .btn .hint { color: var(--ink-dim); font-size: .72rem; }
+  .btn:hover, .btn:focus-visible { color: var(--amber); outline: none; }
+  .btn:hover .hint { color: var(--ink-dim); }
+  .btn .lbl { color: var(--ink-dim); font-size: .8rem; letter-spacing: .18em; min-width: 7.5ch; }
+  .btn .val { font-weight: 700; }
+  .btn.sel:hover .val::after { content: " ▸"; color: var(--amber); }
+  #btn-start { margin-top: 1.1rem; font-size: 1.3rem; }
+  .screen .foot { position: absolute; left: clamp(2rem, 10vw, 12rem); bottom: 2.2rem;
+          font-family: "B612 Mono", monospace; font-size: .68rem; color: var(--ink-dim);
+          letter-spacing: .1em; line-height: 2; }
+  .screen .foot b { color: var(--ink); font-weight: 400; }
+  #crash h1 { color: var(--warn); }
+  #results .stat { font-family: "B612 Mono", monospace; font-size: 2.4rem; font-weight: 700; }
+  #results .statlbl { font-family: "B612 Mono", monospace; font-size: .7rem;
+          letter-spacing: .3em; color: var(--ink-dim); margin-bottom: 2rem; }
+  .newbest { color: var(--good); }
+  #loading { z-index: 20; }
+  #loading .inner { font-family: "B612 Mono", monospace; color: var(--ink-dim); font-size: .8rem;
+          letter-spacing: .25em; }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <div class="tape" id="tape-spd"><div class="strip"></div><div class="cursor">0</div><div class="unit">KT IAS</div></div>
+  <div class="tape" id="tape-alt"><div class="strip"></div><div class="cursor">0</div><div class="unit">FT MSL</div></div>
+  <div id="heading"><div class="strip"></div><div class="lubber"></div></div>
+  <div id="hdg-num" class="mono">360</div>
+  <div class="datum" id="vsi">VS <b>+0000</b></div>
+  <div class="datum" id="radalt">AGL <b>0</b></div>
+  <div class="datum" id="aoa">&alpha; <b>0.0&deg;</b></div>
+  <div class="datum" id="gmeter">G <b>1.0</b></div>
+  <div id="annunciator">
+    <div class="ann" id="ann-stall">STALL</div>
+    <div class="ann" id="ann-over">OVERSPEED</div>
+  </div>
+  <div id="race">
+    <div class="t mono">0:00.0</div>
+    <div class="rings">RING 1 / 12</div>
+    <div class="best">BEST —</div>
+  </div>
+  <div id="status">
+    <div><span class="lbl">THR</span><span class="val" id="st-thr">0%<span id="thr-bar"><i></i></span></span></div>
+    <div><span class="lbl">FLAPS</span><span class="val" id="st-flaps">UP</span></div>
+    <div><span class="lbl">BRK</span><span class="val" id="st-brk">—</span></div>
+    <div><span class="lbl">CAM</span><span class="val" id="st-cam">CHASE</span></div>
+  </div>
+  <div id="msg"></div>
+  <div id="instructor">
+    <div class="kicker">INSTRUCTOR</div>
+    <div class="text"></div>
+    <div class="steps"></div>
+  </div>
+  <div id="papi">
+    <i></i><i></i><i class="red"></i><i class="red"></i>
+    <div class="lbl">PAPI</div>
+  </div>
+  <div id="slip"><span class="mark" style="left:33%"></span><span class="mark" style="left:67%"></span><span class="ball"></span></div>
+  <div id="help">
+    <b>&uarr;&darr;</b> pitch &nbsp;<b>&larr;&rarr;</b> roll &nbsp;<b>A D</b> rudder<br>
+    <b>W S</b> throttle &nbsp;<b>F</b>/<b>shift F</b> flaps &nbsp;<b>B</b> brakes<br>
+    <b>C</b> camera &nbsp;<b>R</b> reset &nbsp;<b>ESC</b> pause &nbsp;<b>?</b> hide
+  </div>
+</div>
+
+<div class="screen show" id="loading"><div class="inner">INITIALISING TERRAIN &hellip;</div></div>
+
+<div class="screen" id="menu">
+  <div class="inner">
+    <div class="kicker">LIGHT AIRCRAFT SIMULATOR</div>
+    <h1>ARCHI&shy;PELAGO<em>.</em></h1>
+    <p class="sub">One small plane, a scatter of procedural islands, and a strip of
+      asphalt to bring it back to. Throttle up.</p>
+    <div class="btnrow">
+      <button class="btn sel" data-sel="mode"><span class="no">01</span><span class="lbl">MODE</span>
+        <span class="val" id="sel-mode">FREE FLIGHT</span><span class="hint" id="sel-mode-hint"></span></button>
+      <button class="btn sel" data-sel="map"><span class="no">02</span><span class="lbl">MAP</span>
+        <span class="val" id="sel-map">ARCHIPELAGO</span></button>
+      <button class="btn sel" data-sel="aircraft"><span class="no">03</span><span class="lbl">AIRCRAFT</span>
+        <span class="val" id="sel-aircraft">SKYHAWK</span><span class="hint" id="sel-aircraft-hint"></span></button>
+      <button class="btn" id="btn-start"><span class="no">04</span><span class="lbl">START</span>
+        <span class="val">&rarr;</span></button>
+    </div>
+  </div>
+  <div class="foot" id="menu-foot">
+    ARROWS pitch/roll &nbsp;&middot;&nbsp; <b>A/D</b> rudder &nbsp;&middot;&nbsp; <b>W/S</b> throttle &nbsp;&middot;&nbsp;
+    <b>F</b> flaps &nbsp;&middot;&nbsp; <b>B</b> brakes &nbsp;&middot;&nbsp; <b>C</b> camera &nbsp;&middot;&nbsp; <b>ESC</b> pause
+  </div>
+</div>
+
+<div class="screen" id="lessons">
+  <div class="inner">
+    <div class="kicker">FLIGHT SCHOOL</div>
+    <h1>LESSONS<em>.</em></h1>
+    <p class="sub">A private-pilot syllabus in miniature — each lesson teaches one real
+      skill, checks your flying live, and tells you why it matters.</p>
+    <div class="btnrow" id="lesson-list"></div>
+    <div class="btnrow" style="margin-top:1.4rem">
+      <button class="btn" data-act="menu"><span class="no">&larr;</span> BACK</button>
+    </div>
+  </div>
+</div>
+
+<div class="screen" id="pause">
+  <div class="inner">
+    <div class="kicker">PAUSED</div>
+    <h1>ON HOLD<em>.</em></h1>
+    <div class="btnrow">
+      <button class="btn" data-act="resume"><span class="no">01</span> RESUME</button>
+      <button class="btn" data-act="restart"><span class="no">02</span> BACK TO RUNWAY</button>
+      <button class="btn" data-act="menu"><span class="no">03</span> MAIN MENU</button>
+    </div>
+  </div>
+</div>
+
+<div class="screen" id="crash">
+  <div class="inner">
+    <div class="kicker">FLIGHT TERMINATED</div>
+    <h1 id="crash-title">HULL LOSS<em>.</em></h1>
+    <p class="sub" id="crash-sub">The archipelago keeps what it catches.</p>
+    <div class="btnrow">
+      <button class="btn" data-act="restart"><span class="no">01</span> BACK TO RUNWAY</button>
+      <button class="btn" data-act="menu"><span class="no">02</span> MAIN MENU</button>
+    </div>
+  </div>
+</div>
+
+<div class="screen" id="results">
+  <div class="inner">
+    <div class="kicker">RACE COMPLETE</div>
+    <h1>WHEELS DOWN<em>.</em></h1>
+    <div class="stat mono" id="res-time">0:00.0</div>
+    <div class="statlbl" id="res-verdict">FINAL TIME</div>
+    <div class="btnrow">
+      <button class="btn" data-act="restart"><span class="no">01</span> RACE AGAIN</button>
+      <button class="btn" data-act="menu"><span class="no">02</span> MAIN MENU</button>
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "./node_modules/three/build/three.module.js" } }
+</script>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

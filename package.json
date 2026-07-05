@@ -1,0 +1,22 @@
+{
+  "name": "flight-sim",
+  "version": "1.0.0",
+  "description": "ARCHIPELAGO — browser flight simulator (Three.js)",
+  "main": "index.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "node test/physics.test.js",
+    "e2e": "node test/e2e.mjs",
+    "serve": "python3 -m http.server 8123",
+    "verify": "node test/physics.test.js && node test/e2e.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "three": "^0.185.1"
+  }
+}
