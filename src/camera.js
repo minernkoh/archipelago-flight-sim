@@ -30,12 +30,21 @@ export function createCameraRig(camera) {
       fwd.set(1, 0, 0).applyQuaternion(tmpQ);
       up.set(0, 1, 0).applyQuaternion(tmpQ);
 
+      // Speed sensation: FOV stretches toward Vne; shake from buffet/AB/ground roll
+      const speedFrac = Math.min(1, ac.airspeed / (ac.p.maxSpeed || 88));
+      const fovBoost = 12 * speedFrac * speedFrac;
+      const nearStall = ac.airspeed > 15 && !ac.onGround && ac.alpha > 0.8 * ac.p.alphaStall;
+      const shakeMag =
+        (ac.stalled ? 0.30 : nearStall ? 0.12 : 0) +
+        (ac.abOn ? 0.10 : 0) +
+        (ac.onGround && ac.groundSpeed > 8 ? 0.06 * Math.min(1, ac.groundSpeed / 50) : 0);
+
       if (CAM_MODES[mode] === 'COCKPIT') {
         camera.position.set(p.x, p.y, p.z)
           .add(fwd.clone().multiplyScalar(cfg.cockpit.fwd))
           .add(up.clone().multiplyScalar(cfg.cockpit.up));
         camera.quaternion.copy(tmpQ).multiply(ALIGN);
-        camera.fov = 72;
+        camera.fov = 72 + fovBoost * 0.7;
       } else if (CAM_MODES[mode] === 'ORBIT') {
         orbitT += dt * 0.12;
         const r = cfg.orbitR;
@@ -60,7 +69,12 @@ export function createCameraRig(camera) {
         look.set(p.x, p.y, p.z).add(fwd.clone().multiplyScalar(8));
         camera.up.set(0, 1, 0).lerp(up, 0.18).normalize(); // lean into the bank a touch
         camera.lookAt(look);
-        camera.fov = 62;
+        camera.fov = 62 + fovBoost;
+      }
+      if (shakeMag > 0) {
+        camera.position.x += (Math.random() - 0.5) * shakeMag;
+        camera.position.y += (Math.random() - 0.5) * shakeMag;
+        camera.position.z += (Math.random() - 0.5) * shakeMag;
       }
       camera.updateProjectionMatrix();
       initialized = true;

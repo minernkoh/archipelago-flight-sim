@@ -27,7 +27,8 @@ const CRASH_TEXT = {
   'numerical': ['DEPARTED FLIGHT.', 'The airflow gave up entirely.'],
 };
 
-export function createGameFlow({ ac, hud, audio, controls, camRig, world }) {
+export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) {
+  let crashT = null; // delay before the crash screen so the debris burst reads
   let state = 'menu';           // menu | flying | paused | crash | results
   let sel = { mode: 'free', map: 'archipelago', aircraft: 'c172' };
   try { sel = { ...sel, ...JSON.parse(localStorage.getItem(SEL_KEY) || '{}') }; } catch { /* fresh defaults */ }
@@ -80,6 +81,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world }) {
     camRig.reset();
     rings.reset();
     raceT = 0; raceStarted = false; raceDone = false;
+    crashT = null;
     hud.clearMessage();
   }
 
@@ -168,8 +170,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world }) {
   }
 
   function crash() {
-    state = 'crash';
-    audio.thud();
+    state = 'crash'; // thud already played at the moment of impact
     let title, sub;
     const lessonFail = lessonId ? trainer?.onCrash() : null;
     if (lessonFail) ({ title, sub } = { title: lessonFail.title + '.', sub: lessonFail.sub });
@@ -216,7 +217,12 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world }) {
     tick(dt) {
       if (state !== 'flying') return;
 
-      if (ac.crashed) { crash(); return; }
+      if (ac.crashed) {
+        if (crashT === null) { crashT = 0; fx?.crash(ac.pos, ac.vel); audio.thud(); }
+        crashT += dt;
+        if (crashT > 1.3) { crashT = null; crash(); }
+        return;
+      }
 
       if (lessonId) { trainer?.tick(dt); return null; }
 
@@ -255,6 +261,8 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world }) {
           const rating = fpm <= 130 ? 'Greased it.' : fpm <= 300 ? 'Smooth.' : fpm <= 500 ? 'Firm.' : 'Hard arrival — gear survived, barely.';
           hud.message(`${rating} &nbsp;${fpm} fpm &middot; ${speedKt} kt${onRunway ? '' : ' &middot; off-field'}`, 4200);
         }
+        fx?.touchdown(ac.pos, ac.groundSpeed, ac.touchdown.fpm);
+        audio.chirp();
         audio.thud();
       }
       return bearing;

@@ -85,6 +85,17 @@ export function createAudio() {
       o.start(); o.stop(ctx.currentTime + 0.55);
       o.frequency.exponentialRampToValueAtTime(1560, ctx.currentTime + 0.1);
     },
+    chirp() { // tire squeal on touchdown
+      if (!ctx) return;
+      const src = ctx.createBufferSource();
+      src.buffer = windSrc.buffer;
+      const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 950; f.Q.value = 6;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.5, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.22);
+      src.connect(f).connect(g).connect(master);
+      src.start(0, Math.random() * 1.5); src.stop(ctx.currentTime + 0.25);
+    },
     thud() {
       if (!ctx) return;
       const o = ctx.createOscillator(), g = ctx.createGain();

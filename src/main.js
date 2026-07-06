@@ -14,6 +14,7 @@ import { createRings } from './rings.js';
 import { createAudio } from './audio.js';
 import { createGameFlow } from './modes.js';
 import { createTrainingSystem } from './training.js';
+import { createEffects } from './effects.js';
 
 const PHYS_DT = 1 / 120;
 const MAPS = [archipelagoMap, singaporeMap];
@@ -135,7 +136,8 @@ const world = {
   },
 };
 
-const game = createGameFlow({ ac, hud, audio, controls, camRig, world });
+const fx = createEffects(scene);
+const game = createGameFlow({ ac, hud, audio, controls, camRig, world, fx });
 setAircraft(byId('c172'));
 hud.setCamera(camRig.modeName);
 
@@ -204,6 +206,7 @@ function frame(now) {
 
   const ringBearing = game.tick(dt);
   if (trainGates) trainGates.update(dt);
+  fx.update(dt);
 
   if (!mapLoading) terrain.update(ac.pos.x, ac.pos.z);
   env.update(ac, dt, elapsed);
