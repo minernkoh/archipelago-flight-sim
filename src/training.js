@@ -244,6 +244,85 @@ export function createTrainingSystem(deps) {
     ];
   }
 
+  // Generalized "on final" check used by the crosswind lesson: within
+  // toleranceDeg of the runway bearing, inside maxDistM, optionally under a
+  // ceiling. Mirrors buildLandingSteps' established() but parameterized.
+  function finalLineup({ toleranceDeg = 10, maxDistM = 4000, maxAglFt = null } = {}) {
+    const rwy = map.runway;
+    return () => {
+      const bx = rwy.spawn.x - ac.pos.x, bz = rwy.spawn.z - ac.pos.z;
+      const dist = Math.hypot(bx, bz);
+      const headingOk = Math.abs(angDiffDeg(compassDeg(attitude(ac).heading), compassDeg(rwy.headingRad))) < toleranceDeg;
+      const aglOk = maxAglFt == null || ac.agl * FT < maxAglFt;
+      return !ac.onGround && ac.agl > 5 && headingOk && dist < maxDistM && aglOk;
+    };
+  }
+
+  function buildCrosswindSteps() {
+    let lastBeta = 0;
+    const established = finalLineup({ toleranceDeg: 15, maxDistM: 4000, maxAglFt: 800 });
+    return [
+      {
+        text: "There's a wind blowing across the runway, not down it. On final you'll <b>crab</b> — point the nose upwind — to hold the centerline, then kick the nose straight with rudder right in the flare so the wheels meet the ground lined up with your travel. Take off and climb through 300 ft AGL.",
+        done: () => !ac.onGround && ac.agl * FT >= 300,
+        hint: "Full throttle, hold the centerline with rudder — we'll talk crosswind technique once you're climbing.",
+      },
+      {
+        text: 'Come back around and get established on final: within 15° of the runway heading, inside 4 km, below 800 ft AGL. Expect the nose to sit off to one side — that crab angle is what keeps you over the extended centerline.',
+        done: holdFor(established, 2),
+        hint: 'Point the nose upwind of the runway heading — just enough that you stop drifting sideways over the ground.',
+        slip: true,
+      },
+      {
+        text: 'Ride the crab all the way down final. Right as the wheels are about to touch, kick the rudder to swing the nose straight and drop the upwind wingtip a touch. Land aligned, under 400 fpm, on the runway — then full stop.',
+        done: () => {
+          if (!ac.onGround) lastBeta = ac.beta;
+          return ac.onGround && ac.groundSpeed < 3 && !!ac.touchdown && ac.touchdown.onRunway
+            && ac.touchdown.fpm < 400 && Math.abs(lastBeta) * 180 / Math.PI < 8;
+        },
+        fail: () => {
+          if (!ac.touchdown) return null;
+          if (!ac.touchdown.onRunway) return 'Drifted off the runway — the crosswind won that one.';
+          if (ac.touchdown.fpm >= 400) return 'Touched down too hard — too much sink carried into the flare.';
+          if (Math.abs(lastBeta) * 180 / Math.PI >= 8) return "Touched down still crossed up — didn't straighten the nose in time.";
+          return null;
+        },
+        hint: 'Hold the crab through most of final and only kick straight at the very last second — too early and the wind pushes you off line again.',
+        slip: true,
+      },
+    ];
+  }
+
+  function buildEngineFailSteps() {
+    let engineCut = false;
+    const speedHold = holdFor(() => {
+      const kt = ac.airspeed * KT;
+      return kt >= 60 && kt <= 76;
+    }, 8);
+    const stalledTooLow = () => (ac.agl < 90 && ac.stalled) ? 'Stalled too low to recover.' : null;
+    return [
+      {
+        text: 'Climb to 2,500 ft AGL over the field — altitude is life insurance for what comes next.',
+        done: () => ac.agl * FT >= 2500,
+      },
+      {
+        text: "Engine's gone. Pitch for 68 kt — best glide.",
+        done: (dt) => {
+          if (!engineCut) { ac.engineFailed = true; engineCut = true; }
+          return speedHold(dt);
+        },
+        fail: stalledTooLow,
+        hint: 'Trade altitude for airspeed — lower the nose until you settle on 68, not the other way around.',
+      },
+      {
+        text: 'Pick your spot — any surface — and glide it in. Full stop, under 500 fpm, wherever you land.',
+        done: () => ac.onGround && ac.groundSpeed < 1 && !!ac.touchdown && ac.touchdown.fpm < 500,
+        fail: stalledTooLow,
+        hint: 'Fly the airplane first: airspeed, then a field, then wind. No restarts below 1,000 ft.',
+      },
+    ];
+  }
+
   // ============================== syllabus ==================================
 
   const LESSON_DEFS = [
@@ -279,6 +358,24 @@ export function createTrainingSystem(deps) {
       id: 'landing', title: 'Landing',
       blurb: 'Aim point, stable airspeed, and a flare timed off the runway filling your view.',
       build: () => ({ steps: buildLandingSteps() }),
+    },
+    {
+      id: 'crosswind', title: 'Crosswind landing',
+      blurb: 'Crab into the wind on final, kick it straight in the flare — the real-pilot skill.',
+      build: () => {
+        const rwyHdg = compassDeg(map.runway.headingRad);
+        const windDir = (rwyHdg + 90) % 360;
+        return {
+          steps: buildCrosswindSteps(),
+          setup: () => deps.wind?.set({ dirDeg: windDir, kts: 12, gustKts: 4, turb: 0.3 }),
+          teardown: () => deps.wind?.set({ kts: 0, gustKts: 0, turb: 0 }),
+        };
+      },
+    },
+    {
+      id: 'engine-out', title: 'Engine failure',
+      blurb: 'The engine quits. Fly the airplane, find a field, and put it down safely — no restarts.',
+      build: () => ({ steps: buildEngineFailSteps(), teardown: () => { ac.engineFailed = false; } }),
     },
     {
       id: 'checkride', title: 'Checkride',
@@ -317,6 +414,11 @@ export function createTrainingSystem(deps) {
       const td = ac.touchdown;
       return `<b>${def.title.toUpperCase()} — COMPLETE.</b>`
         + (td ? `<br>Touchdown ${td.fpm} fpm &middot; ${td.speedKt} kt.` : '');
+    }
+    if (def.id === 'engine-out') {
+      const td = ac.touchdown;
+      return `<b>${def.title.toUpperCase()} — COMPLETE.</b>`
+        + (td && td.onRunway ? '<br>Made the runway — textbook.' : '<br>Field landing — down safe, engine or not.');
     }
     return `<b>${def.title.toUpperCase()} — COMPLETE.</b>`;
   }

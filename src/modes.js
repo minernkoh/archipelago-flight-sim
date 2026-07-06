@@ -15,7 +15,13 @@ const fmtTime = (t) => {
 const MODES = [
   { id: 'free', label: 'FREE FLIGHT', hint: 'explore, land anywhere' },
   { id: 'race', label: 'RING RACE', hint: '12 gates against the clock' },
-  { id: 'training', label: 'FLIGHT SCHOOL', hint: 'learn to fly — 7 lessons' },
+  { id: 'training', label: 'FLIGHT SCHOOL', hint: 'learn to fly' },
+];
+
+const WEATHERS = [
+  { id: 'calm', label: 'CALM', hint: 'still air' },
+  { id: 'breezy', label: 'BREEZY', hint: '8 kt, light gusts' },
+  { id: 'gusty', label: 'GUSTY', hint: '16 kt gusting 28 — hold on' },
 ];
 
 const CRASH_TEXT = {
@@ -30,7 +36,7 @@ const CRASH_TEXT = {
 export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) {
   let crashT = null; // delay before the crash screen so the debris burst reads
   let state = 'menu';           // menu | flying | paused | crash | results
-  let sel = { mode: 'free', map: 'archipelago', aircraft: 'c172' };
+  let sel = { mode: 'free', map: 'archipelago', aircraft: 'c172', weather: 'calm' };
   try { sel = { ...sel, ...JSON.parse(localStorage.getItem(SEL_KEY) || '{}') }; } catch { /* fresh defaults */ }
   let map = null, rings = null;  // live handles, set by begin()
   let raceT = 0, raceStarted = false, raceDone = false;
@@ -63,11 +69,14 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
     const craft = world.aircraft.find(a => a.id === sel.aircraft) || world.aircraft[0];
     $('#sel-aircraft').textContent = craft.params.name.toUpperCase();
     $('#sel-aircraft-hint').textContent = craft.tagline;
+    const wx = WEATHERS.find(w => w.id === sel.weather) || WEATHERS[0];
+    $('#sel-weather').textContent = wx.label;
+    $('#sel-weather-hint').textContent = wx.hint;
     localStorage.setItem(SEL_KEY, JSON.stringify(sel));
   }
 
   function cycle(kind) {
-    const lists = { mode: MODES.map(m => m.id), map: world.maps.map(m => m.id), aircraft: world.aircraft.map(a => a.id) };
+    const lists = { mode: MODES.map(m => m.id), map: world.maps.map(m => m.id), aircraft: world.aircraft.map(a => a.id), weather: WEATHERS.map(w => w.id) };
     const list = lists[kind];
     const cur = list.indexOf(sel[kind]);
     sel[kind] = list[(cur + 1) % list.length];

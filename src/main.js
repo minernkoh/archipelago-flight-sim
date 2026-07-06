@@ -15,6 +15,7 @@ import { createAudio } from './audio.js';
 import { createGameFlow } from './modes.js';
 import { createTrainingSystem } from './training.js';
 import { createEffects } from './effects.js';
+import { createWind, WEATHER } from './physics/wind.js';
 
 const PHYS_DT = 1 / 120;
 const MAPS = [archipelagoMap, singaporeMap];
@@ -45,11 +46,13 @@ rings.show(false);
 
 // Collision height folds solid obstacles in; aero ground effect and AGL use
 // bare terrain so overflying a rooftop doesn't fake ground effect.
+const windField = createWind();
 const collisionHeight = (x, z) => Math.max(currentMap.height(x, z), currentMap.obstacleTop(x, z));
 const physEnv = {
   groundHeight: collisionHeight,
   terrainHeight: (x, z) => currentMap.height(x, z),
   isRunway: (x, z) => currentMap.isRunway(x, z),
+  wind: (x, y, z) => windField.at(x, y, z),
 };
 env.setGround(collisionHeight);
 
@@ -128,11 +131,13 @@ const world = {
   async apply(sel) {
     await loadMap(MAPS.find(m => m.id === sel.map) || MAPS[0]);
     setAircraft(byId(sel.aircraft));
+    // fresh wind each flight: preset strength, semi-random direction
+    windField.set({ ...(WEATHER[sel.weather] || WEATHER.calm), dirDeg: Math.round(Math.random() * 360) });
     return { map: currentMap, rings };
   },
   // Fresh trainer per lesson start so it binds the active map's runway.
   createTrainer(ui) {
-    return createTrainingSystem({ ac, controls, map: currentMap, gates: gatesAdapter, ui });
+    return createTrainingSystem({ ac, controls, map: currentMap, gates: gatesAdapter, ui, wind: windField });
   },
 };
 
@@ -207,6 +212,15 @@ function frame(now) {
   const ringBearing = game.tick(dt);
   if (trainGates) trainGates.update(dt);
   fx.update(dt);
+  windField.setTime(elapsed);
+  const sock = scenery.userData?.windsock;
+  if (sock) {
+    const w = windField.get();
+    const c = w.dirDeg * Math.PI / 180;
+    sock.rotation.y = Math.atan2(Math.cos(c), Math.sin(c)); // tail points downwind
+    sock.visible = true;
+    sock.scale.setScalar(0.6 + 0.4 * Math.min(1, w.kts / 15));
+  }
 
   if (!mapLoading) terrain.update(ac.pos.x, ac.pos.z);
   env.update(ac, dt, elapsed);

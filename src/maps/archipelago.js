@@ -194,6 +194,7 @@ export function createAirfield(scene) {
   const sock = new THREE.Mesh(new THREE.ConeGeometry(0.8, 3.2, 6), mat(0xe8722a));
   sock.rotation.z = Math.PI / 2; sock.position.set(31.8, RUNWAY.y + 6.6, 40);
   g.add(pole, sock);
+  g.userData.windsock = sock; // main.js orients it from the live wind field
 
   scene.add(g);
   return g;

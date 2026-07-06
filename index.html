@@ -209,6 +209,7 @@
     <div><span class="lbl">THR</span><span class="val" id="st-thr">0%<span id="thr-bar"><i></i></span></span></div>
     <div><span class="lbl">FLAPS</span><span class="val" id="st-flaps">UP</span></div>
     <div><span class="lbl">BRK</span><span class="val" id="st-brk">—</span></div>
+    <div><span class="lbl">TRIM</span><span class="val" id="st-trim">0</span></div>
     <div><span class="lbl">CAM</span><span class="val" id="st-cam">CHASE</span></div>
   </div>
   <div id="msg"></div>
@@ -224,7 +225,7 @@
   <div id="slip"><span class="mark" style="left:33%"></span><span class="mark" style="left:67%"></span><span class="ball"></span></div>
   <div id="help">
     <b>&uarr;&darr;</b> pitch &nbsp;<b>&larr;&rarr;</b> roll &nbsp;<b>A D</b> rudder<br>
-    <b>W S</b> throttle &nbsp;<b>F</b>/<b>shift F</b> flaps &nbsp;<b>B</b> brakes<br>
+    <b>W S</b> throttle &nbsp;<b>F</b>/<b>shift F</b> flaps &nbsp;<b>B</b> brakes &nbsp;<b>[ ]</b> trim<br>
     <b>C</b> camera &nbsp;<b>R</b> reset &nbsp;<b>ESC</b> pause &nbsp;<b>?</b> hide
   </div>
 </div>
@@ -244,7 +245,9 @@
         <span class="val" id="sel-map">ARCHIPELAGO</span></button>
       <button class="btn sel" data-sel="aircraft"><span class="no">03</span><span class="lbl">AIRCRAFT</span>
         <span class="val" id="sel-aircraft">SKYHAWK</span><span class="hint" id="sel-aircraft-hint"></span></button>
-      <button class="btn" id="btn-start"><span class="no">04</span><span class="lbl">START</span>
+      <button class="btn sel" data-sel="weather"><span class="no">04</span><span class="lbl">WEATHER</span>
+        <span class="val" id="sel-weather">CALM</span><span class="hint" id="sel-weather-hint"></span></button>
+      <button class="btn" id="btn-start"><span class="no">05</span><span class="lbl">START</span>
         <span class="val">&rarr;</span></button>
     </div>
   </div>

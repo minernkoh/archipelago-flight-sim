@@ -224,5 +224,49 @@ const flatRunway = { x: 0, z: 0, y: 0, headingRad: 0 };
     `avg VS ${avgSink.toFixed(1)} m/s, V ${(ac.airspeed * KT).toFixed(0)} kt`);
 }
 
+// ================= v3-B: wind, gusts, trim =================
+import { createWind, WEATHER } from '../src/physics/wind.js';
+
+// ---- 15. Headwind: airspeed exceeds groundspeed by the wind speed ----
+// (A hands-off stable aircraft weathervanes out of a crosswind — correct
+// behavior — so the deterministic check is the airspeed/groundspeed split.)
+{
+  const windEnv = { ...flat, wind: () => ({ x: -10, y: 0, z: 0 }) }; // 10 m/s headwind for eastbound flight
+  const ac = createAircraft({ pos: v3(0, 1500, 0), vel: v3(50, 0, 0) });
+  fly(ac, ctl({ throttle: 0.6 }), 10, windEnv);
+  const split = ac.airspeed - ac.groundSpeed;
+  check('headwind splits airspeed from groundspeed', !ac.crashed && split > 8 && split < 12,
+    `IAS-GS = ${split.toFixed(1)} m/s (wind 10)`);
+}
+
+// ---- 16. Gusty air is uncomfortable but flyable ----
+{
+  const wf = createWind();
+  wf.set({ ...WEATHER.gusty, dirDeg: 250 });
+  const windEnv = { ...flat, wind: (x, y, z) => wf.at(x, y, z) };
+  const ac = createAircraft({ pos: v3(0, 1500, 0), vel: v3(50, 0, 0) });
+  let maxRoll = 0, t = 0;
+  fly(ac, ctl({ throttle: 0.7 }), 60, windEnv, (a, tt) => {
+    wf.setTime(tt);
+    maxRoll = Math.max(maxRoll, Math.abs(attitude(a).roll));
+  });
+  check('gusty air stays flyable', !ac.crashed && Number.isFinite(ac.pos.y)
+    && ac.pos.y > 900 && ac.pos.y < 2100 && maxRoll < 1.05,
+    `alt ${ac.pos.y.toFixed(0)} m, max roll ${(maxRoll * 57.3).toFixed(0)} deg`);
+}
+
+// ---- 17. Nose-up trim slows the hands-off trim speed ----
+{
+  const trimSpeed = (trim) => {
+    const ac = createAircraft({ pos: v3(0, 2000, 0), vel: v3(46, 0, 0) });
+    let sum = 0, n = 0;
+    fly(ac, ctl({ throttle: 0.55, trim }), 40, flat, (a, t) => { if (t > 30) { sum += a.airspeed; n++; } });
+    return sum / n;
+  };
+  const v0 = trimSpeed(0), vUp = trimSpeed(0.12);
+  check('nose-up trim slows hands-off speed', vUp < v0 - 4,
+    `${(v0 * KT).toFixed(0)} kt -> ${(vUp * KT).toFixed(0)} kt with +12% trim`);
+}
+
 console.log(failures === 0 ? '\nAll physics checks passed.' : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

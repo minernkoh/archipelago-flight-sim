@@ -14,6 +14,7 @@ ring race, and a 7-lesson flight school.
 ## Architecture (who owns what)
 
 - `src/physics/` — pure JS flight dynamics, **no Three.js imports ever** (headless tests depend on this). flightModel.js = forces/moments/integration; groundContact.js = gear/probes from `ac.p.gear`/`ac.p.probes`.
+- `src/physics/wind.js` — THREE-free wind field (steady/gusts/turbulence); aero uses air-relative velocity, gear stays inertial; trim rides on `controls.trim`; trainer can set `ac.engineFailed`.
 - `src/aircraft/params.js` — per-aircraft physics presets, also THREE-free. catalog.js joins params + mesh builder + HUD/camera meta. meshes.js = the 5 low-poly builders.
 - `src/maps/` — map modules implementing the FlightMap contract (typedef in archipelago.js). Render height (`map.height`) is separate from collision height (`max(height, obstacleTop)`); ground effect/AGL use terrain only.
 - `src/terrain.js` — generic chunk streamer; `src/rings.js` — parameterized gates (race + training themes); `src/modes.js` — menu/state machine; `src/main.js` — swap lifecycle + frame loop.

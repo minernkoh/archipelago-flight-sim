@@ -72,7 +72,9 @@ export function step(ac, controls, env, dt) {
   const p = ac.p;
 
   const rho = airDensity(ac.pos.y);
-  const vBody = qRotInv(ac.q, ac.vel);
+  // Aerodynamics see air-relative velocity; gear/ground speed stay inertial.
+  const wind = env.wind ? env.wind(ac.pos.x, ac.pos.y, ac.pos.z) : null;
+  const vBody = qRotInv(ac.q, wind ? vSub(ac.vel, wind) : ac.vel);
   const V = Math.max(vLen(vBody), 1e-3);
   const alpha = Math.atan2(-vBody.y, vBody.x);
   const beta = Math.asin(clamp(vBody.z / V, -1, 1));
@@ -102,7 +104,8 @@ export function step(ac, controls, env, dt) {
   // --- Thrust: engine spools toward commanded throttle with lag tau ---
   const densityRatio = rho / RHO0;
   const eng = p.engine;
-  ac.spool += (controls.throttle - ac.spool) * (1 - Math.exp(-dt / eng.tau));
+  const cmdThrottle = ac.engineFailed ? 0 : controls.throttle; // trainer can fail the engine
+  ac.spool += (cmdThrottle - ac.spool) * (1 - Math.exp(-dt / eng.tau));
   let thrust;
   if (eng.type === 'jet') {
     thrust = ac.spool * eng.maxThrust * densityRatio;
@@ -127,7 +130,8 @@ export function step(ac, controls, env, dt) {
 
   // Pitch about +z (positive = nose up)
   const Cm = p.Cm0 + p.Cmalpha * alpha + p.Cmq * (qr * c / (2 * V2))
-           + p.Cmde * controls.elevator + p.CmFlap * controls.flaps + stallMoment;
+           + p.Cmde * (controls.elevator + (controls.trim || 0))
+           + p.CmFlap * controls.flaps + stallMoment;
   // Roll about +x (positive = roll right). Aileron + = roll right.
   const Cl = p.Clbeta * beta + p.Clp * (pr * b / (2 * V2)) + p.Clda * controls.aileron
            + p.Clr * (-yr * b / (2 * V2));
@@ -226,6 +230,6 @@ export function resetOnRunway(ac, runway) {
   ac.omega = v3();
   ac.crashed = false; ac.crashReason = '';
   ac.touchdown = null; ac.stalled = false;
-  ac.spool = 0; ac.abOn = false;
+  ac.spool = 0; ac.abOn = false; ac.engineFailed = false;
   ac._airTime = 0; // spawning on the gear is not a landing
 }

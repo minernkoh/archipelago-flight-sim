@@ -7,13 +7,16 @@ export function createControls() {
   const handlers = {};
   const state = {
     elevator: 0, aileron: 0, rudder: 0,
-    throttle: 0, flaps: 0, brakes: false,
+    throttle: 0, flaps: 0, brakes: false, trim: 0,
   };
   let flapIdx = 0;
 
   const emit = (ev) => handlers[ev] && handlers[ev]();
 
   window.addEventListener('keydown', (e) => {
+    // trim repeats while held (like winding a trim wheel)
+    if (e.key === '[') { state.trim = Math.max(-0.3, state.trim - 0.012); return; }
+    if (e.key === ']') { state.trim = Math.min(0.3, state.trim + 0.012); return; }
     if (e.repeat) { if (e.key.startsWith('Arrow')) e.preventDefault(); return; }
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     keys.add(k);
@@ -38,7 +41,7 @@ export function createControls() {
   return {
     state,
     on(ev, cb) { handlers[ev] = cb; },
-    resetFlaps() { flapIdx = 0; state.flaps = 0; state.throttle = 0; },
+    resetFlaps() { flapIdx = 0; state.flaps = 0; state.throttle = 0; state.trim = 0; },
     poll(dt) {
       const s = state;
       s.elevator = axis(s.elevator, (keys.has('ArrowUp') ? 1 : 0) + (keys.has('ArrowDown') ? -1 : 0), dt);

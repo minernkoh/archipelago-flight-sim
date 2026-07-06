@@ -52,6 +52,10 @@ const first = await page.evaluate(() => document.querySelector('#sel-aircraft').
 await click('[data-sel="aircraft"]');
 const second = await page.evaluate(() => document.querySelector('#sel-aircraft').textContent);
 check('aircraft selector cycles', first !== second, `${first} -> ${second}`);
+await click('[data-sel="weather"]');
+const wx = await page.evaluate(() => document.querySelector('#sel-weather').textContent);
+check('weather selector cycles', wx === 'BREEZY', wx);
+await click('[data-sel="weather"]'); await click('[data-sel="weather"]'); // back to CALM for the flight tests
 
 // --- every aircraft spawns and sits on its gear ---
 for (const id of ['extra300', 'hornet', 'heavy', 'spirit']) {
@@ -206,6 +210,11 @@ console.log('flight school…');
 await press('Escape');
 await settle(200);
 await page.evaluate(() => { window.__sim.game.toMenu?.(); });
+await page.evaluate(() => window.__sim.game.select({ mode: 'training' }));
+await click('#btn-start');
+await settle(400);
+const nLessons = await page.evaluate(() => document.querySelectorAll('#lesson-list [data-lesson]').length);
+check('lesson picker lists the full syllabus', nLessons >= 9, `${nLessons} lessons`);
 await page.evaluate(() => window.__sim.game.beginLesson('controls-taxi'));
 await settle(1500);
 const instrOn = await page.evaluate(() => document.querySelector('#instructor').classList.contains('show'));

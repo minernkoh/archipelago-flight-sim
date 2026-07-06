@@ -93,7 +93,7 @@ export function createHUD() {
   const vsi = $('#vsi b'), radalt = $('#radalt b'), aoa = $('#aoa b'), g = $('#gmeter b');
   const hdgNum = $('#hdg-num');
   const stThr = $('#st-thr'), thrBar = $('#thr-bar i'), stFlaps = $('#st-flaps'),
-        stBrk = $('#st-brk'), stCam = $('#st-cam');
+        stBrk = $('#st-brk'), stCam = $('#st-cam'), stTrim = $('#st-trim');
   const annStall = $('#ann-stall'), annOver = $('#ann-over');
   const raceEl = $('#race'), raceT = raceEl.querySelector('.t'),
         raceRings = raceEl.querySelector('.rings'), raceBest = raceEl.querySelector('.best');
@@ -175,6 +175,9 @@ export function createHUD() {
         }
         stBrk.textContent = controls.brakes ? 'ON' : '—';
         stBrk.style.color = controls.brakes ? 'var(--amber)' : '';
+        const tr = Math.round((controls.trim || 0) * 100);
+        stTrim.textContent = tr === 0 ? '0' : (tr > 0 ? `+${tr}` : `${tr}`);
+        stTrim.classList.toggle('set', tr !== 0);
       }
       annStall.classList.toggle('show', ac.stalled);
       annOver.classList.toggle('show', ac.airspeed > ac.p.maxSpeed);
