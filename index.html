@@ -254,6 +254,7 @@
   <div class="foot" id="menu-foot">
     ARROWS pitch/roll &nbsp;&middot;&nbsp; <b>A/D</b> rudder &nbsp;&middot;&nbsp; <b>W/S</b> throttle &nbsp;&middot;&nbsp;
     <b>F</b> flaps &nbsp;&middot;&nbsp; <b>B</b> brakes &nbsp;&middot;&nbsp; <b>C</b> camera &nbsp;&middot;&nbsp; <b>ESC</b> pause
+    <br><button class="btn" data-act="groundschool" style="pointer-events:auto;display:inline-flex;font-size:.68rem;letter-spacing:.14em;padding:.35rem 0;color:var(--amber)">GROUND SCHOOL &rarr;</button>
   </div>
 </div>
 
@@ -265,10 +266,13 @@
       skill, checks your flying live, and tells you why it matters.</p>
     <div class="btnrow" id="lesson-list"></div>
     <div class="btnrow" style="margin-top:1.4rem">
+      <button class="btn" data-act="groundschool"><span class="no">&#9660;</span> GROUND SCHOOL</button>
       <button class="btn" data-act="menu"><span class="no">&larr;</span> BACK</button>
     </div>
   </div>
 </div>
+
+<div class="screen" id="groundschool"></div>
 
 <div class="screen" id="pause">
   <div class="inner">

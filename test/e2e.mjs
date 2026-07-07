@@ -47,6 +47,23 @@ check('boots to menu (terrain generated)', true);
 await page.waitForFunction('(window.__sim.frames || 0) > 3', { timeout: 120000, polling: 1000 });
 await shot('1-menu');
 
+// --- U1: pressing ? opens the guided tour, and it pages through the cards ---
+const tourVisible = () => sim('!!document.querySelector(".tour-root") && !document.querySelector(".tour-root").classList.contains("hidden")');
+await keyEv('keydown', '?');
+await settle(250);
+const tourOpened = await tourVisible();
+check('? opens the guided tour', tourOpened);
+let tourCards = 0;
+for (let i = 0; i < 14; i++) {
+  if (!(await tourVisible())) break;
+  tourCards++;
+  await keyEv('keydown', ' '); // SPACE advances one card
+  await settle(140);
+}
+check('tour pages through >= 6 cards', tourCards >= 6, `${tourCards} cards`);
+await keyEv('keydown', 'Escape'); // ensure closed before continuing
+await settle(150);
+
 // --- menu: aircraft row cycles through the fleet ---
 const first = await page.evaluate(() => document.querySelector('#sel-aircraft').textContent);
 await click('[data-sel="aircraft"]');
@@ -272,6 +289,35 @@ await click('#btn-start');
 await page.waitForFunction('!document.querySelector("#loading").classList.contains("show") && window.__sim.game.state === "flying"', { timeout: 120000, polling: 1000 });
 const back = await sim('({map: __sim.map.id, ground: __sim.ac.onGround})');
 check('map swaps back cleanly', back.map === 'archipelago' && back.ground, JSON.stringify(back));
+
+// --- U2: first-flaps hint fires exactly once across two separate flights ---
+await page.evaluate(() => { window.__sim.game.toMenu?.(); localStorage.removeItem('archipelago.hint.flaps'); });
+await page.evaluate(() => window.__sim.game.select({ mode: 'free', aircraft: 'c172', map: 'archipelago' }));
+await click('#btn-start');
+await settle(1500);
+await press('f');            // flight 1: extend flaps
+await settle(1800);
+const flapMsg1 = await page.evaluate(() => document.querySelector('#msg').textContent);
+check('first flaps extension shows a hint', /flap/i.test(flapMsg1), flapMsg1 || '(empty)');
+// refly (begin() again) and clear the toast, then extend flaps once more
+await press('Escape'); await settle(250);
+await click('#pause [data-act="restart"]');
+await settle(1600);
+await page.evaluate(() => { document.querySelector('#msg').textContent = ''; });
+await press('f'); await settle(300); await press('f');   // flight 2: extend flaps again
+await settle(1800);
+const flapMsg2 = await page.evaluate(() => document.querySelector('#msg').textContent);
+check('flaps hint does NOT fire a second time', !/flap/i.test(flapMsg2), flapMsg2 || '(empty)');
+
+// --- U3: ground-school glossary lists >= 10 flip cards ---
+await press('Escape'); await settle(200);
+await page.evaluate(() => { window.__sim.game.toMenu?.(); });
+await page.evaluate(() => document.querySelector('#menu-foot [data-act="groundschool"]').click());
+await settle(300);
+const gsShown = await sim('document.querySelector("#groundschool").classList.contains("show")');
+const gsCards = await page.evaluate(() => document.querySelectorAll('#groundschool .gs-card').length);
+check('ground school screen opens from the menu', gsShown);
+check('glossary lists >= 10 cards', gsCards >= 10, `${gsCards} cards`);
 
 check('no console errors', errors.length === 0, errors.slice(0, 4).join(' | '));
 

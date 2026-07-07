@@ -1,7 +1,9 @@
 // Game flow: menu (mode/map/aircraft selection) / free flight / ring race /
 // pause / crash / results. World swapping is delegated to main.js via `world`.
 
-import { resetOnRunway } from './physics/flightModel.js';
+import { resetOnRunway, KT } from './physics/flightModel.js';
+import { createTour } from './tour.js';
+import { renderGlossary } from './groundschool.js';
 
 const $ = (s) => document.querySelector(s);
 const SEL_KEY = 'archipelago.sel';
@@ -43,11 +45,31 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
   let trainer = null, lessonId = null;
   const instrEl = $('#instructor');
 
-  const screens = { menu: $('#menu'), pause: $('#pause'), crash: $('#crash'), results: $('#results'), lessons: $('#lessons') };
+  const screens = { menu: $('#menu'), pause: $('#pause'), crash: $('#crash'), results: $('#results'), lessons: $('#lessons'), groundschool: $('#groundschool') };
   const showScreen = (name) => {
     for (const [k, el] of Object.entries(screens)) el.classList.toggle('show', k === name);
     hud.show(name === null);
   };
+
+  // Guided HUD tour: reuses the #help key list as its final card, so the key
+  // list survives and #help no longer pops up on its own.
+  const tour = createTour({
+    finalCardHTML: $('#help').innerHTML,
+    finalCardTitle: 'KEYBOARD CONTROLS',
+  });
+  // Populate the ground-school glossary screen once at boot (BACK -> menu via
+  // the global [data-act] wiring below).
+  renderGlossary($('#groundschool'), { backAct: 'menu' });
+
+  // Fire a warm one-line instructor hint at most once EVER per key.
+  function hint(key, html) {
+    const sk = 'archipelago.hint.' + key;
+    try {
+      if (localStorage.getItem(sk)) return;
+      localStorage.setItem(sk, '1');
+    } catch { /* storage unavailable — just show it */ }
+    hud.message(html);
+  }
 
   const getBest = () => {
     const v = parseFloat(localStorage.getItem(bestKey(sel.map, sel.aircraft)));
@@ -108,6 +130,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
     hud.message(sel.mode === 'race'
       ? `Clock starts when you roll. ${rings.total} gates, then land back on runway ${rwy}.`
       : `Runway ${rwy} — full throttle <b>W</b>, rotate with <b>&uarr;</b>.`, 5200);
+    tour.offerOnce(); // first flight ever: auto-open the guided HUD tour
   }
 
   // ---- flight school ----
@@ -200,6 +223,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
     resume: () => { state = 'flying'; showScreen(null); audio.resume(); },
     restart: () => (lessonId ? beginLesson(lessonId) : begin()),
     menu: toMenu,
+    groundschool: () => showScreen('groundschool'),
   };
   document.querySelectorAll('[data-act]').forEach(b =>
     b.addEventListener('click', () => actions[b.dataset.act]()));
@@ -210,7 +234,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
   });
   controls.on('reset', () => { if (state === 'flying' || state === 'crash') actions.restart(); });
   controls.on('camera', () => { camRig.cycle(); hud.setCamera(camRig.modeName); });
-  controls.on('help', () => $('#help').classList.toggle('show'));
+  controls.on('help', () => { if (tour.isOpen()) tour.close(); else tour.open(); });
 
   let lastTouchdown = null;
 
@@ -234,6 +258,15 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
       }
 
       if (lessonId) { trainer?.tick(dt); return null; }
+
+      // first-use micro-hints (free flight & race; lessons are suppressed by the
+      // early return above, since the #instructor is already talking).
+      const cs = controls.state;
+      if (cs.flaps > 0.05) hint('flaps', 'Flaps are coming down — they add lift and drag so you can fly slower and settle into a steeper, gentler approach.');
+      if (Math.abs(cs.trim) > 0.001) hint('trim', 'You just trimmed — that holds the nose where you set it so you can ease off the stick. Re-trim whenever your speed settles.');
+      if (cs.brakes && ac.groundSpeed * KT > 40) hint('brakes', 'Wheel brakes bite on the ground — squeeze them to slow your rollout after touchdown, and go easy at speed so the nose stays up.');
+      if (ac.stalled) hint('stall', 'The wing quit flying — push the nose DOWN and add power to get airflow back over it.');
+      if (ac.airspeed > ac.p.maxSpeed) hint('overspeed', "You're past the airframe's limit — ease the throttle back and raise the nose gently before something bends.");
 
       // race clock + gates
       let bearing = null;
