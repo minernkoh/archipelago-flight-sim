@@ -10,6 +10,10 @@ export function createControls() {
     throttle: 0, flaps: 0, brakes: false, trim: 0,
   };
   let flapIdx = 0;
+  // Keyboard-smoothing rates, swapped per aircraft. Rudder stays at the 4.5/5.5
+  // ratio of the primary (pitch/roll) rate. Defaults match the original C172.
+  let pitchRollRate = 5.5;
+  let rudderRate = 4.5;
 
   const emit = (ev) => handlers[ev] && handlers[ev]();
 
@@ -41,12 +45,18 @@ export function createControls() {
   return {
     state,
     on(ev, cb) { handlers[ev] = cb; },
+    // Swap keyboard-smoothing rates when the aircraft changes. p.inputRate is the
+    // primary (pitch/roll) rate; rudder keeps the original 4.5/5.5 ratio.
+    setRates(p) {
+      pitchRollRate = p?.inputRate ?? 5.5;
+      rudderRate = pitchRollRate * (4.5 / 5.5);
+    },
     resetFlaps() { flapIdx = 0; state.flaps = 0; state.throttle = 0; state.trim = 0; },
     poll(dt) {
       const s = state;
-      s.elevator = axis(s.elevator, (keys.has('ArrowUp') ? 1 : 0) + (keys.has('ArrowDown') ? -1 : 0), dt);
-      s.aileron  = axis(s.aileron, (keys.has('ArrowRight') ? 1 : 0) + (keys.has('ArrowLeft') ? -1 : 0), dt);
-      s.rudder   = axis(s.rudder, (keys.has('d') ? 1 : 0) + (keys.has('a') ? -1 : 0), dt, 4.5);
+      s.elevator = axis(s.elevator, (keys.has('ArrowUp') ? 1 : 0) + (keys.has('ArrowDown') ? -1 : 0), dt, pitchRollRate);
+      s.aileron  = axis(s.aileron, (keys.has('ArrowRight') ? 1 : 0) + (keys.has('ArrowLeft') ? -1 : 0), dt, pitchRollRate);
+      s.rudder   = axis(s.rudder, (keys.has('d') ? 1 : 0) + (keys.has('a') ? -1 : 0), dt, rudderRate);
       if (keys.has('w')) s.throttle = Math.min(1, s.throttle + dt * 0.55);
       if (keys.has('s')) s.throttle = Math.max(0, s.throttle - dt * 0.7);
       s.flaps = axis(s.flaps, FLAP_DETENTS[flapIdx], dt, 1.6); // flaps travel slowly

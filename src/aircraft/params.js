@@ -79,6 +79,9 @@ export const AIRCRAFT = {
     Cnbeta: 0.15, Cnr: -0.20, Cndr: 0.12, CnAdverse: 0.005,
     engine: { type: 'jet', tau: 0.8, maxThrust: 128000, afterburner: { mult: 1.5 } },
     sas: null,
+    // Fly-by-wire q-scheduling: full deflection at 250 kt (qbar ~10,100 Pa) and
+    // it softens further with speed, so 500-kt full aft stick stays sub-9 g.
+    controlSoften: { qRef: 10100 }, inputRate: 6.5,
     maxSpeed: 360, gearHeight: 2.2,
     crashSink: 4.5, maxSteer: 0.30,
     spawn: { pitch: 0 },
@@ -108,6 +111,9 @@ export const AIRCRAFT = {
     Cnbeta: 0.12, Cnr: -0.25, Cndr: 0.06, CnAdverse: 0.008,
     engine: { type: 'jet', tau: 4.0, maxThrust: 748000, afterburner: null },
     sas: null,
+    // Lower qRef (~180 kt) so the heavy keeps flare/approach authority at its
+    // low approach speeds while still softening at cruise.
+    controlSoften: { qRef: 5250 }, inputRate: 4.5,
     maxSpeed: 175, gearHeight: 5.5,
     crashSink: 4.5, maxSteer: 0.30,
     spawn: { pitch: 0 },
@@ -139,6 +145,8 @@ export const AIRCRAFT = {
     Cnbeta: -0.03, Cnr: -0.02, Cndr: 0.04, CnAdverse: 0.02,
     engine: { type: 'jet', tau: 1.5, maxThrust: 308000, afterburner: null },
     // Fly-by-wire keeps it pointed; without this it departs (see physics test).
+    // Softening composes with the SAS; qRef ~250 kt keeps low-speed authority.
+    controlSoften: { qRef: 10100 }, inputRate: 5.5,
     sas: { yawDamper: 0.6, betaGain: 0.3, pitchDamper: 8 },
     maxSpeed: 230, gearHeight: 3.0,
     crashSink: 4.0, maxSteer: 0.25,

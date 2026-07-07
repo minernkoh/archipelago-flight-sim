@@ -103,6 +103,7 @@ function setAircraft(craft) {
   plane = craft.buildMesh();
   scene.add(plane.group);
   ac.p = { ...craft.params };
+  controls.setRates(craft.params);
   hud.configure(craft.hud);
   camRig.configure(craft.camera);
 }

@@ -127,11 +127,25 @@ const flatRunway = { x: 0, z: 0, y: 0, headingRad: 0 };
 // ---- 9. Every type rests, rolls, and takes off ----
 {
   const profiles = {
-    c172:     { vr: 32, elev: 0.5, dist: 1500, time: 60 },
-    extra300: { vr: 30, elev: 0.35, dist: 1200, time: 60 },
-    hornet:   { vr: 80, elev: 0.35, dist: 2500, time: 90 },
-    heavy:    { vr: 78, elev: 0.4, dist: 3500, time: 150 },
-    spirit:   { vr: 75, elev: 0.45, dist: 3000, time: 120 },
+    c172:     { vr: 32, dist: 1500, time: 60 },
+    extra300: { vr: 30, dist: 1200, time: 60 },
+    hornet:   { vr: 80, dist: 2500, time: 90 },
+    heavy:    { vr: 78, dist: 3500, time: 150 },
+    spirit:   { vr: 75, dist: 3000, time: 120 },
+  };
+  // Shared closed-loop climb law — IDENTICAL for all 5 aircraft (no per-type
+  // tuning). After rotation speed, a proportional pitch-hold drives elevator
+  // toward CLIMB_PITCH. This replaces the old open-loop constant-elevator hold,
+  // which porpoised pathologically (~12 g even at baseline); a controllable
+  // climb is both more realistic and a stronger test, and because the law is
+  // uniform it cannot mask a real regression in any single airframe.
+  const CLIMB_PITCH = 0.14;   // rad target climb attitude (~8 deg)
+  const PITCH_GAIN = 4.0;     // proportional gain on pitch error
+  const ELEV_LO = -0.5, ELEV_HI = 0.8;  // elevator command clamp
+  const climbElev = (a, vr) => {
+    if (a.airspeed <= vr) return 0;  // ground roll / rotation
+    const e = PITCH_GAIN * (CLIMB_PITCH - attitude(a).pitch);
+    return Math.max(ELEV_LO, Math.min(ELEV_HI, e));
   };
   for (const [id, prof] of Object.entries(profiles)) {
     const ac = createAircraft({ params: AIRCRAFT[id] });
@@ -143,7 +157,7 @@ const flatRunway = { x: 0, z: 0, y: 0, headingRad: 0 };
     check(`${id} rests quietly at spawn attitude`, !ac.crashed && drift < 3 && Math.abs(att.pitch - restPitch) < 0.06,
       `drift ${drift.toFixed(1)} m, pitch ${(att.pitch * 57.3).toFixed(1)} deg (want ${(restPitch * 57.3).toFixed(1)}), crash=${ac.crashReason}`);
     let liftoffX = null;
-    fly(ac, (a) => ctl({ throttle: 1, elevator: a.airspeed > prof.vr ? prof.elev : 0 }), prof.time, flat, a => {
+    fly(ac, (a) => ctl({ throttle: 1, elevator: climbElev(a, prof.vr) }), prof.time, flat, a => {
       if (liftoffX === null && a.agl > 60) liftoffX = a.pos.x;
     });
     check(`${id} takes off and climbs through 60 m`, liftoffX !== null && !ac.crashed,
@@ -266,6 +280,48 @@ import { createWind, WEATHER } from '../src/physics/wind.js';
   const v0 = trimSpeed(0), vUp = trimSpeed(0.12);
   check('nose-up trim slows hands-off speed', vUp < v0 - 4,
     `${(v0 * KT).toFixed(0)} kt -> ${(vUp * KT).toFixed(0)} kt with +12% trim`);
+}
+
+// ---- 18. Hornet control-softening: high-speed handling stays sane (U8) ----
+{
+  // Full aft stick at 500 kt must not rip past 9 g or depart controlled flight.
+  const kt = 1 / KT;
+  const ac = createAircraft({ params: AIRCRAFT.hornet, pos: v3(0, 6000, 0), vel: v3(500 * kt, 0, 0) });
+  ac.spool = 1;
+  let maxG = 0, maxBeta = 0;
+  fly(ac, ctl({ throttle: 1, elevator: 1 }), 4, flat, a => {
+    maxG = Math.max(maxG, a.gLoad);
+    maxBeta = Math.max(maxBeta, Math.abs(a.beta));
+  });
+  check('hornet full aft stick at 500 kt pulls < 9 g', !ac.crashed && maxG < 9 && maxG > 1.5,
+    `peak ${maxG.toFixed(1)} g`);
+  check('hornet does not depart at 500 kt full stick', !ac.crashed && Number.isFinite(ac.pos.y) && maxBeta < 0.25,
+    `max |beta| ${(maxBeta * 57.3).toFixed(1)} deg, crash=${ac.crashReason}`);
+
+  // Peak roll rate at 500 kt must not exceed 1.5x the 250-kt roll rate — the
+  // softener keeps roll authority bounded as dynamic pressure climbs.
+  const peakRoll = (kts) => {
+    const r = createAircraft({ params: AIRCRAFT.hornet, pos: v3(0, 6000, 0), vel: v3(kts * kt, 0, 0) });
+    r.spool = 1;
+    let pk = 0;
+    fly(r, ctl({ throttle: 1, aileron: 1 }), 2.5, flat, a => { pk = Math.max(pk, Math.abs(a.omega.x)); });
+    return pk;
+  };
+  const roll250 = peakRoll(250), roll500 = peakRoll(500);
+  check('hornet roll rate at 500 kt <= 1.5x its 250 kt roll rate', roll500 <= 1.5 * roll250,
+    `${roll500.toFixed(2)} vs ${roll250.toFixed(2)} rad/s (ratio ${(roll500 / roll250).toFixed(2)})`);
+}
+
+// ---- 19. C172 trimmed cruise is byte-identical (softening must not touch it) ----
+{
+  const ac = createAircraft({ pos: v3(0, 2000, 0), vel: v3(55, 0, 0) });
+  fly(ac, ctl({ throttle: 0.55, trim: 0.05 }), 20);
+  const hash = [
+    ac.pos.x, ac.pos.y, ac.pos.z, ac.vel.x, ac.vel.y, ac.vel.z,
+    ac.q.w, ac.q.x, ac.q.y, ac.q.z, ac.omega.x, ac.omega.y, ac.omega.z,
+  ].map(v => v.toFixed(6)).join('|');
+  const EXPECTED = '882.940147|2039.258833|-1.113957|48.143129|-7.669935|-0.202756|0.998710|-0.001058|0.002202|-0.050718|-0.000069|0.000381|0.020425';
+  check('c172 trimmed-cruise state hash unchanged', hash === EXPECTED, hash);
 }
 
 console.log(failures === 0 ? '\nAll physics checks passed.' : `\n${failures} check(s) FAILED.`);

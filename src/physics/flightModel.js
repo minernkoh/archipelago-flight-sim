@@ -128,16 +128,29 @@ export function step(ac, controls, env, dt) {
   let stallMoment = 0;
   if (alpha > p.alphaStall + p.flapStallShift * controls.flaps) stallMoment = -0.35 * (alpha - p.alphaStall);
 
+  // Control-authority softener (fly-by-wire q-scheduling): fast jets scale their
+  // deflections down as dynamic pressure climbs past a reference so full stick at
+  // high speed doesn't rip the airframe apart. Identity below qRef (min(1,...)),
+  // so low-speed rotation/roll are untouched. Composes with the SAS block below.
+  // Elevator scales the elevator+trim SUM so trim authority tracks stick authority.
+  let elev = controls.elevator + (controls.trim || 0);
+  let ail = controls.aileron;
+  let rud = controls.rudder;
+  if (p.controlSoften) {
+    const soft = Math.pow(Math.min(1, p.controlSoften.qRef / qbar), p.controlSoften.exp ?? 0.7);
+    elev *= soft; ail *= soft; rud *= soft;
+  }
+
   // Pitch about +z (positive = nose up)
   const Cm = p.Cm0 + p.Cmalpha * alpha + p.Cmq * (qr * c / (2 * V2))
-           + p.Cmde * (controls.elevator + (controls.trim || 0))
+           + p.Cmde * elev
            + p.CmFlap * controls.flaps + stallMoment;
   // Roll about +x (positive = roll right). Aileron + = roll right.
-  const Cl = p.Clbeta * beta + p.Clp * (pr * b / (2 * V2)) + p.Clda * controls.aileron
+  const Cl = p.Clbeta * beta + p.Clp * (pr * b / (2 * V2)) + p.Clda * ail
            + p.Clr * (-yr * b / (2 * V2));
   // Yaw about +y (positive = nose LEFT). Rudder + = nose right -> negative Cn_y.
   // CnAdverse: rolling right drags the nose left (adverse yaw) -> positive M.y.
-  const CnAero = p.Cnbeta * beta + p.Cndr * controls.rudder - p.CnAdverse * controls.aileron;
+  const CnAero = p.Cnbeta * beta + p.Cndr * rud - p.CnAdverse * ail;
   const CnY = -CnAero + p.Cnr * (yr * b / (2 * V2)); // Cnr < 0 opposes yaw rate
   // Prop left-turning tendency: nose left at high power / low speed.
   const propYaw = eng.type === 'prop'
