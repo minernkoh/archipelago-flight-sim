@@ -73,11 +73,16 @@
   #radalt{ right: calc(max(2vw, 1rem) + 5.2rem); top: calc(50% - 8.5rem); color: var(--ink-dim); text-align: right;}
 
   #status { position: absolute; left: max(2vw, 1rem); bottom: max(2.5vh, 1rem);
-          display: flex; gap: 1.4rem; font-size: .85rem; background: var(--panel);
-          border: 1px solid var(--panel-line); padding: .45rem .9rem; }
+          display: flex; gap: 1.1rem; font-size: .95rem; background: var(--panel);
+          border: 1px solid var(--panel-line); padding: .45rem .95rem; align-items: stretch; }
+  #status .grp { display: flex; flex-direction: column; gap: .18rem; }
+  #status .grp + .grp { border-left: 1px solid var(--panel-line); padding-left: 1.1rem; }
+  #status .grplbl { font-family: "B612 Mono", monospace; font-size: .55rem; letter-spacing: .26em;
+          color: var(--ink-dim); }
+  #status .items { display: flex; gap: 1.3rem; }
   #status .lbl { color: var(--ink-dim); font-size: .62rem; letter-spacing: .14em; display: block; }
   #status .val { font-weight: 700; }
-  #status .val.set { color: var(--good); }
+  #status .val.set { color: var(--amber); }
   #thr-bar { display: inline-block; width: 3.4rem; height: .45rem; border: 1px solid var(--ink-dim);
           vertical-align: baseline; margin-left: .2rem; position: relative; }
   #thr-bar i { position: absolute; inset: 1px auto 1px 1px; background: var(--ink); width: 0%; }
@@ -108,6 +113,45 @@
           background: var(--panel); border: 1px solid var(--panel-line); padding: .5rem 1.2rem;
           opacity: 0; transition: opacity .4s; white-space: nowrap; }
   #msg.show { opacity: 1; }
+
+  /* landing debrief card (bottom-center) */
+  #debrief { position: absolute; bottom: max(9vh, 4.5rem); left: 50%; transform: translateX(-50%);
+          min-width: 18rem; background: var(--panel); border: 1px solid var(--panel-line);
+          border-left: 3px solid var(--amber); padding: .55rem 1.1rem .6rem; text-align: left;
+          opacity: 0; transition: opacity .35s; pointer-events: none; }
+  #debrief.show { opacity: 1; }
+  #debrief .db-kicker { font-family: "B612 Mono", monospace; font-size: .6rem; letter-spacing: .3em;
+          color: var(--amber); margin-bottom: .2rem; }
+  #debrief .db-grade { font-family: "B612", sans-serif; font-size: 1.15rem; font-weight: 700; }
+  #debrief .db-row { display: flex; gap: 1.3rem; margin: .35rem 0 .3rem; font-family: "B612 Mono", monospace;
+          font-size: .95rem; font-weight: 700; }
+  #debrief .db-row i { color: var(--ink-dim); font-style: normal; font-size: .6rem; letter-spacing: .12em;
+          display: block; font-weight: 400; }
+  #debrief .db-coach { font-family: "B612", sans-serif; font-size: .82rem; color: var(--ink-dim); line-height: 1.4;
+          max-width: 24rem; }
+
+  /* 3-2-1-GO race countdown */
+  #countdown { position: absolute; top: 38%; left: 50%; transform: translateX(-50%);
+          font-family: "B612 Mono", monospace; font-size: 5rem; font-weight: 700; color: var(--mag);
+          text-shadow: 0 0 24px rgba(255,95,210,.5); display: none; }
+  #countdown.show { display: block; animation: countpop .5s ease-out; }
+  #countdown.go { color: var(--good); text-shadow: 0 0 24px rgba(99,217,124,.55); }
+  @keyframes countpop { from { transform: translateX(-50%) scale(1.6); opacity: 0; }
+          to { transform: translateX(-50%) scale(1); opacity: 1; } }
+
+  /* per-gate split flash (under the race panel) */
+  #split { position: absolute; right: max(2vw, 1rem); top: calc(max(1.5vh, .6rem) + 4.3rem);
+          font-family: "B612 Mono", monospace; font-size: 1.4rem; font-weight: 700; text-align: right;
+          opacity: 0; transition: opacity .2s; }
+  #split.show { opacity: 1; }
+  #split.ahead { color: var(--good); }
+  #split.behind { color: var(--amber); }
+
+  /* minimap (U7) */
+  #minimap { position: fixed; right: max(2vw, 1rem); bottom: max(2.5vh, 1rem);
+          width: 180px; height: 180px; background: var(--panel); border: 1px solid var(--panel-line);
+          display: none; z-index: 5; }
+  #minimap.on { display: block; }
 
   /* ---------- Flight school ---------- */
   #instructor { position: absolute; bottom: max(9vh, 4.5rem); left: 50%; transform: translateX(-50%);
@@ -176,10 +220,30 @@
           letter-spacing: .1em; line-height: 2; }
   .screen .foot b { color: var(--ink); font-weight: 400; }
   #crash h1 { color: var(--warn); }
+  #crash .crash-why { display: block; margin-top: 1rem; color: var(--amber); font-size: .88rem;
+          line-height: 1.5; max-width: 26rem; }
   #results .stat { font-family: "B612 Mono", monospace; font-size: 2.4rem; font-weight: 700; }
   #results .statlbl { font-family: "B612 Mono", monospace; font-size: .7rem;
           letter-spacing: .3em; color: var(--ink-dim); margin-bottom: 2rem; }
   .newbest { color: var(--good); }
+  /* ---------- U4: menu aircraft preview panel ---------- */
+  #craft-panel { position: absolute; right: clamp(2rem, 8vw, 9rem); top: 50%; transform: translateY(-50%);
+          width: 17rem; background: var(--panel); border: 1px solid var(--panel-line);
+          border-top: 3px solid var(--amber); padding: 1.2rem 1.3rem 1.4rem; }
+  #craft-panel .cp-kicker { font-family: "B612 Mono", monospace; font-size: .6rem; letter-spacing: .3em;
+          color: var(--amber); margin-bottom: .5rem; }
+  #craft-panel .cp-name { font-size: 1.7rem; font-weight: 700; line-height: 1; }
+  #craft-panel .cp-tag { color: var(--ink-dim); font-size: .82rem; line-height: 1.4; margin: .5rem 0 1.1rem; }
+  #craft-panel .cp-bar { display: flex; align-items: center; gap: .6rem; margin-bottom: .5rem; }
+  #craft-panel .cp-bar .bl { font-family: "B612 Mono", monospace; font-size: .58rem; letter-spacing: .16em;
+          color: var(--ink-dim); min-width: 6.2ch; }
+  #craft-panel .cp-seg { display: flex; gap: .22rem; }
+  #craft-panel .cp-seg i { width: 1.3rem; height: .42rem; background: rgba(232,237,242,.14); display: block; }
+  #craft-panel .cp-seg i.on { background: var(--amber); }
+  #craft-panel .cp-nums { margin-top: 1rem; padding-top: .9rem; border-top: 1px solid var(--panel-line);
+          font-family: "B612 Mono", monospace; font-size: .74rem; color: var(--ink); line-height: 1.9; }
+  #craft-panel .cp-nums span { color: var(--ink-dim); }
+  @media (max-width: 780px) { #craft-panel { display: none; } }
   #loading { z-index: 20; }
   #loading .inner { font-family: "B612 Mono", monospace; color: var(--ink-dim); font-size: .8rem;
           letter-spacing: .25em; }
@@ -206,13 +270,26 @@
     <div class="best">BEST —</div>
   </div>
   <div id="status">
-    <div><span class="lbl">THR</span><span class="val" id="st-thr">0%<span id="thr-bar"><i></i></span></span></div>
-    <div><span class="lbl">FLAPS</span><span class="val" id="st-flaps">UP</span></div>
-    <div><span class="lbl">BRK</span><span class="val" id="st-brk">—</span></div>
-    <div><span class="lbl">TRIM</span><span class="val" id="st-trim">0</span></div>
-    <div><span class="lbl">CAM</span><span class="val" id="st-cam">CHASE</span></div>
+    <div class="grp">
+      <span class="grplbl">FLIGHT</span>
+      <div class="items">
+        <div><span class="lbl">THR</span><span class="val" id="st-thr">0%<span id="thr-bar"><i></i></span></span></div>
+        <div><span class="lbl">FLAPS</span><span class="val" id="st-flaps">UP</span></div>
+        <div><span class="lbl">TRIM</span><span class="val" id="st-trim">0</span></div>
+      </div>
+    </div>
+    <div class="grp">
+      <span class="grplbl">SYSTEM</span>
+      <div class="items">
+        <div><span class="lbl">BRK</span><span class="val" id="st-brk">—</span></div>
+        <div><span class="lbl">CAM</span><span class="val" id="st-cam">CHASE</span></div>
+      </div>
+    </div>
   </div>
   <div id="msg"></div>
+  <div id="debrief"></div>
+  <div id="countdown"></div>
+  <div id="split"></div>
   <div id="instructor">
     <div class="kicker">INSTRUCTOR</div>
     <div class="text"></div>
@@ -226,7 +303,7 @@
   <div id="help">
     <b>&uarr;&darr;</b> pitch &nbsp;<b>&larr;&rarr;</b> roll &nbsp;<b>A D</b> rudder<br>
     <b>W S</b> throttle &nbsp;<b>F</b>/<b>shift F</b> flaps &nbsp;<b>B</b> brakes &nbsp;<b>[ ]</b> trim<br>
-    <b>C</b> camera &nbsp;<b>R</b> reset &nbsp;<b>ESC</b> pause &nbsp;<b>?</b> hide
+    <b>C</b> camera &nbsp;<b>M</b> minimap &nbsp;<b>R</b> reset &nbsp;<b>ESC</b> pause &nbsp;<b>?</b> hide
   </div>
 </div>
 
@@ -242,7 +319,7 @@
       <button class="btn sel" data-sel="mode"><span class="no">01</span><span class="lbl">MODE</span>
         <span class="val" id="sel-mode">FREE FLIGHT</span><span class="hint" id="sel-mode-hint"></span></button>
       <button class="btn sel" data-sel="map"><span class="no">02</span><span class="lbl">MAP</span>
-        <span class="val" id="sel-map">ARCHIPELAGO</span></button>
+        <span class="val" id="sel-map">ARCHIPELAGO</span><span class="hint" id="sel-map-hint"></span></button>
       <button class="btn sel" data-sel="aircraft"><span class="no">03</span><span class="lbl">AIRCRAFT</span>
         <span class="val" id="sel-aircraft">SKYHAWK</span><span class="hint" id="sel-aircraft-hint"></span></button>
       <button class="btn sel" data-sel="weather"><span class="no">04</span><span class="lbl">WEATHER</span>
@@ -251,6 +328,13 @@
         <span class="val">&rarr;</span></button>
     </div>
   </div>
+  <aside id="craft-panel">
+    <div class="cp-kicker">AIRCRAFT</div>
+    <div class="cp-name" id="cp-name">SKYHAWK</div>
+    <div class="cp-tag" id="cp-tag"></div>
+    <div id="cp-bars"></div>
+    <div class="cp-nums" id="cp-nums"></div>
+  </aside>
   <div class="foot" id="menu-foot">
     ARROWS pitch/roll &nbsp;&middot;&nbsp; <b>A/D</b> rudder &nbsp;&middot;&nbsp; <b>W/S</b> throttle &nbsp;&middot;&nbsp;
     <b>F</b> flaps &nbsp;&middot;&nbsp; <b>B</b> brakes &nbsp;&middot;&nbsp; <b>C</b> camera &nbsp;&middot;&nbsp; <b>ESC</b> pause

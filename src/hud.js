@@ -103,6 +103,10 @@ export function createHUD() {
 
   const papiEl = $('#papi'), papiLights = papiEl.querySelectorAll('i');
   const slipEl = $('#slip'), slipBall = slipEl.querySelector('.ball');
+  const debriefEl = $('#debrief');
+  const countEl = $('#countdown');
+  const splitEl = $('#split');
+  let debriefTimer = null, countTimer = null, splitTimer = null;
 
   return {
     // Rebuild tapes/labels for a different aircraft (hud meta from the catalog)
@@ -134,6 +138,50 @@ export function createHUD() {
       if (ms) msgTimer = setTimeout(() => msgEl.classList.remove('show'), ms);
     },
     clearMessage() { msgEl.classList.remove('show'); },
+    // Landing debrief card (bottom-center, auto-dismiss). data: { grade, fpm,
+    // speedKt, offset (metres, null when off-runway), coach }.
+    debrief(data, ms = 6000) {
+      const off = data.offset == null ? ''
+        : `<span><i>CTR</i>${Math.abs(Math.round(data.offset))} m ${data.offset >= 0 ? 'R' : 'L'}</span>`;
+      debriefEl.innerHTML =
+        `<div class="db-kicker">TOUCHDOWN</div>` +
+        `<div class="db-grade">${data.grade}</div>` +
+        `<div class="db-row"><span><i>FPM</i>${data.fpm}</span>` +
+        `<span><i>SPD</i>${data.speedKt} kt</span>${off}</div>` +
+        `<div class="db-coach">${data.coach}</div>`;
+      debriefEl.classList.add('show');
+      clearTimeout(debriefTimer);
+      if (ms) debriefTimer = setTimeout(() => debriefEl.classList.remove('show'), ms);
+    },
+    clearDebrief() { debriefEl.classList.remove('show'); clearTimeout(debriefTimer); },
+    // 3-2-1-GO race countdown overlay (visual only; the clock still arms on roll).
+    countdown() {
+      const seq = ['3', '2', '1', 'GO'];
+      let i = 0;
+      clearTimeout(countTimer);
+      const tick = () => {
+        countEl.textContent = seq[i];
+        countEl.classList.toggle('go', seq[i] === 'GO');
+        countEl.classList.add('show');
+        // restart the pop animation
+        countEl.style.animation = 'none'; void countEl.offsetWidth; countEl.style.animation = '';
+        i++;
+        if (i < seq.length) countTimer = setTimeout(tick, 800);
+        else countTimer = setTimeout(() => countEl.classList.remove('show'), 700);
+      };
+      tick();
+    },
+    // Per-gate split flash vs the best run. delta in seconds (null = no baseline).
+    split(delta) {
+      if (delta == null) { splitEl.classList.remove('show'); return; }
+      const ahead = delta <= 0;
+      splitEl.textContent = (ahead ? '−' : '+') + Math.abs(delta).toFixed(1);
+      splitEl.classList.toggle('ahead', ahead);
+      splitEl.classList.toggle('behind', !ahead);
+      splitEl.classList.add('show');
+      clearTimeout(splitTimer);
+      splitTimer = setTimeout(() => splitEl.classList.remove('show'), 1600);
+    },
     race(show, data) {
       raceEl.classList.toggle('show', show);
       if (data) {

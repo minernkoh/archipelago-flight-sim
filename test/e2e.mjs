@@ -136,6 +136,18 @@ const hudState = await page.evaluate(() => ({
 }));
 check('HUD live', hudState.hudOn && Number(hudState.spd) > 30, `IAS ${hudState.spd} kt`);
 
+// --- U7: minimap toggles with M (assert via DOM/state, not pixels) ---
+const mmExists = await sim('!!document.querySelector("#minimap")');
+const mmBefore = await sim('document.querySelector("#minimap").classList.contains("on")');
+await press('m');
+await settle(500);
+const mmOn = await sim('document.querySelector("#minimap").classList.contains("on")');
+await press('m');
+await settle(500);
+const mmOff = await sim('document.querySelector("#minimap").classList.contains("on")');
+check('minimap toggles with M', mmExists && !mmBefore && mmOn && !mmOff,
+  `exists=${mmExists} before=${mmBefore} on=${mmOn} off=${mmOff}`);
+
 await press('c');
 await settle(400);
 await shot('4-cockpit');
@@ -153,6 +165,15 @@ await click('#btn-start');
 await settle(1200);
 const race = await sim('({state: __sim.game.state, mode: __sim.game.mode, ringsVisible: __sim.rings.group.visible, total: __sim.rings.total})');
 check('race mode starts with rings', race.state === 'flying' && race.mode === 'race' && race.ringsVisible && race.total === 12, JSON.stringify(race));
+
+// --- U6: 3-2-1-GO countdown appears BEFORE the aircraft rolls ---
+const cd = await page.evaluate(() => ({
+  shown: document.querySelector('#countdown').classList.contains('show'),
+  text: document.querySelector('#countdown').textContent.trim(),
+  gs: window.__sim.ac.groundSpeed,
+}));
+check('race countdown appears before roll', cd.shown && /^(3|2|1|GO)$/.test(cd.text) && cd.gs < 3,
+  `text=${cd.text} groundSpeed=${cd.gs.toFixed(2)}`);
 await shot('6-race-start');
 
 // --- fly the whole course by teleporting short of each gate ---
@@ -205,7 +226,7 @@ const best = await page.evaluate(() => localStorage.getItem('archipelago.best.ar
 check('best time saved (per map+aircraft key)', best !== null, best ? `${Number(best).toFixed(1)} s` : 'missing');
 await shot('8-results');
 
-// --- free-flight landing rating toast ---
+// --- U5: free-flight landing debrief card shows a centerline number ---
 await click('#results [data-act="menu"]');
 await page.evaluate(() => window.__sim.game.select({ mode: 'free' }));
 await click('#btn-start');
@@ -219,8 +240,12 @@ await page.evaluate(() => {
   ac.omega = { x: 0, y: 0, z: 0 };
 });
 await settle(6000);
-const toast = await page.evaluate(() => document.querySelector('#msg').textContent);
-check('landing rating toast appears', /fpm/.test(toast), toast);
+const db = await page.evaluate(() => ({
+  shown: document.querySelector('#debrief').classList.contains('show'),
+  text: document.querySelector('#debrief').textContent,
+}));
+check('debrief card shows a centerline number after a runway landing',
+  db.shown && /CTR/.test(db.text) && /\d+\s*m/.test(db.text), db.text.replace(/\s+/g, ' ').trim());
 
 // --- flight school: lesson 1 (controls & taxi) start to finish ---
 console.log('flight school…');

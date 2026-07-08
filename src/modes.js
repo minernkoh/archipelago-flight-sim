@@ -1,13 +1,30 @@
 // Game flow: menu (mode/map/aircraft selection) / free flight / ring race /
 // pause / crash / results. World swapping is delegated to main.js via `world`.
 
-import { resetOnRunway, KT } from './physics/flightModel.js';
+import { resetOnRunway, KT, FT } from './physics/flightModel.js';
 import { createTour } from './tour.js';
 import { renderGlossary } from './groundschool.js';
+import { runwayFrame } from './runwayUtil.js';
 
 const $ = (s) => document.querySelector(s);
 const SEL_KEY = 'archipelago.sel';
 const bestKey = (map, aircraft) => `archipelago.best.${map}.${aircraft}`;
+const splitsKey = (map, aircraft) => `${bestKey(map, aircraft)}.splits`; // sibling of the float best
+
+// One-line map descriptions for the menu map row.
+const MAP_DESC = {
+  archipelago: 'procedural islands, one strip of asphalt',
+  singapore: 'stylised city-state — Changi to Marina Bay',
+};
+
+// Human-terms numbers derived from the physics params (never hand-maintained):
+// clean 1g stall speed and the structural redline (Vne), both in knots.
+function derivedNumbers(p) {
+  const rho = 1.225, g = 9.81;
+  const clMax = p.CL0 + p.CLalpha * p.alphaStall;
+  const vStall = Math.sqrt((2 * p.mass * g) / (rho * p.wingArea * clMax)); // m/s
+  return { stallKt: Math.round(vStall * KT), vneKt: Math.round(p.maxSpeed * KT) };
+}
 
 const fmtTime = (t) => {
   const m = Math.floor(t / 60), s = t - m * 60;
@@ -35,6 +52,31 @@ const CRASH_TEXT = {
   'numerical': ['DEPARTED FLIGHT.', 'The airflow gave up entirely.'],
 };
 
+// U5: turn the crash telemetry snapshot into one coaching line. Stall and
+// overspeed override the reason; otherwise the reason distinguishes a gear-
+// overload arrival ('hard impact') from a building/terrain strike, etc.
+function crashWhy(snap, reason) {
+  if (!snap) return '';
+  if (snap.stalled && snap.aglFt < 500)
+    return 'The wing stalled with no height to recover — down low, lower the nose the instant the STALL light fires.';
+  if (snap.overspeed)
+    return `Structural failure at ${snap.speedKt} kt — past Vne the airframe can't carry the aerodynamic loads.`;
+  switch (reason) {
+    case 'hard impact':
+      return `Came down at ${snap.fpm} fpm — the gear gives out near 500 fpm, so flare to bleed the sink before touchdown.`;
+    case 'terrain impact':
+      return 'Flew into solid ground or a building — watch AGL, not just the altitude tape, near high terrain and the city.';
+    case 'prop strike':
+      return 'Nose-low contact drove the prop in — raise the nose and touch on the mains first.';
+    case 'wing strike':
+      return 'A wing dropped into the surface — keep the wings level through the flare and touchdown.';
+    case 'tail strike':
+      return 'Over-rotated — ease the back-pressure so the tail clears.';
+    default:
+      return 'The airflow departed the airframe entirely — keep it inside the envelope.';
+  }
+}
+
 export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) {
   let crashT = null; // delay before the crash screen so the debris burst reads
   let state = 'menu';           // menu | flying | paused | crash | results
@@ -42,6 +84,8 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
   try { sel = { ...sel, ...JSON.parse(localStorage.getItem(SEL_KEY) || '{}') }; } catch { /* fresh defaults */ }
   let map = null, rings = null;  // live handles, set by begin()
   let raceT = 0, raceStarted = false, raceDone = false;
+  let runSplits = [];   // this run's per-gate split times (vs getBestSplits())
+  let crashSnap = null; // ac telemetry captured at the first crashed frame (U5)
   let trainer = null, lessonId = null;
   const instrEl = $('#instructor');
 
@@ -81,16 +125,47 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
     return null;
   };
   const setBest = (t) => localStorage.setItem(bestKey(sel.map, sel.aircraft), String(t));
+  // Sibling key holds the best run's per-gate split times (JSON array). Kept
+  // separate from the bare-float best so the legacy best key is never touched.
+  const getBestSplits = () => {
+    try {
+      const v = JSON.parse(localStorage.getItem(splitsKey(sel.map, sel.aircraft)) || 'null');
+      return Array.isArray(v) ? v : null;
+    } catch { return null; }
+  };
+  const setBestSplits = (arr) => {
+    try { localStorage.setItem(splitsKey(sel.map, sel.aircraft), JSON.stringify(arr)); } catch { /* storage unavailable */ }
+  };
+
+  // U4: aircraft preview panel — name, tagline, 3 editorial stat bars, and two
+  // derived human-terms numbers (stall / Vne).
+  function renderCraftPanel(craft) {
+    $('#cp-name').textContent = craft.params.name.toUpperCase();
+    $('#cp-tag').textContent = craft.tagline;
+    const stats = craft.stats || { speed: 0, handling: 0, difficulty: 0 };
+    const bar = (label, n) =>
+      `<div class="cp-bar"><span class="bl">${label}</span><span class="cp-seg">` +
+      Array.from({ length: 5 }, (_, i) => `<i class="${i < n ? 'on' : ''}"></i>`).join('') +
+      `</span></div>`;
+    $('#cp-bars').innerHTML =
+      bar('SPEED', stats.speed) + bar('HANDLING', stats.handling) + bar('DIFF', stats.difficulty);
+    const d = derivedNumbers(craft.params);
+    $('#cp-nums').innerHTML =
+      `<span>STALL</span> ${d.stallKt} KT &nbsp;&middot;&nbsp; <span>VNE</span> ${d.vneKt} KT`;
+  }
 
   function updateMenuLabels() {
     const mode = MODES.find(m => m.id === sel.mode) || MODES[0];
     $('#sel-mode').textContent = mode.label;
     const best = getBest();
     $('#sel-mode-hint').textContent = sel.mode === 'race' && best ? `${mode.hint} · best ${fmtTime(best)}` : mode.hint;
-    $('#sel-map').textContent = (world.maps.find(m => m.id === sel.map) || world.maps[0]).name;
+    const mapObj = world.maps.find(m => m.id === sel.map) || world.maps[0];
+    $('#sel-map').textContent = mapObj.name;
+    $('#sel-map-hint').textContent = MAP_DESC[mapObj.id] || '';
     const craft = world.aircraft.find(a => a.id === sel.aircraft) || world.aircraft[0];
     $('#sel-aircraft').textContent = craft.params.name.toUpperCase();
     $('#sel-aircraft-hint').textContent = craft.tagline;
+    renderCraftPanel(craft);
     const wx = WEATHERS.find(w => w.id === sel.weather) || WEATHERS[0];
     $('#sel-weather').textContent = wx.label;
     $('#sel-weather-hint').textContent = wx.hint;
@@ -112,8 +187,11 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
     camRig.reset();
     rings.reset();
     raceT = 0; raceStarted = false; raceDone = false;
+    runSplits = [];
+    crashSnap = null;
     crashT = null;
     hud.clearMessage();
+    hud.clearDebrief?.();
   }
 
   async function begin() {
@@ -130,6 +208,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
     hud.message(sel.mode === 'race'
       ? `Clock starts when you roll. ${rings.total} gates, then land back on runway ${rwy}.`
       : `Runway ${rwy} — full throttle <b>W</b>, rotate with <b>&uarr;</b>.`, 5200);
+    if (sel.mode === 'race') hud.countdown(); // visual 3-2-1-GO; clock still arms on roll
     tour.offerOnce(); // first flight ever: auto-open the guided HUD tour
   }
 
@@ -194,7 +273,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
     state = 'results';
     const best = getBest();
     const isBest = !best || raceT < best;
-    if (isBest) setBest(raceT);
+    if (isBest) { setBest(raceT); setBestSplits(runSplits); }
     $('#res-time').textContent = fmtTime(raceT);
     $('#res-time').classList.toggle('newbest', isBest);
     $('#res-verdict').textContent = isBest ? 'NEW BEST TIME' : `FINAL TIME · BEST ${fmtTime(best)}`;
@@ -211,6 +290,10 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
     hud.setPapi(null); hud.setSlip(null);
     $('#crash-title').innerHTML = title.replace('.', '<em>.</em>');
     $('#crash-sub').textContent = sub;
+    if (!lessonFail) { // real crash: append the "why" coaching line
+      const why = crashWhy(crashSnap, ac.crashReason);
+      if (why) $('#crash-sub').innerHTML = sub + `<span class="crash-why">${why}</span>`;
+    }
     showScreen('crash');
   }
 
@@ -251,7 +334,19 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
       if (state !== 'flying') return;
 
       if (ac.crashed) {
-        if (crashT === null) { crashT = 0; fx?.crash(ac.pos, ac.vel); audio.thud(); }
+        if (crashT === null) {
+          crashT = 0;
+          // snapshot telemetry the instant the loop first sees the crash — by the
+          // time the crash screen shows, the aircraft has stopped tumbling.
+          crashSnap = {
+            stalled: ac.stalled,
+            overspeed: ac.airspeed > ac.p.maxSpeed,
+            speedKt: Math.round(ac.airspeed * KT),
+            aglFt: ac.agl * FT,
+            fpm: Math.round(-ac.vel.y * FT * 60),
+          };
+          fx?.crash(ac.pos, ac.vel); audio.thud();
+        }
         crashT += dt;
         if (crashT > 1.3) { crashT = null; crash(); }
         return;
@@ -276,6 +371,12 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
         const res = rings.check(ac);
         if (res === 'pass') {
           audio.chime();
+          // record this gate's split and flash the delta vs the best run
+          const gateIdx = runSplits.length;
+          runSplits.push(raceT);
+          const bestSplits = getBestSplits();
+          const ref = bestSplits && bestSplits[gateIdx];
+          hud.split?.(ref != null ? raceT - ref : null);
           hud.message(rings.done ? `All gates! Land on runway ${map.runway.name} and stop.` : `Gate ${rings.active} / ${rings.total}`, 1800);
         }
         const gd = rings.guidance(ac);
@@ -295,13 +396,22 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
         }
       }
 
-      // landing callouts (free flight)
+      // landing debrief (free flight)
       if (ac.touchdown && ac.touchdown !== lastTouchdown) {
         lastTouchdown = ac.touchdown;
         if (sel.mode === 'free') {
           const { fpm, speedKt, onRunway } = ac.touchdown;
-          const rating = fpm <= 130 ? 'Greased it.' : fpm <= 300 ? 'Smooth.' : fpm <= 500 ? 'Firm.' : 'Hard arrival — gear survived, barely.';
-          hud.message(`${rating} &nbsp;${fpm} fpm &middot; ${speedKt} kt${onRunway ? '' : ' &middot; off-field'}`, 4200);
+          const grade = fpm <= 130 ? 'GREASED IT' : fpm <= 300 ? 'SMOOTH' : fpm <= 500 ? 'FIRM' : 'HARD ARRIVAL';
+          const coach = !onRunway
+            ? 'Off-field — down safe, but aim for the pavement next time.'
+            : fpm <= 130 ? 'Textbook — the mains barely chirped.'
+            : fpm <= 300 ? 'Nicely flared. Keep bleeding speed before you touch.'
+            : fpm <= 500 ? 'A touch firm — start the flare a beat earlier.'
+            : 'Heavy — carry a little power into the flare to ease the sink.';
+          // centerline offset only makes sense on the runway (computed via the
+          // shared runwayFrame — valid on both maps' runway definitions).
+          const offset = onRunway ? runwayFrame(map.runway).cross(ac.pos) : null;
+          hud.debrief({ grade, fpm, speedKt, offset, coach });
         }
         fx?.touchdown(ac.pos, ac.groundSpeed, ac.touchdown.fpm);
         audio.chirp();

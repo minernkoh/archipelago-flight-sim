@@ -9,6 +9,7 @@
 // tick to drive the HUD ball/glideslope regardless of which step is current.
 
 import { attitude as flAttitude, KT, FT } from './physics/flightModel.js';
+import { runwayFrame } from './runwayUtil.js';
 
 const PROGRESS_KEY = 'archipelago.training';
 const HINT_AFTER = 20; // seconds stuck on one step before we nudge
@@ -46,26 +47,13 @@ export function createTrainingSystem(deps) {
   }
 
   // ---- runway geometry ----------------------------------------------------
-  // Body/world convention (see flightModel.js header): heading 0 = +x, and
-  // +z is "right". A yaw of `h` about +y sends local +x -> (cos h, -sin h)
-  // and local +z -> (sin h, cos h) — that's `fwd`/`right` below.
-  function runwayFrame() {
-    const rwy = map.runway;
-    const h = rwy.headingRad;
-    const fwd = { x: Math.cos(h), z: -Math.sin(h) };
-    const right = { x: Math.sin(h), z: Math.cos(h) };
-    const ox = rwy.spawn.x, oz = rwy.spawn.z;
-    return {
-      fwd, right,
-      cross(pos) { return (pos.x - ox) * right.x + (pos.z - oz) * right.z; },
-    };
-  }
+  // runwayFrame() lives in ./runwayUtil.js (shared with the landing debrief).
 
   // Rectangular left-traffic circuit: crosswind, two downwind points, base.
   // All at ~1000 ft AGL — close enough to real pattern altitude for training.
   function patternCourse() {
     const rwy = map.runway;
-    const { fwd, right } = runwayFrame();
+    const { fwd, right } = runwayFrame(rwy);
     const O = rwy.spawn;
     const patY = rwy.y + 1000 / FT;
     const LEG = 1300, WIDE = 550;
@@ -101,7 +89,7 @@ export function createTrainingSystem(deps) {
   }
 
   function buildTakeoffSteps({ terse = false } = {}) {
-    const frame = runwayFrame();
+    const frame = runwayFrame(map.runway);
     return [
       {
         text: terse ? 'Takeoff.'
@@ -209,7 +197,7 @@ export function createTrainingSystem(deps) {
   }
 
   function buildLandingSteps({ terse = false, fpmLimit = 300, papiOn = true } = {}) {
-    const { fwd } = runwayFrame();
+    const { fwd } = runwayFrame(map.runway);
     const rwy = map.runway;
     const tdX = rwy.spawn.x + fwd.x * 300, tdZ = rwy.spawn.z + fwd.z * 300;
     function established() {

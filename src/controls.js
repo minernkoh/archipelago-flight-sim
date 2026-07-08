@@ -29,6 +29,7 @@ export function createControls() {
       flapIdx = e.shiftKey ? Math.max(0, flapIdx - 1) : Math.min(FLAP_DETENTS.length - 1, flapIdx + 1);
     }
     if (k === 'c') emit('camera');
+    if (k === 'm') emit('minimap');
     if (k === 'r') emit('reset');
     if (k === 'Escape') emit('pause');
     if (k === '?' || k === '/') emit('help');

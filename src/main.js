@@ -16,6 +16,7 @@ import { createGameFlow } from './modes.js';
 import { createTrainingSystem } from './training.js';
 import { createEffects } from './effects.js';
 import { createWind, WEATHER } from './physics/wind.js';
+import { createMinimap } from './minimap.js';
 
 const PHYS_DT = 1 / 120;
 const MAPS = [archipelagoMap, singaporeMap];
@@ -87,6 +88,7 @@ async function loadMap(map) {
     terrain.update(map.runway.spawn.x, map.runway.spawn.z, 8);
     await new Promise(r => setTimeout(r));
   }
+  minimap.bake(map); // coarse height sampling — stays in this pre-gen path, never rAF
   loading.classList.remove('show');
   mapLoading = false;
 }
@@ -112,6 +114,8 @@ const controls = createControls();
 const hud = createHUD();
 const camRig = createCameraRig(camera);
 const audio = createAudio();
+const minimap = createMinimap();
+controls.on('minimap', () => minimap.toggle());
 
 // Amber training gates — a second rings instance the trainer drives.
 let trainGates = null;
@@ -158,6 +162,7 @@ async function boot() {
     terrain.update(currentMap.runway.spawn.x, currentMap.runway.spawn.z, 8);
     await new Promise(r => setTimeout(r));
   }
+  minimap.bake(currentMap); // initial-map bake, still in the setTimeout pre-gen path
   document.querySelector('#loading').classList.remove('show');
   game.toMenu();
   schedule();
@@ -212,6 +217,10 @@ function frame(now) {
 
   const ringBearing = game.tick(dt);
   if (trainGates) trainGates.update(dt);
+  minimap.frame({
+    flying, map: currentMap, ac, rings,
+    trainGates, raceMode: flying && game.mode === 'race',
+  });
   fx.update(dt);
   windField.setTime(elapsed);
   const sock = scenery.userData?.windsock;
