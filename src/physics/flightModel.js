@@ -47,10 +47,11 @@ export function liftCoeff(alpha, flaps, p = PARAMS) {
 }
 
 export function createAircraft(opts = {}) {
-  return {
-    // A full preset (see aircraft/params.js); partial opts.params still layers
-    // over the C172 so v1 callers/tests keep working.
-    p: opts.params ? { ...AIRCRAFT.c172, ...opts.params } : { ...AIRCRAFT.c172 },
+  // A full preset (see aircraft/params.js); partial opts.params still layers
+  // over the C172 so v1 callers/tests keep working.
+  const p = opts.params ? { ...AIRCRAFT.c172, ...opts.params } : { ...AIRCRAFT.c172 };
+  const ac = {
+    p,
     pos: opts.pos ? { ...opts.pos } : v3(0, 1000, 0),
     vel: opts.vel ? { ...opts.vel } : v3(55, 0, 0),
     q: opts.q ? { ...opts.q } : qIdent(),      // body -> world
@@ -61,7 +62,36 @@ export function createAircraft(opts = {}) {
     touchdown: null,        // {fpm, speedKt, onRunway} set on gear first contact
     crashed: false, crashReason: '',
     thrust: 0, rpmNorm: 0, spool: 0, abOn: false,
+    // v4: fuel state (mass kept constant this phase — see step()), indicated
+    // airspeed (freezes on pitot failure), and the systems/failure framework.
+    fuelKg: p.fuel ? p.fuel.capacityKg : Infinity,
+    fuelFrac: 1,
+    iasIndicated: 0,
+    systems: { engine: true, electrical: true, hydraulics: true, gear: true, pitot: true },
   };
+  // `ac.engineFailed` is a bidirectional alias of `systems.engine === false` so
+  // existing callers (training.js lessons 8-9, wind.js, the reset path, the fuel
+  // flameout below) keep reading and writing it unchanged.
+  Object.defineProperty(ac, 'engineFailed', {
+    get() { return ac.systems.engine === false; },
+    set(v) { ac.systems.engine = !v; },
+    enumerable: true, configurable: true,
+  });
+  return ac;
+}
+
+// Systems/failure framework. true = healthy. Engine + pitot have live
+// consequences (see step); electrical/hydraulics/gear are wired as no-ops here
+// and land their consequences in a later phase.
+export function failSystem(ac, name) {
+  if (ac.systems && name in ac.systems) ac.systems[name] = false;
+}
+export function resetSystems(ac) {
+  ac.systems.engine = true;
+  ac.systems.electrical = true;  // no-op consequence until a later phase
+  ac.systems.hydraulics = true;  // no-op consequence until a later phase
+  ac.systems.gear = true;        // no-op consequence until a later phase
+  ac.systems.pitot = true;
 }
 
 // controls: { elevator -1..1 (+=nose up), aileron -1..1 (+=roll right),
@@ -87,6 +117,9 @@ export function step(ac, controls, env, dt) {
   const agl = ac.pos.y - groundY;
   const hb = clamp(agl / p.span, 0.03, 2);
   const geFactor = hb < 1 ? (16 * hb) ** 2 / (1 + (16 * hb) ** 2) : 1;
+  // Small lift bump in ground effect: up to +5% at the surface, fading linearly
+  // to identity (1.0) by agl = span, so it never adds energy above one span.
+  const geLift = 1 + 0.05 * clamp(1 - hb, 0, 1);
 
   // --- Aerodynamic forces (computed in body frame) ---
   const CL = liftCoeff(alpha, controls.flaps, p);
@@ -97,7 +130,7 @@ export function step(ac, controls, env, dt) {
   side = vLen(side) > 1e-4 ? vNorm(side) : v3(0, 0, 1);
   const liftDir = vNorm(vCross(side, wHat));           // perp to wind, in symmetry plane
 
-  let F = vScale(liftDir, CL * qS);
+  let F = vScale(liftDir, CL * qS * geLift);
   F = vAdd(F, vScale(wHat, -CD * qS));
   F = vAdd(F, vScale(v3(0, 0, 1), p.CYbeta * beta * qS));
 
@@ -120,6 +153,15 @@ export function step(ac, controls, env, dt) {
   }
   F = vAdd(F, v3(thrust, 0, 0));
   ac.thrust = thrust;
+
+  // --- Fuel burn: thrust-specific consumption; empty tank flames the engine out.
+  // Mass is kept CONSTANT this phase (burned fuel is tracked, not subtracted from
+  // p.mass) so the c172 cruise state-hash guard stays byte-identical.
+  if (p.fuel) {
+    ac.fuelKg = Math.max(0, ac.fuelKg - thrust * p.fuel.tsfc * dt);
+    ac.fuelFrac = ac.fuelKg / p.fuel.capacityKg;
+    if (ac.fuelKg <= 0) ac.engineFailed = true; // flameout -> cmdThrottle 0 next step
+  }
 
   // --- Moments (body frame) ---
   const b = p.span, c = p.chord;
@@ -202,6 +244,9 @@ export function step(ac, controls, env, dt) {
 
   // --- Telemetry ---
   ac.alpha = alpha; ac.beta = beta; ac.airspeed = V;
+  // Indicated airspeed (EAS ~ TAS * sqrt(rho/rho0)). A failed pitot freezes the
+  // gauge at its last value while true airspeed keeps updating.
+  if (ac.systems.pitot !== false) ac.iasIndicated = V * Math.sqrt(densityRatio);
   ac.agl = agl;
   ac.groundSpeed = Math.hypot(ac.vel.x, ac.vel.z);
   ac.stalled = V > 15 && alpha > (p.alphaStall + p.flapStallShift * controls.flaps) && !ac.onGround;
@@ -243,6 +288,9 @@ export function resetOnRunway(ac, runway) {
   ac.omega = v3();
   ac.crashed = false; ac.crashReason = '';
   ac.touchdown = null; ac.stalled = false;
-  ac.spool = 0; ac.abOn = false; ac.engineFailed = false;
+  ac.spool = 0; ac.abOn = false;
+  resetSystems(ac);           // clears engineFailed (alias) + all system failures
+  if (ac.p.fuel) { ac.fuelKg = ac.p.fuel.capacityKg; ac.fuelFrac = 1; }
+  ac.iasIndicated = 0;
   ac._airTime = 0; // spawning on the gear is not a landing
 }

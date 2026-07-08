@@ -1,5 +1,6 @@
 // Headless sanity checks for the flight model. Run: node test/physics.test.js
-import { createAircraft, step, PARAMS, attitude, KT, RHO0, G } from '../src/physics/flightModel.js';
+import { createAircraft, step, PARAMS, attitude, KT, RHO0, G,
+         airDensity, failSystem, resetSystems } from '../src/physics/flightModel.js';
 import { v3, qAxisAngle } from '../src/physics/vecmath.js';
 
 const DT = 1 / 120;
@@ -322,6 +323,72 @@ import { createWind, WEATHER } from '../src/physics/wind.js';
   ].map(v => v.toFixed(6)).join('|');
   const EXPECTED = '882.940147|2039.258833|-1.113957|48.143129|-7.669935|-0.202756|0.998710|-0.001058|0.002202|-0.050718|-0.000069|0.000381|0.020425';
   check('c172 trimmed-cruise state hash unchanged', hash === EXPECTED, hash);
+}
+
+// ================= v4-F: fuel, ground effect, systems/failures =================
+
+// ---- 20. Fuel burns monotonically in cruise; an empty tank flames out ----
+{
+  const ac = createAircraft({ pos: v3(0, 1500, 0), vel: v3(55, 0, 0) });
+  const f0 = ac.fuelKg;
+  let mono = true, prev = f0;
+  fly(ac, ctl({ throttle: 0.6 }), 20, flat, a => { if (a.fuelKg > prev + 1e-9) mono = false; prev = a.fuelKg; });
+  check('cruise burns fuel monotonically', f0 > 0 && ac.fuelKg < f0 && mono && ac.fuelFrac < 1,
+    `${f0.toFixed(0)} -> ${ac.fuelKg.toFixed(2)} kg (frac ${ac.fuelFrac.toFixed(3)})`);
+
+  const g = createAircraft({ pos: v3(0, 1500, 0), vel: v3(55, 0, 0) });
+  g.fuelKg = 0.0001;                 // a whiff of fuel: burns out on the first step
+  const alt0 = g.pos.y;
+  fly(g, ctl({ throttle: 1 }), 15, flat);
+  check('empty tank flames the engine out', g.engineFailed === true && g.systems.engine === false,
+    `fuel ${g.fuelKg.toFixed(4)} kg`);
+  check('flamed-out aircraft loses thrust and descends', !g.crashed && g.pos.y < alt0 && g.thrust < 1,
+    `alt ${alt0} -> ${g.pos.y.toFixed(0)} m, thrust ${g.thrust.toFixed(1)} N`);
+}
+
+// ---- 21. Ground effect: near the surface the c172 sinks less (floats) ----
+// Identical state + identical controls; the ONLY difference is terrain height,
+// so any altitude gap is purely the ground-effect lift bump + induced-drag drop.
+{
+  const controls = ctl({ throttle: 0.55, elevator: 0.06 });
+  const run = (groundY) => {
+    const a = createAircraft({ pos: v3(0, 6, 0), vel: v3(40, 0, 0) });
+    return fly(a, controls, 5, { groundHeight: () => groundY, isRunway: () => true });
+  };
+  const inGE = run(3);        // agl ~3 m (< span 11) -> ground effect active
+  const baseline = run(-200); // agl huge -> ground effect is identity
+  check('ground effect makes the c172 float (higher than no-GE baseline)',
+    !inGE.crashed && !baseline.crashed && inGE.pos.y > baseline.pos.y,
+    `GE y=${inGE.pos.y.toFixed(3)} vs base y=${baseline.pos.y.toFixed(3)} (agl ${inGE.agl.toFixed(1)} m)`);
+  check('ground-effect lift bump is bounded (floats level, does not balloon up)',
+    inGE.pos.y < 6 + 1, `GE climbed to ${inGE.pos.y.toFixed(3)} m from 6.0 m start`);
+}
+
+// ---- 22. Systems framework: pitot freeze + engineFailed alias ----
+{
+  const ac = createAircraft({ pos: v3(0, 1500, 0), vel: v3(55, 0, 0) });
+  fly(ac, ctl({ throttle: 0.6 }), 3, flat);
+  const expectIas = ac.airspeed * Math.sqrt(airDensity(ac.pos.y) / RHO0);
+  check('IAS tracks true airspeed while pitot healthy', Math.abs(ac.iasIndicated - expectIas) < 0.5,
+    `IAS ${ac.iasIndicated.toFixed(2)} vs EAS ${expectIas.toFixed(2)}`);
+
+  failSystem(ac, 'pitot');
+  const iasAtFail = ac.iasIndicated;
+  const trueAtFail = ac.airspeed;
+  fly(ac, ctl({ throttle: 1, elevator: -0.15 }), 8, flat);   // accelerate hard
+  check('pitot failure freezes indicated airspeed', ac.iasIndicated === iasAtFail,
+    `IAS frozen ${ac.iasIndicated.toFixed(3)}`);
+  check('true airspeed keeps updating after pitot fail', Math.abs(ac.airspeed - trueAtFail) > 2,
+    `true ${trueAtFail.toFixed(1)} -> ${ac.airspeed.toFixed(1)} m/s`);
+
+  const b = createAircraft();
+  failSystem(b, 'engine');
+  const aliasFwd = b.engineFailed === true && b.systems.engine === false;
+  b.engineFailed = false;               // writing the alias heals systems.engine
+  const aliasBack = b.systems.engine === true;
+  resetSystems(b);
+  check('engineFailed <-> systems.engine alias works both ways and resets',
+    aliasFwd && aliasBack && b.engineFailed === false && b.systems.engine === true);
 }
 
 console.log(failures === 0 ? '\nAll physics checks passed.' : `\n${failures} check(s) FAILED.`);

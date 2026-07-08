@@ -18,6 +18,7 @@ export const AIRCRAFT = {
     Clp: -0.48, Clda: 0.115, Clbeta: -0.09, Clr: 0.10,
     Cnbeta: 0.11, Cnr: -0.14, Cndr: 0.075, CnAdverse: 0.012,
     engine: { type: 'prop', tau: 0.15, powerW: 134000, propEff: 0.75, staticThrust: 2250 },
+    fuel: { capacityKg: 180, tsfc: 1.0e-5 },   // ~56 US gal usable; piston, low burn
     sas: null,
     maxSpeed: 88, gearHeight: 1.25,
     crashSink: 3.6, maxSteer: 0.38,
@@ -48,6 +49,7 @@ export const AIRCRAFT = {
     Clp: -0.45, Clda: 0.35, Clbeta: -0.04, Clr: 0.08,
     Cnbeta: 0.10, Cnr: -0.13, Cndr: 0.10, CnAdverse: 0.015,
     engine: { type: 'prop', tau: 0.12, powerW: 164000, propEff: 0.8, staticThrust: 3400 },
+    fuel: { capacityKg: 120, tsfc: 1.1e-5 },   // aerobatic piston; small tank, thirsty
     sas: null,
     maxSpeed: 113, gearHeight: 1.05,
     crashSink: 3.2, maxSteer: 0.45,
@@ -78,6 +80,7 @@ export const AIRCRAFT = {
     Clp: -0.40, Clda: 0.28, Clbeta: -0.05, Clr: 0.05,
     Cnbeta: 0.15, Cnr: -0.20, Cndr: 0.12, CnAdverse: 0.005,
     engine: { type: 'jet', tau: 0.8, maxThrust: 128000, afterburner: { mult: 1.5 } },
+    fuel: { capacityKg: 5000, tsfc: 2.5e-5 },  // ~internal fuel; military low-bypass, high TSFC
     sas: null,
     // Fly-by-wire q-scheduling: full deflection at 250 kt (qbar ~10,100 Pa) and
     // it softens further with speed, so 500-kt full aft stick stays sub-9 g.
@@ -110,6 +113,7 @@ export const AIRCRAFT = {
     Clp: -0.45, Clda: 0.05, Clbeta: -0.10, Clr: 0.10,
     Cnbeta: 0.12, Cnr: -0.25, Cndr: 0.06, CnAdverse: 0.008,
     engine: { type: 'jet', tau: 4.0, maxThrust: 748000, afterburner: null },
+    fuel: { capacityKg: 80000, tsfc: 1.7e-5 },  // widebody; efficient high-bypass turbofan
     sas: null,
     // Lower qRef (~180 kt) so the heavy keeps flare/approach authority at its
     // low approach speeds while still softening at cruise.
@@ -144,6 +148,7 @@ export const AIRCRAFT = {
     // no damping — this is why it cannot fly without the SAS below.
     Cnbeta: -0.03, Cnr: -0.02, Cndr: 0.04, CnAdverse: 0.02,
     engine: { type: 'jet', tau: 1.5, maxThrust: 308000, afterburner: null },
+    fuel: { capacityKg: 60000, tsfc: 1.9e-5 },  // flying-wing bomber; long-range turbofans
     // Fly-by-wire keeps it pointed; without this it departs (see physics test).
     // Softening composes with the SAS; qRef ~250 kt keeps low-speed authority.
     controlSoften: { qRef: 10100 }, inputRate: 5.5,
