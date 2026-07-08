@@ -30,6 +30,7 @@ export function createControls() {
     }
     if (k === 'c') emit('camera');
     if (k === 'm') emit('minimap');
+    if (k === 'i') emit('panel');
     if (k === 'r') emit('reset');
     if (k === 'Escape') emit('pause');
     if (k === '?' || k === '/') emit('help');

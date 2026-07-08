@@ -148,6 +148,28 @@ const mmOff = await sim('document.querySelector("#minimap").classList.contains("
 check('minimap toggles with M', mmExists && !mmBefore && mmOn && !mmOff,
   `exists=${mmExists} before=${mmBefore} on=${mmOn} off=${mmOff}`);
 
+// --- G1: instrument six-pack toggles with I (assert via DOM class, not pixels) ---
+const panelExists = await sim('!!document.querySelector("#ap-sixpack")');
+const panelBefore = await sim('document.querySelector("#ap-sixpack").classList.contains("ap-visible")');
+await press('i');
+await settle(400);
+const panelOn = await sim('document.querySelector("#ap-sixpack").classList.contains("ap-visible")');
+await press('i');
+await settle(400);
+const panelOff = await sim('document.querySelector("#ap-sixpack").classList.contains("ap-visible")');
+check('instruments toggle with I', panelExists && !panelBefore && panelOn && !panelOff,
+  `exists=${panelExists} before=${panelBefore} on=${panelOn} off=${panelOff}`);
+
+// --- G2: attitude-indicator gyro transform CHANGES between two flight states ---
+const attSel = '#ap-sixpack g[clip-path]'; // the attitude roll-gyro group (rotate = bank)
+await page.evaluate(() => { const ac = window.__sim.ac; ac.q = { x: 0, y: 0, z: 0, w: 1 }; ac.omega = { x: 0, y: 0, z: 0 }; });
+await settle(300);
+const att1 = await sim(`document.querySelector(${JSON.stringify(attSel)}).getAttribute("transform")`);
+await page.evaluate(() => { const s = Math.sin(0.25), c = Math.cos(0.25); const ac = window.__sim.ac; ac.q = { x: s, y: 0, z: 0, w: c }; ac.omega = { x: 0, y: 0, z: 0 }; });
+await settle(300);
+const att2 = await sim(`document.querySelector(${JSON.stringify(attSel)}).getAttribute("transform")`);
+check('attitude indicator transform changes with attitude', !!att1 && !!att2 && att1 !== att2, `${att1} -> ${att2}`);
+
 await press('c');
 await settle(400);
 await shot('4-cockpit');

@@ -17,6 +17,7 @@ import { createTrainingSystem } from './training.js';
 import { createEffects } from './effects.js';
 import { createWind, WEATHER } from './physics/wind.js';
 import { createMinimap } from './minimap.js';
+import { createPanel } from './panel.js';
 
 const PHYS_DT = 1 / 120;
 const MAPS = [archipelagoMap, singaporeMap];
@@ -115,7 +116,10 @@ const hud = createHUD();
 const camRig = createCameraRig(camera);
 const audio = createAudio();
 const minimap = createMinimap();
+const panel = createPanel();
+panel.mount(document.body);
 controls.on('minimap', () => minimap.toggle());
+controls.on('panel', () => panel.toggle());
 
 // Amber training gates — a second rings instance the trainer drives.
 let trainGates = null;
@@ -192,6 +196,7 @@ document.addEventListener('visibilitychange', () => {
 // --- main loop ---
 let last = performance.now();
 let acc = 0, elapsed = 0;
+let lastCamMode = camRig.modeName;
 
 function frame(now) {
   schedule(); // bumps gen: invalidates this generation's sibling callback
@@ -214,6 +219,13 @@ function frame(now) {
   plane.group.quaternion.set(ac.q.x, ac.q.y, ac.q.z, ac.q.w);
   plane.animate(c, ac.rpmNorm, dt);
   plane.group.visible = camRig.modeName !== 'COCKPIT';
+  // Six-pack auto-shows in the cockpit, auto-hides otherwise — but only on a
+  // camera-mode transition, so it never flickers per frame and the manual `i`
+  // toggle stays honoured within the current view until the next mode change.
+  if (camRig.modeName !== lastCamMode) {
+    lastCamMode = camRig.modeName;
+    panel.setVisible(camRig.modeName === 'COCKPIT');
+  }
 
   const ringBearing = game.tick(dt);
   if (trainGates) trainGates.update(dt);
@@ -221,6 +233,7 @@ function frame(now) {
     flying, map: currentMap, ac, rings,
     trainGates, raceMode: flying && game.mode === 'race',
   });
+  panel.update(ac);
   fx.update(dt);
   windField.setTime(elapsed);
   const sock = scenery.userData?.windsock;
