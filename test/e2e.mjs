@@ -366,6 +366,63 @@ const gsCards = await page.evaluate(() => document.querySelectorAll('#groundscho
 check('ground school screen opens from the menu', gsShown);
 check('glossary lists >= 10 cards', gsCards >= 10, `${gsCards} cards`);
 
+// --- Phase H: autopilot ALT/IAS-hold band + NAV waypoint sequencing ---
+console.log('autopilot…');
+await page.evaluate(() => { window.__sim.game.toMenu?.(); });
+await page.evaluate(() => window.__sim.game.select({ mode: 'free', aircraft: 'c172', map: 'archipelago' }));
+await click('#btn-start');
+await settle(1000);
+// establish stable, level cruise then engage ALT-hold (g) + IAS-hold (j)
+await page.evaluate(() => {
+  const ac = window.__sim.ac;
+  ac.pos = { x: 0, y: 500, z: 0 };
+  ac.vel = { x: 55, y: 0, z: 0 };
+  ac.q = { x: 0, y: 0, z: 0, w: 1 };
+  ac.omega = { x: 0, y: 0, z: 0 };
+  window.__sim.controls.state.throttle = 0.6;
+});
+await settle(400);
+const apY0 = await sim('__sim.ac.pos.y');
+await press('g'); await settle(120); await press('j');
+await settle(200);
+const apEng = await sim('({alt: __sim.autopilot.modes.alt, ias: __sim.autopilot.modes.ias})');
+check('AP ALT+IAS engage via keys (g/j)', apEng.alt && apEng.ias, JSON.stringify(apEng));
+let apMin = 1e9, apMax = -1e9;
+for (let i = 0; i < 14; i++) {
+  await settle(1000);
+  const y = await sim('__sim.ac.pos.y');
+  apMin = Math.min(apMin, y); apMax = Math.max(apMax, y);
+}
+check('AP ALT-hold keeps altitude within ±75 m over ~14 s',
+  (apMax - apY0) < 75 && (apY0 - apMin) < 75,
+  `set=${apY0.toFixed(0)} min=${apMin.toFixed(0)} max=${apMax.toFixed(0)}`);
+
+// NAV: 2-waypoint plan, engage, heading target turns toward wp1, sequences to wp2
+await page.evaluate(() => {
+  const ac = window.__sim.ac;
+  ac.pos = { x: 0, y: 500, z: 0 };
+  ac.vel = { x: 55, y: 0, z: 0 };            // tracking 090
+  ac.q = { x: 0, y: 0, z: 0, w: 1 };
+  ac.omega = { x: 0, y: 0, z: 0 };
+  window.__sim.autopilot.setPlan([[1500, -1500, 500], [3000, -3000, 500]], [0, 0]);
+});
+await press('h'); await press('g'); await press('n'); // HDG+ALT for stability, then NAV
+await settle(400);
+const nav0 = await sim('({idx: __sim.autopilot.status(__sim.ac).navData.idx, sel: __sim.autopilot.sel.hdg})');
+check('NAV engages, targets wp1 (bearing ~045)', nav0.idx === 1 && nav0.sel > 25 && nav0.sel < 65, JSON.stringify(nav0));
+// fly to within the 300 m capture radius of wp1 → should sequence to wp2
+await page.evaluate(() => {
+  const ac = window.__sim.ac;
+  ac.pos = { x: 1400, y: 500, z: -1450 };    // ~112 m from wp1
+  ac.vel = { x: 40, y: 0, z: -40 };
+  ac.omega = { x: 0, y: 0, z: 0 };
+});
+await settle(600);
+const navSeq = await sim('__sim.autopilot.status(__sim.ac).navData.idx');
+check('NAV sequences to wp2 on capture radius', navSeq === 2, `idx=${navSeq}`);
+await press('p'); // master off — leave AP disengaged
+await settle(150);
+
 check('no console errors', errors.length === 0, errors.slice(0, 4).join(' | '));
 
 await browser.close();

@@ -34,6 +34,14 @@ export function createControls() {
     if (k === 'r') emit('reset');
     if (k === 'Escape') emit('pause');
     if (k === '?' || k === '/') emit('help');
+    // Autopilot toggles (see autopilot.js). Free keys — none clash with the
+    // flight/camera/panel bindings above.
+    if (k === 'p') emit('ap');          // master on/off (HDG+ALT)
+    if (k === 'h') emit('ap-hdg');      // heading hold
+    if (k === 'g') emit('ap-alt');      // altitude hold
+    if (k === 'j') emit('ap-ias');      // airspeed hold (throttle)
+    if (k === 'n') emit('ap-nav');      // NAV / waypoint steering
+    if (k === 'l') emit('ap-wing');     // wing leveler
   });
   window.addEventListener('keyup', (e) => {
     keys.delete(e.key.length === 1 ? e.key.toLowerCase() : e.key);
@@ -54,6 +62,15 @@ export function createControls() {
       rudderRate = pitchRollRate * (4.5 / 5.5);
     },
     resetFlaps() { flapIdx = 0; state.flaps = 0; state.throttle = 0; state.trim = 0; },
+    // True when the human is holding a key that drives this axis — the autopilot
+    // reads this to yield that axis to live keyboard input.
+    axisActive(name) {
+      if (name === 'elevator') return keys.has('ArrowUp') || keys.has('ArrowDown');
+      if (name === 'aileron') return keys.has('ArrowLeft') || keys.has('ArrowRight');
+      if (name === 'rudder') return keys.has('a') || keys.has('d');
+      if (name === 'throttle') return keys.has('w') || keys.has('s');
+      return false;
+    },
     poll(dt) {
       const s = state;
       s.elevator = axis(s.elevator, (keys.has('ArrowUp') ? 1 : 0) + (keys.has('ArrowDown') ? -1 : 0), dt, pitchRollRate);

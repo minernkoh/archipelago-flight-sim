@@ -147,6 +147,31 @@
   #split.ahead { color: var(--good); }
   #split.behind { color: var(--amber); }
 
+  /* autopilot annunciator + CDI (Phase H) */
+  #ap-status { position: absolute; left: max(2vw, 1rem); top: max(1.5vh, .6rem);
+          display: flex; align-items: center; gap: .4rem; font-family: "B612 Mono", monospace;
+          font-size: .72rem; letter-spacing: .12em; background: var(--panel);
+          border: 1px solid var(--panel-line); padding: .35rem .6rem; opacity: .55; }
+  #ap-status.on { opacity: 1; border-color: var(--mag); }
+  #ap-status .ap-hdr { color: var(--ink-dim); font-weight: 700; letter-spacing: .24em; margin-right: .2rem; }
+  #ap-status .ap-mode { color: var(--ink-dim); border: 1px solid transparent; padding: 0 .25rem; }
+  #ap-status .ap-mode.active { color: var(--mag); border-color: var(--mag); font-weight: 700; }
+  #ap-status .ap-vals { color: var(--ink); margin-left: .3rem; font-weight: 700; }
+  #ap-status .ap-warn { display: none; color: var(--warn); border: 1px solid var(--warn);
+          padding: 0 .3rem; margin-left: .3rem; font-weight: 700; animation: blink .5s steps(1) infinite; }
+  #ap-status .ap-warn.show { display: inline; }
+  #ap-cdi { position: absolute; left: max(2vw, 1rem); top: calc(max(1.5vh, .6rem) + 2.5rem);
+          width: 12rem; display: none; }
+  #ap-cdi.show { display: block; }
+  #ap-cdi .scale { position: relative; height: .8rem; border-bottom: 1px solid var(--panel-line); }
+  #ap-cdi .scale i { position: absolute; left: 50%; top: 0; width: 1px; height: .8rem;
+          background: var(--ink-dim); transform: translateX(-50%); }
+  #ap-cdi .needle { position: absolute; left: 50%; top: 0; width: 2px; height: 1rem;
+          background: var(--mag); transform: translateX(0); transition: transform .15s; }
+  #ap-cdi .info { font-family: "B612 Mono", monospace; font-size: .62rem; letter-spacing: .1em;
+          color: var(--mag); margin-top: .3rem; }
+  @media (prefers-reduced-motion: reduce) { #ap-status .ap-warn { animation: none; } }
+
   /* minimap (U7) */
   #minimap { position: fixed; right: max(2vw, 1rem); bottom: max(2.5vh, 1rem);
           width: 180px; height: 180px; background: var(--panel); border: 1px solid var(--panel-line);
@@ -286,6 +311,17 @@
       </div>
     </div>
   </div>
+  <div id="ap-status">
+    <span class="ap-hdr">AP</span>
+    <span class="ap-mode" id="apm-hdg">HDG</span>
+    <span class="ap-mode" id="apm-alt">ALT</span>
+    <span class="ap-mode" id="apm-ias">IAS</span>
+    <span class="ap-mode" id="apm-nav">NAV</span>
+    <span class="ap-mode" id="apm-wing">WNG</span>
+    <span class="ap-vals" id="ap-vals"></span>
+    <span class="ap-warn" id="ap-warn">AP DISCONNECT</span>
+  </div>
+  <div id="ap-cdi"><div class="scale"><i></i></div><div class="needle"></div><div class="info"></div></div>
   <div id="msg"></div>
   <div id="debrief"></div>
   <div id="countdown"></div>

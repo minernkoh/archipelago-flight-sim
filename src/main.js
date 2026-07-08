@@ -18,6 +18,7 @@ import { createEffects } from './effects.js';
 import { createWind, WEATHER } from './physics/wind.js';
 import { createMinimap } from './minimap.js';
 import { createPanel } from './panel.js';
+import { createAutopilot } from './autopilot.js';
 
 const PHYS_DT = 1 / 120;
 const MAPS = [archipelagoMap, singaporeMap];
@@ -90,6 +91,7 @@ async function loadMap(map) {
     await new Promise(r => setTimeout(r));
   }
   minimap.bake(map); // coarse height sampling — stays in this pre-gen path, never rAF
+  refreshPlan();     // rebuild the demo flight plan for the new map's fixes/course
   loading.classList.remove('show');
   mapLoading = false;
 }
@@ -118,6 +120,7 @@ const audio = createAudio();
 const minimap = createMinimap();
 const panel = createPanel();
 panel.mount(document.body);
+const autopilot = createAutopilot();
 controls.on('minimap', () => minimap.toggle());
 controls.on('panel', () => panel.toggle());
 
@@ -155,7 +158,31 @@ const game = createGameFlow({ ac, hud, audio, controls, camRig, world, fx });
 setAircraft(byId('c172'));
 hud.setCamera(camRig.modeName);
 
-window.__sim = { ac, controls, game, world, get rings() { return rings; }, get map() { return currentMap; } };
+// Fixed per-map demo flight plan (runway → race gates → runway). An interactive
+// waypoint planner is a follow-up; this ships NAV-hold now with a usable plan.
+function buildDemoPlan(map) {
+  if (map.fixes && map.fixes.length) return map.fixes.map(f => [f.x, f.z, f.y]);
+  const rc = map.raceCourse || [];
+  const pts = [];
+  for (const i of [0, 3, 7]) if (rc[i]) pts.push([rc[i][0], rc[i][1], rc[i][2]]);
+  pts.push([map.runway.x1 - 200, 0, map.runway.y + 120]); // return toward the runway
+  return pts;
+}
+function refreshPlan() {
+  autopilot.setPlan(buildDemoPlan(currentMap), [currentMap.runway.spawn.x, currentMap.runway.spawn.z]);
+}
+refreshPlan();
+
+// Autopilot key toggles — only while flying, so menu/pause keystrokes are inert.
+const flying = () => game.state === 'flying';
+controls.on('ap', () => { if (flying()) autopilot.toggleMaster(ac, controls); });
+controls.on('ap-hdg', () => { if (flying()) autopilot.toggleHdg(ac); });
+controls.on('ap-alt', () => { if (flying()) autopilot.toggleAlt(ac); });
+controls.on('ap-ias', () => { if (flying()) autopilot.toggleIas(ac, controls); });
+controls.on('ap-nav', () => { if (flying()) autopilot.toggleNav(ac); });
+controls.on('ap-wing', () => { if (flying()) autopilot.toggleWing(ac); });
+
+window.__sim = { ac, controls, game, world, autopilot, get rings() { return rings; }, get map() { return currentMap; } };
 
 // --- boot: pre-build terrain around the spawn, then reveal the menu ---
 // (setTimeout, not rAF: headless/hidden pages stop delivering animation frames
@@ -204,10 +231,14 @@ function frame(now) {
   last = now;
   elapsed += dt;
 
-  const flying = game.state === 'flying';
-  const c = controls.poll(flying ? dt : 0);
+  const isFlying = game.state === 'flying';
+  const c = controls.poll(isFlying ? dt : 0);
 
-  if (flying) {
+  if (isFlying) {
+    // Autopilot runs AFTER poll() and only writes axes the human isn't holding,
+    // so keyboard input always wins and poll's keyboard path is untouched when
+    // the AP is off. Once per frame (like the keyboard), before the phys steps.
+    autopilot.update(ac, controls, dt);
     acc += dt;
     while (acc >= PHYS_DT) {
       step(ac, c, physEnv, PHYS_DT);
@@ -230,8 +261,8 @@ function frame(now) {
   const ringBearing = game.tick(dt);
   if (trainGates) trainGates.update(dt);
   minimap.frame({
-    flying, map: currentMap, ac, rings,
-    trainGates, raceMode: flying && game.mode === 'race',
+    flying: isFlying, map: currentMap, ac, rings,
+    trainGates, raceMode: isFlying && game.mode === 'race',
   });
   panel.update(ac);
   fx.update(dt);
@@ -248,8 +279,9 @@ function frame(now) {
   if (!mapLoading) terrain.update(ac.pos.x, ac.pos.z);
   env.update(ac, dt, elapsed);
   camRig.update(ac, dt);
-  if (flying) {
+  if (isFlying) {
     hud.update(ac, c, dt, ringBearing ?? null);
+    hud.setAP(autopilot.status(ac));
     audio.update(ac, c);
   }
 

@@ -101,6 +101,15 @@ export function createHUD() {
   let msgTimer = null;
   let slow = 0;
 
+  // Autopilot annunciator + CDI (Phase H)
+  const apEl = $('#ap-status');
+  const apModes = {
+    hdg: $('#apm-hdg'), alt: $('#apm-alt'), ias: $('#apm-ias'), nav: $('#apm-nav'), wing: $('#apm-wing'),
+  };
+  const apVals = $('#ap-vals'), apWarn = $('#ap-warn');
+  const cdiEl = $('#ap-cdi'), cdiNeedle = $('#ap-cdi .needle'), cdiInfo = $('#ap-cdi .info');
+  const pad3 = (n) => String(Math.round(n) % 360).padStart(3, '0');
+
   const papiEl = $('#papi'), papiLights = papiEl.querySelectorAll('i');
   const slipEl = $('#slip'), slipBall = slipEl.querySelector('.ball');
   const debriefEl = $('#debrief');
@@ -131,6 +140,27 @@ export function createHUD() {
       slipBall.style.transform = `translateX(${px}px)`;
     },
     setCamera(name) { stCam.textContent = name; },
+    // Autopilot mode block + CDI needle. s = createAutopilot().status(ac).
+    setAP(s) {
+      apEl.classList.toggle('on', s.on);
+      apModes.hdg.classList.toggle('active', s.hdg);
+      apModes.alt.classList.toggle('active', s.alt);
+      apModes.ias.classList.toggle('active', s.ias);
+      apModes.nav.classList.toggle('active', s.nav);
+      apModes.wing.classList.toggle('active', s.wing);
+      apVals.textContent = s.on
+        ? `HDG ${pad3(s.selHdg)}  ALT ${Math.round(s.selAlt * FT / 10) * 10}  IAS ${Math.round(s.selIas * KT)}`
+        : '';
+      apWarn.classList.toggle('show', !!s.warn);
+      const cdi = s.navData;
+      cdiEl.classList.toggle('show', !!cdi);
+      if (cdi) {
+        // Deflect the needle toward the course (fly-to): right of course → left needle.
+        const px = Math.max(-46, Math.min(46, -cdi.xtk / 500 * 46));
+        cdiNeedle.style.transform = `translateX(${px}px)`;
+        cdiInfo.textContent = `WPT ${cdi.idx}/${cdi.total}  DME ${(cdi.dme / 1852).toFixed(1)} NM`;
+      }
+    },
     message(text, ms = 3200) {
       msgEl.innerHTML = text;
       msgEl.classList.add('show');
