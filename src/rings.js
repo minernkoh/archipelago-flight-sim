@@ -21,6 +21,12 @@ const THEMES = {
     passed: 0x3f7a4f, passedEmissive: 0x1c3a24,
     dim:    0x5a6470, dimEmissive:    0x222831,
   },
+  // Low-level gauntlet: cyan gates, reads as "hug the deck".
+  gauntlet: {
+    active: 0x35e0d8, activeEmissive: 0x0d5a55,
+    passed: 0x3f7a4f, passedEmissive: 0x1c3a24,
+    dim:    0x4a5a60, dimEmissive:    0x1c2428,
+  },
 };
 
 export function createRings(scene, opts = {}) {
@@ -28,6 +34,7 @@ export function createRings(scene, opts = {}) {
   const RING_R = opts.radius ?? 50;
   const heightFn = opts.heightFn || archipelagoMap.height;
   const pulseAmp = opts.pulseAmp ?? 0.03;
+  const clearance = opts.clearance ?? 55; // min gate-centre height above terrain
 
   const theme = THEMES[opts.theme] || THEMES.race;
   // Per-colour overrides win over the theme; emissives follow the theme.
@@ -43,7 +50,7 @@ export function createRings(scene, opts = {}) {
 
   const rings = course.map(([x, z, y], i) => {
     const gy = heightFn(x, z);
-    const cy = Math.max(y, gy + 55);
+    const cy = Math.max(y, gy + clearance);
     const next = course[i + 1];
     const fd = opts.finalDir || { x: 1, z: 0 };
     const dir = next
@@ -104,6 +111,17 @@ export function createRings(scene, opts = {}) {
       }
       prevSide = side;
       return result;
+    },
+    // A spawn point `dist` metres short of gate `i` (default: the last gate
+    // already passed), on its approach centreline, plus the gate normal — for
+    // restarting a race from the last passed gate rather than the runway.
+    approach(i = active - 1, dist = 140) {
+      if (i < 0 || i >= rings.length) return null;
+      const r = rings[i];
+      return {
+        pos: { x: r.center.x - r.normal.x * dist, y: r.center.y, z: r.center.z - r.normal.z * dist },
+        dir: { x: r.normal.x, y: 0, z: r.normal.z },
+      };
     },
     // bearing (compass deg) and distance from aircraft to the active ring, for HUD
     guidance(ac) {

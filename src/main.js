@@ -20,6 +20,7 @@ import { createWind, WEATHER } from './physics/wind.js';
 import { createMinimap } from './minimap.js';
 import { createPanel } from './panel.js';
 import { createAutopilot } from './autopilot.js';
+import { buildGauntletCourse, GAUNTLET } from './activities.js';
 
 const PHYS_DT = 1 / 120;
 const MAPS = [archipelagoMap, singaporeMap, alpineMap];
@@ -80,6 +81,7 @@ async function loadMap(map) {
   terrain.disposeAll();
   scene.remove(scenery); disposeGroup(scenery);
   rings.dispose();
+  gauntletRings?.dispose(); gauntletRings = null;
   gatesAdapter.clear();
   currentMap = map;
   terrain = createTerrain(scene, map);
@@ -127,6 +129,9 @@ const autopilot = createAutopilot();
 controls.on('minimap', () => minimap.toggle());
 controls.on('panel', () => panel.toggle());
 
+// Low-level gauntlet gates — a low course built on demand for the gauntlet
+// activity (returned by world.apply so modes.js drives it like the race rings).
+let gauntletRings = null;
 // Amber training gates — a second rings instance the trainer drives.
 let trainGates = null;
 const gatesAdapter = {
@@ -149,6 +154,17 @@ const world = {
     setAircraft(byId(sel.aircraft));
     // fresh wind each flight: preset strength, semi-random direction
     windField.set({ ...(WEATHER[sel.weather] || WEATHER.calm), dirDeg: Math.round(Math.random() * 360) });
+    if (sel.mode === 'gauntlet') {
+      gauntletRings?.dispose();
+      gauntletRings = createRings(scene, {
+        course: buildGauntletCourse(currentMap.runway),
+        radius: GAUNTLET.radius, clearance: GAUNTLET.clearance,
+        theme: 'gauntlet', heightFn: currentMap.height,
+      });
+      gauntletRings.show(true);
+      return { map: currentMap, rings: gauntletRings };
+    }
+    gauntletRings?.dispose(); gauntletRings = null;
     return { map: currentMap, rings };
   },
   // Fresh trainer per lesson start so it binds the active map's runway.
@@ -158,7 +174,7 @@ const world = {
 };
 
 const fx = createEffects(scene);
-const game = createGameFlow({ ac, hud, audio, controls, camRig, world, fx });
+const game = createGameFlow({ ac, hud, audio, controls, camRig, world, fx, autopilot });
 setAircraft(byId('c172'));
 hud.setCamera(camRig.modeName);
 
@@ -186,7 +202,8 @@ controls.on('ap-ias', () => { if (flying()) autopilot.toggleIas(ac, controls); }
 controls.on('ap-nav', () => { if (flying()) autopilot.toggleNav(ac); });
 controls.on('ap-wing', () => { if (flying()) autopilot.toggleWing(ac); });
 
-window.__sim = { ac, controls, game, world, autopilot, env, get rings() { return rings; }, get map() { return currentMap; } };
+window.__sim = { ac, controls, game, world, autopilot, env,
+  get rings() { return gauntletRings || rings; }, get map() { return currentMap; } };
 
 // --- boot: pre-build terrain around the spawn, then reveal the menu ---
 // (setTimeout, not rAF: headless/hidden pages stop delivering animation frames

@@ -5,6 +5,8 @@ import { resetOnRunway, KT, FT } from './physics/flightModel.js';
 import { createTour } from './tour.js';
 import { renderGlossary } from './groundschool.js';
 import { runwayFrame } from './runwayUtil.js';
+import { createComfortMeter, createManeuverDetector, GAUNTLET } from './activities.js';
+import { loadLogbook, saveLogbook, accumulate, renderLogbook } from './logbook.js';
 
 const $ = (s) => document.querySelector(s);
 const SEL_KEY = 'archipelago.sel';
@@ -36,7 +38,16 @@ const MODES = [
   { id: 'free', label: 'FREE FLIGHT', hint: 'explore, land anywhere' },
   { id: 'race', label: 'RING RACE', hint: '12 gates against the clock' },
   { id: 'training', label: 'FLIGHT SCHOOL', hint: 'learn to fly' },
+  { id: 'gauntlet', label: 'LOW GAUNTLET', hint: 'hornet — thread low gates, stay under the ceiling' },
+  { id: 'airline', label: 'AIRLINE LEG', hint: 'heavy — a smooth cruise, scored on comfort' },
+  { id: 'freestyle', label: 'AEROBATICS', hint: 'extra 300 — 90 s freestyle, we name your moves' },
 ];
+
+// Activities that fly a fixed aircraft (like the school always flies the c172).
+const FORCED_AIRCRAFT = { gauntlet: 'hornet', airline: 'heavy', freestyle: 'extra300' };
+const AIRLINE_SECONDS = 75;
+const FREESTYLE_SECONDS = 90;
+const gauntletBestKey = (map) => `archipelago.gauntlet.${map}`;
 
 const WEATHERS = [
   { id: 'calm', label: 'CALM', hint: 'still air' },
@@ -86,7 +97,7 @@ function crashWhy(snap, reason) {
   }
 }
 
-export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) {
+export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, autopilot }) {
   let crashT = null; // delay before the crash screen so the debris burst reads
   let state = 'menu';           // menu | flying | paused | crash | results
   let sel = { mode: 'free', map: 'archipelago', aircraft: 'c172', weather: 'calm', time: 'day' };
@@ -98,7 +109,14 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
   let trainer = null, lessonId = null;
   const instrEl = $('#instructor');
 
-  const screens = { menu: $('#menu'), pause: $('#pause'), crash: $('#crash'), results: $('#results'), lessons: $('#lessons'), groundschool: $('#groundschool') };
+  // Phase C activity state.
+  const comfort = createComfortMeter();   // airline-leg ride score
+  let maneuver = null;                     // freestyle detector (per flight)
+  let activityT = 0;                       // airline/freestyle timer (s)
+  let flightAircraft = sel.aircraft;       // effective aircraft this flight
+  let flightAcc = null;                    // this flight's logbook accumulator
+
+  const screens = { menu: $('#menu'), pause: $('#pause'), crash: $('#crash'), results: $('#results'), lessons: $('#lessons'), groundschool: $('#groundschool'), logbook: $('#logbook') };
   const showScreen = (name) => {
     for (const [k, el] of Object.entries(screens)) el.classList.toggle('show', k === name);
     hud.show(name === null);
@@ -113,6 +131,34 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
   // Populate the ground-school glossary screen once at boot (BACK -> menu via
   // the global [data-act] wiring below).
   renderGlossary($('#groundschool'), { backAct: 'menu' });
+
+  // Logbook screen is re-rendered each time it opens so stats/badges are fresh.
+  function refreshLogbook() {
+    renderLogbook($('#logbook'), {
+      backAct: 'menu',
+      craftName: (id) => (world.aircraft.find(a => a.id === id)?.params.name || id),
+    });
+  }
+
+  const getGauntletBest = () => {
+    const v = parseFloat(localStorage.getItem(gauntletBestKey(sel.map)));
+    return Number.isFinite(v) ? v : null;
+  };
+  const setGauntletBest = (t) => { try { localStorage.setItem(gauntletBestKey(sel.map), String(t)); } catch { /* off */ } };
+
+  // Fold the just-finished flight into the persistent logbook (once).
+  function commitFlight() {
+    const f = flightAcc;
+    flightAcc = null;
+    if (!f) return;
+    if (!f.seconds && !f.landing && !f.gauntletDone && f.comfort == null) return;
+    const lb = loadLogbook();
+    accumulate(lb, {
+      aircraft: f.aircraft, seconds: f.seconds, landing: f.landing,
+      apUsed: f.apUsed, gauntletDone: f.gauntletDone, comfort: f.comfort,
+    });
+    saveLogbook(lb);
+  }
 
   // Fire a warm one-line instructor hint at most once EVER per key.
   function hint(key, html) {
@@ -202,24 +248,38 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
     runSplits = [];
     crashSnap = null;
     crashT = null;
+    activityT = 0;
+    comfort.reset();
+    flightAcc = { aircraft: flightAircraft, seconds: 0, landing: null,
+      apUsed: false, gauntletDone: false, comfort: null, night: sel.time === 'night' };
     hud.clearMessage();
     hud.clearDebrief?.();
   }
 
   async function begin() {
     if (sel.mode === 'training') { openLessons(); return; }
+    commitFlight(); // log any prior flight before starting a new one
     lessonId = null;
-    ({ map, rings } = await world.apply(sel));
+    // Activities fly a fixed aircraft; free/race honour the menu selection.
+    flightAircraft = FORCED_AIRCRAFT[sel.mode] || sel.aircraft;
+    ({ map, rings } = await world.apply({ ...sel, aircraft: flightAircraft }));
     resetFlight();
-    rings.show(sel.mode === 'race');
-    hud.race(sel.mode === 'race');
+    const gated = sel.mode === 'race' || sel.mode === 'gauntlet';
+    const scored = sel.mode === 'airline' || sel.mode === 'freestyle';
+    rings.show(gated);
+    hud.race(gated || scored);
+    maneuver = sel.mode === 'freestyle' ? createManeuverDetector() : null;
     state = 'flying';
     showScreen(null);
     audio.resume();
     const rwy = map.runway.name;
-    hud.message(sel.mode === 'race'
-      ? `Clock starts when you roll. ${rings.total} gates, then land back on runway ${rwy}.`
-      : `Runway ${rwy} — full throttle <b>W</b>, rotate with <b>&uarr;</b>.`, 5200);
+    const msg = {
+      race: `Clock starts when you roll. ${rings.total} gates, then land back on runway ${rwy}.`,
+      gauntlet: `Thread the low gates and stay UNDER ${GAUNTLET.ceilingAgl} m above ground — climb through it and you bust.`,
+      airline: `Ease it into a smooth cruise. You have ${AIRLINE_SECONDS}s aloft and you're scored on the ride.`,
+      freestyle: `${FREESTYLE_SECONDS}s of open sky — loops, rolls, barrel rolls. We'll name what we see.`,
+    }[sel.mode] || `Runway ${rwy} — full throttle <b>W</b>, rotate with <b>&uarr;</b>.`;
+    hud.message(msg, 5200);
     if (sel.mode === 'race') hud.countdown(); // visual 3-2-1-GO; clock still arms on roll
     tour.offerOnce(); // first flight ever: auto-open the guided HUD tour
   }
@@ -260,9 +320,12 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
     lessonId = id;
     // The night circuit is flown after dark regardless of the menu time setting.
     const time = id === 'night-circuit' ? 'night' : sel.time;
+    commitFlight();
+    flightAircraft = 'c172';
     ({ map, rings } = await world.apply({ ...sel, aircraft: 'c172', time })); // school flies the trainer
     trainer = world.createTrainer(ui); // rebind to the active map's runway
     resetFlight();
+    if (flightAcc) flightAcc.night = time === 'night';
     rings.show(false);
     hud.race(false);
     state = 'flying';
@@ -272,6 +335,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
   }
 
   function toMenu() {
+    commitFlight();
     trainer?.stop();
     lessonId = null;
     instrEl.classList.remove('show');
@@ -291,11 +355,60 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
     $('#res-time').textContent = fmtTime(raceT);
     $('#res-time').classList.toggle('newbest', isBest);
     $('#res-verdict').textContent = isBest ? 'NEW BEST TIME' : `FINAL TIME · BEST ${fmtTime(best)}`;
+    commitFlight();
+    showScreen('results');
+  }
+
+  // Gauntlet ends either by clearing every gate (bust=false) or by busting the
+  // altitude ceiling (bust=true). Reuses the results screen.
+  function finishGauntlet(bust) {
+    raceDone = true;
+    state = 'results';
+    if (!bust && flightAcc) flightAcc.gauntletDone = true;
+    commitFlight();
+    $('#res-time').textContent = fmtTime(raceT);
+    if (bust) {
+      $('#res-time').classList.remove('newbest');
+      $('#res-verdict').textContent = `CEILING BUST · you climbed through ${GAUNTLET.ceilingAgl} m`;
+    } else {
+      const best = getGauntletBest();
+      const isBest = !best || raceT < best;
+      if (isBest) setGauntletBest(raceT);
+      $('#res-time').classList.toggle('newbest', isBest);
+      $('#res-verdict').textContent = isBest ? 'GAUNTLET CLEAR · NEW BEST' : `GAUNTLET CLEAR · BEST ${fmtTime(best)}`;
+    }
+    showScreen('results');
+  }
+
+  // Airline leg ends after AIRLINE_SECONDS aloft; the comfort score is the stat.
+  function finishAirline() {
+    raceDone = true;
+    state = 'results';
+    const s = comfort.score();
+    if (flightAcc) flightAcc.comfort = s;
+    commitFlight();
+    $('#res-time').textContent = String(s);
+    $('#res-time').classList.toggle('newbest', s >= 90);
+    $('#res-verdict').textContent = s >= 90 ? 'COMFORT SCORE · buttery smooth'
+      : s >= 70 ? 'COMFORT SCORE · acceptable ride' : 'COMFORT SCORE · hold the coffee';
+    showScreen('results');
+  }
+
+  // Freestyle ends after FREESTYLE_SECONDS; the count of named maneuvers is the stat.
+  function finishFreestyle() {
+    raceDone = true;
+    state = 'results';
+    commitFlight();
+    const n = maneuver?.count || 0;
+    $('#res-time').textContent = String(n);
+    $('#res-time').classList.toggle('newbest', n > 0);
+    $('#res-verdict').textContent = n > 0 ? `MANEUVERS FLOWN · last: ${maneuver.last}` : 'MANEUVERS FLOWN · none named';
     showScreen('results');
   }
 
   function crash() {
     state = 'crash'; // thud already played at the moment of impact
+    commitFlight(); // log hours flown up to the crash (+ any landing before it)
     let title, sub;
     const lessonFail = lessonId ? trainer?.onCrash() : null;
     if (lessonFail) ({ title, sub } = { title: lessonFail.title + '.', sub: lessonFail.sub });
@@ -321,13 +434,39 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
     restart: () => (lessonId ? beginLesson(lessonId) : begin()),
     menu: toMenu,
     groundschool: () => showScreen('groundschool'),
+    logbook: () => { refreshLogbook(); showScreen('logbook'); },
+    // Race retry-from-gate: respawn on the approach to the last passed gate
+    // rather than the runway, rewinding the clock to that gate's split.
+    regate: () => {
+      if (sel.mode !== 'race' || !rings || rings.active <= 0) { actions.restart(); return; }
+      const ap = rings.approach(); // last passed gate, 140 m out on its centreline
+      if (!ap) { actions.restart(); return; }
+      const yaw = Math.atan2(-ap.dir.z, ap.dir.x);
+      const spd = 55;
+      ac.pos = { x: ap.pos.x, y: ap.pos.y, z: ap.pos.z };
+      ac.vel = { x: ap.dir.x * spd, y: 0, z: ap.dir.z * spd };
+      ac.q = { x: 0, y: Math.sin(yaw / 2), z: 0, w: Math.cos(yaw / 2) };
+      ac.omega = { x: 0, y: 0, z: 0 };
+      ac.crashed = false; ac.crashReason = ''; ac.touchdown = null; ac.stalled = false;
+      crashT = null; crashSnap = null;
+      raceT = runSplits.length ? runSplits[runSplits.length - 1] : 0;
+      raceStarted = true; raceDone = false;
+      state = 'flying';
+      showScreen(null);
+      audio.resume();
+      hud.message(`Restarted from gate ${rings.active}.`, 2500);
+    },
   };
   document.querySelectorAll('[data-act]').forEach(b =>
     b.addEventListener('click', () => actions[b.dataset.act]()));
 
   controls.on('pause', () => {
-    if (state === 'flying') { state = 'paused'; showScreen('pause'); audio.suspend(); }
-    else if (state === 'paused') actions.resume();
+    if (state === 'flying') {
+      state = 'paused'; showScreen('pause'); audio.suspend();
+      // "restart from last gate" only makes sense mid-race past gate 1
+      const rg = $('#btn-regate');
+      if (rg) rg.style.display = (sel.mode === 'race' && rings && rings.active > 0) ? '' : 'none';
+    } else if (state === 'paused') actions.resume();
   });
   controls.on('reset', () => { if (state === 'flying' || state === 'crash') actions.restart(); });
   controls.on('camera', () => { camRig.cycle(); hud.setCamera(camRig.modeName); });
@@ -338,6 +477,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
   return {
     get state() { return state; },
     get mode() { return sel.mode; },
+    get maneuver() { return maneuver; }, // freestyle detector (null otherwise)
     get selection() { return { ...sel }; },
     select(partial) { sel = { ...sel, ...partial }; updateMenuLabels(); }, // used by tests/menu
     start: begin,
@@ -368,6 +508,12 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
 
       if (lessonId) { trainer?.tick(dt); return null; }
 
+      // flight-time + autopilot-usage accounting for the logbook.
+      if (flightAcc) {
+        flightAcc.seconds += dt;
+        if (autopilot?.on) flightAcc.apUsed = true;
+      }
+
       // first-use micro-hints (free flight & race; lessons are suppressed by the
       // early return above, since the #instructor is already talking).
       const cs = controls.state;
@@ -377,42 +523,86 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
       if (ac.stalled) hint('stall', 'The wing quit flying — push the nose DOWN and add power to get airflow back over it.');
       if (ac.airspeed > ac.p.maxSpeed) hint('overspeed', "You're past the airframe's limit — ease the throttle back and raise the nose gently before something bends.");
 
-      // race clock + gates
+      // gated activities (race + gauntlet): shared clock/gate-pass machinery.
       let bearing = null;
-      if (sel.mode === 'race') {
+      if (sel.mode === 'race' || sel.mode === 'gauntlet') {
+        const isRace = sel.mode === 'race';
         if (!raceStarted && ac.groundSpeed > 3) { raceStarted = true; }
         if (raceStarted && !raceDone) raceT += dt;
         const res = rings.check(ac);
         if (res === 'pass') {
           audio.chime();
-          // record this gate's split and flash the delta vs the best run
           const gateIdx = runSplits.length;
           runSplits.push(raceT);
-          const bestSplits = getBestSplits();
-          const ref = bestSplits && bestSplits[gateIdx];
-          hud.split?.(ref != null ? raceT - ref : null);
-          hud.message(rings.done ? `All gates! Land on runway ${map.runway.name} and stop.` : `Gate ${rings.active} / ${rings.total}`, 1800);
+          if (isRace) { // split delta vs the best run (race only)
+            const bestSplits = getBestSplits();
+            const ref = bestSplits && bestSplits[gateIdx];
+            hud.split?.(ref != null ? raceT - ref : null);
+          }
+          hud.message(rings.done
+            ? (isRace ? `All gates! Land on runway ${map.runway.name} and stop.` : 'Last gate — gauntlet clear!')
+            : `Gate ${rings.active} / ${rings.total}`, 1800);
         }
         const gd = rings.guidance(ac);
         if (gd) bearing = gd.bearing;
-        else {
+        else if (isRace) {
           const dx = map.runway.spawn.x - ac.pos.x, dz = map.runway.spawn.z - ac.pos.z;
           bearing = (90 - Math.atan2(-dz, dx) * 180 / Math.PI + 360) % 360;
         }
         rings.update(dt);
-        hud.race(true, {
-          time: fmtTime(raceT),
-          rings: rings.done ? `LAND RWY ${map.runway.name}` : `GATE ${rings.active + 1} / ${rings.total}`,
-          best: getBest() ? `BEST ${fmtTime(getBest())}` : 'BEST —',
-        });
-        if (rings.done && ac.onGround && ac.groundSpeed < 3 && ac.touchdown?.onRunway) {
-          finishRace(); return;
+        if (isRace) {
+          hud.race(true, {
+            time: fmtTime(raceT),
+            rings: rings.done ? `LAND RWY ${map.runway.name}` : `GATE ${rings.active + 1} / ${rings.total}`,
+            best: getBest() ? `BEST ${fmtTime(getBest())}` : 'BEST —',
+          });
+          if (rings.done && ac.onGround && ac.groundSpeed < 3 && ac.touchdown?.onRunway) {
+            finishRace(); return;
+          }
+        } else { // gauntlet: ceiling floor readout + bust/clear checks
+          const aglM = Math.round(ac.agl);
+          hud.race(true, {
+            time: fmtTime(raceT),
+            rings: `GATE ${Math.min(rings.active + 1, rings.total)} / ${rings.total}`,
+            best: `CEIL ${aglM} / ${GAUNTLET.ceilingAgl} m`,
+          });
+          if (raceStarted && !raceDone && ac.agl > GAUNTLET.ceilingAgl) { finishGauntlet(true); return; }
+          if (rings.done) { finishGauntlet(false); return; }
         }
+      }
+
+      // airline leg: sample ride comfort while aloft; end after the leg's time.
+      if (sel.mode === 'airline') {
+        const aloft = !ac.onGround;
+        if (aloft) { activityT += dt; comfort.sample(ac.gLoad, ac.vel.y, dt); }
+        hud.race(true, {
+          time: `${Math.floor(activityT)} / ${AIRLINE_SECONDS}s`,
+          rings: `COMFORT ${comfort.score()}`,
+          best: aloft ? 'CRUISE' : 'CLIMB OUT',
+        });
+        if (activityT >= AIRLINE_SECONDS) { finishAirline(); return; }
+      }
+
+      // aerobatics freestyle: detect maneuvers from body-rate history; time-boxed.
+      if (sel.mode === 'freestyle') {
+        activityT += dt;
+        const hit = maneuver?.sample(ac.omega, dt);
+        if (hit) { audio.chime(); hud.message(`${hit}!`, 1400); }
+        hud.race(true, {
+          time: fmtTime(Math.max(0, FREESTYLE_SECONDS - activityT)),
+          rings: `MOVES ${maneuver?.count || 0}`,
+          best: maneuver?.last ? `LAST ${maneuver.last}` : 'FREESTYLE',
+        });
+        if (activityT >= FREESTYLE_SECONDS) { finishFreestyle(); return; }
       }
 
       // landing debrief (free flight)
       if (ac.touchdown && ac.touchdown !== lastTouchdown) {
         lastTouchdown = ac.touchdown;
+        // log a safe (on-runway) landing for the logbook, in any mode
+        if (flightAcc && ac.touchdown.onRunway && ac.touchdown.fpm != null) {
+          flightAcc.landing = { fpm: ac.touchdown.fpm, night: flightAcc.night };
+        }
         if (sel.mode === 'free') {
           const { fpm, speedKt, onRunway } = ac.touchdown;
           const grade = fpm <= 130 ? 'GREASED IT' : fpm <= 300 ? 'SMOOTH' : fpm <= 500 ? 'FIRM' : 'HARD ARRIVAL';

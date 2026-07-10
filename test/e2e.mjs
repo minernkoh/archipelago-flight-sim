@@ -447,6 +447,54 @@ check('NIGHT sets a night flag and darkens the scene',
   `night sun=${nightEnv.sunIntensity} fogLum=${nightEnv.fogLum.toFixed(3)} vs day fogLum=${dayEnv.fogLum.toFixed(3)}`);
 await shot('11-alpine-night');
 
+// --- Phase C: low-level gauntlet starts with low gates in the Hornet ---
+console.log('phase C — gauntlet / freestyle / logbook…');
+await page.evaluate(() => { window.__sim.game.toMenu?.(); });
+await page.evaluate(() => window.__sim.game.select({ mode: 'gauntlet', map: 'archipelago', time: 'day' }));
+await click('#btn-start');
+await page.waitForFunction('!document.querySelector("#loading").classList.contains("show") && window.__sim.game.state === "flying"', { timeout: 120000, polling: 1000 });
+await settle(800);
+const gaunt = await sim(`(() => {
+  const s = window.__sim;
+  const g0 = s.rings.group.children[0];
+  return { mode: s.game.mode, ac: s.ac.p.id, visible: s.rings.group.visible,
+           total: s.rings.total, gateY: g0 ? g0.position.y : null };
+})()`);
+check('gauntlet starts in the Hornet with low gates visible',
+  gaunt.mode === 'gauntlet' && gaunt.ac === 'hornet' && gaunt.visible && gaunt.total > 0 && gaunt.gateY < 120,
+  JSON.stringify(gaunt));
+
+// --- Phase C: aerobatics freestyle scores a maneuver (detector wired live) ---
+await page.evaluate(() => { window.__sim.game.toMenu?.(); });
+await page.evaluate(() => window.__sim.game.select({ mode: 'freestyle', map: 'archipelago' }));
+await click('#btn-start');
+await settle(800);
+const free0 = await sim('({ mode: __sim.game.mode, ac: __sim.ac.p.id, hasDetector: !!__sim.game.maneuver })');
+check('freestyle starts in the Extra with a live maneuver detector',
+  free0.mode === 'freestyle' && free0.ac === 'extra300' && free0.hasDetector, JSON.stringify(free0));
+const man = await page.evaluate(() => {
+  const d = window.__sim.game.maneuver;
+  if (!d) return { ok: false };
+  for (let i = 0; i < 80; i++) d.sample({ x: 0, y: 0, z: 1.05 }, 0.1); // a full pitch loop
+  return { ok: true, count: d.count, last: d.last };
+});
+check('freestyle detector names a LOOP from a full pitch rotation', man.ok && man.last === 'LOOP', JSON.stringify(man));
+
+// --- Phase C: logbook screen opens from the menu and shows stats + badges ---
+await page.evaluate(() => { window.__sim.game.toMenu?.(); });
+await page.evaluate(() => document.querySelector('#menu-foot [data-act="logbook"]').click());
+await settle(300);
+const logb = await page.evaluate(() => ({
+  shown: document.querySelector('#logbook').classList.contains('show'),
+  badges: document.querySelectorAll('#logbook .lb-badge').length,
+  stats: document.querySelectorAll('#logbook .lb-stat').length,
+  hasLandings: /LANDINGS/.test(document.querySelector('#logbook')?.textContent || ''),
+}));
+check('logbook screen opens from the menu', logb.shown);
+check('logbook shows badges + stat tiles', logb.badges === 6 && logb.stats >= 4 && logb.hasLandings, JSON.stringify(logb));
+await shot('12-logbook');
+await page.evaluate(() => document.querySelector('#logbook [data-act="menu"]').click());
+
 check('no console errors', errors.length === 0, errors.slice(0, 4).join(' | '));
 
 await browser.close();

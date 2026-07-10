@@ -2,6 +2,9 @@
 import { createAircraft, step, PARAMS, attitude, KT, RHO0, G,
          airDensity, failSystem, resetSystems } from '../src/physics/flightModel.js';
 import { v3, qAxisAngle } from '../src/physics/vecmath.js';
+import { comfortFromRates, createComfortMeter, createManeuverDetector,
+         buildGauntletCourse, GAUNTLET } from '../src/activities.js';
+import { emptyLogbook, accumulate, computeBadges } from '../src/logbook.js';
 
 const DT = 1 / 120;
 const flat = { groundHeight: () => 0, isRunway: () => true };
@@ -389,6 +392,76 @@ import { createWind, WEATHER } from '../src/physics/wind.js';
   resetSystems(b);
   check('engineFailed <-> systems.engine alias works both ways and resets',
     aliasFwd && aliasBack && b.engineFailed === false && b.systems.engine === true);
+}
+
+// ---- 23. Phase C: airline comfort score ----
+{
+  const dt = 1 / 120;
+  const smooth = createComfortMeter();
+  for (let i = 0; i < 900; i++) smooth.sample(1 + 0.015 * Math.sin(i * 0.03), 0.1 * Math.sin(i * 0.01), dt);
+  const bumpy = createComfortMeter();
+  for (let i = 0; i < 900; i++) bumpy.sample(1 + 0.7 * Math.sin(i * 0.6), 6 * Math.sin(i * 0.6), dt);
+  const ss = smooth.score(), bs = bumpy.score();
+  check('comfort: smooth cruise scores high', ss >= 80, `score ${ss}`);
+  check('comfort: bumpy ride scores well below smooth', bs < ss - 20, `bumpy ${bs} vs smooth ${ss}`);
+  check('comfort: score clamps to 0..100', comfortFromRates(0, 0) === 100 && comfortFromRates(9, 9) === 0 && ss <= 100 && bs >= 0);
+}
+
+// ---- 24. Phase C: gauntlet gate layout ----
+{
+  const rwy = { spawn: { x: 60, z: 0 }, headingRad: 0, y: 6 };
+  const c = buildGauntletCourse(rwy);
+  check('gauntlet: gate count matches config', c.length === GAUNTLET.gates, `${c.length} gates`);
+  check('gauntlet: gates march forward down the runway heading',
+    c[0][0] > 60 && c.every((g, i) => i === 0 || g[0] > c[i - 1][0]));
+  check('gauntlet: gate centres are low (near terrain + clearance)',
+    c.every(g => g[2] <= rwy.y + GAUNTLET.clearance + 1e-6), `first centre y ${c[0][2]}`);
+  check('gauntlet: ceiling clears the gates', GAUNTLET.ceilingAgl > GAUNTLET.clearance + 40);
+}
+
+// ---- 25. Phase C: maneuver detector (attitude/rate history) ----
+{
+  const dt = 1 / 120;
+  const level = createManeuverDetector();
+  for (let i = 0; i < 900; i++) level.sample({ x: 0.02, y: 0, z: 0.02 }, dt); // below rate gate
+  check('maneuver: straight-and-level names nothing', level.count === 0, `count ${level.count}`);
+
+  const loop = createManeuverDetector();
+  const pr = (Math.PI * 2) / 6; let loopHit = null;
+  for (let i = 0; i < 6 / dt; i++) { const h = loop.sample({ x: 0, y: 0, z: pr }, dt); if (h) loopHit = h; }
+  check('maneuver: a full pitch rotation reads as LOOP', loopHit === 'LOOP', `got ${loopHit}`);
+
+  const roll = createManeuverDetector();
+  const rr = (Math.PI * 2) / 4; let rollHit = null;
+  for (let i = 0; i < 4 / dt; i++) { const h = roll.sample({ x: rr, y: 0, z: 0 }, dt); if (h) rollHit = h; }
+  check('maneuver: a full roll rotation reads as AILERON ROLL', rollHit === 'AILERON ROLL', `got ${rollHit}`);
+
+  const barrel = createManeuverDetector(); let bHit = null;
+  for (let i = 0; i < 6 / dt; i++) { const h = barrel.sample({ x: pr, y: 0, z: pr }, dt); if (h) bHit = h; }
+  check('maneuver: simultaneous pitch+roll reads as BARREL ROLL', bHit === 'BARREL ROLL', `got ${bHit}`);
+}
+
+// ---- 26. Phase C: logbook accumulation + badge logic ----
+{
+  const lb = emptyLogbook();
+  accumulate(lb, { aircraft: 'c172', seconds: 120, landing: { fpm: 180, night: false }, apUsed: true });
+  accumulate(lb, { aircraft: 'extra300', seconds: 60, landing: { fpm: 90, night: true } });
+  accumulate(lb, { aircraft: 'hornet', seconds: 200, gauntletDone: true });
+  accumulate(lb, { aircraft: 'heavy', seconds: 80, comfort: 95 });
+  check('logbook: hours accumulate per aircraft type', lb.hours.c172 === 120 && lb.hours.extra300 === 60);
+  check('logbook: total + per-type landings count', lb.landings === 2 && lb.landingsByType.extra300 === 1);
+  check('logbook: best fpm tracks the softest landing', lb.bestFpm === 90, `bestFpm ${lb.bestFpm}`);
+
+  const badges = computeBadges(lb, { lessonsDone: 10, lessonsTotal: 10 });
+  const by = (id) => badges.find(b => b.id === id).earned;
+  check('badge: PPL earned when all lessons done', by('ppl'));
+  check('badge: TAILWHEEL from an Extra 300 landing', by('tailwheel'));
+  check('badge: JET from a gauntlet clear', by('jet'));
+  check('badge: NIGHT from a night landing', by('night'));
+  check('badge: AUTOPILOT from an AP-flown leg', by('autopilot'));
+  check('badge: SMOOTH OPERATOR from a comfort ≥ 90 leg', by('smooth'));
+  const none = computeBadges(emptyLogbook(), { lessonsDone: 0, lessonsTotal: 10 });
+  check('badge: nothing earned on an empty logbook', none.every(b => !b.earned));
 }
 
 console.log(failures === 0 ? '\nAll physics checks passed.' : `\n${failures} check(s) FAILED.`);

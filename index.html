@@ -377,6 +377,7 @@
     ARROWS pitch/roll &nbsp;&middot;&nbsp; <b>A/D</b> rudder &nbsp;&middot;&nbsp; <b>W/S</b> throttle &nbsp;&middot;&nbsp;
     <b>F</b> flaps &nbsp;&middot;&nbsp; <b>B</b> brakes &nbsp;&middot;&nbsp; <b>C</b> camera &nbsp;&middot;&nbsp; <b>ESC</b> pause
     <br><button class="btn" data-act="groundschool" style="pointer-events:auto;display:inline-flex;font-size:.68rem;letter-spacing:.14em;padding:.35rem 0;color:var(--amber)">GROUND SCHOOL &rarr;</button>
+    &nbsp;&middot;&nbsp;<button class="btn" data-act="logbook" style="pointer-events:auto;display:inline-flex;font-size:.68rem;letter-spacing:.14em;padding:.35rem 0;color:var(--amber)">LOGBOOK &rarr;</button>
   </div>
 </div>
 
@@ -396,14 +397,17 @@
 
 <div class="screen" id="groundschool"></div>
 
+<div class="screen" id="logbook"></div>
+
 <div class="screen" id="pause">
   <div class="inner">
     <div class="kicker">PAUSED</div>
     <h1>ON HOLD<em>.</em></h1>
     <div class="btnrow">
       <button class="btn" data-act="resume"><span class="no">01</span> RESUME</button>
-      <button class="btn" data-act="restart"><span class="no">02</span> BACK TO RUNWAY</button>
-      <button class="btn" data-act="menu"><span class="no">03</span> MAIN MENU</button>
+      <button class="btn" id="btn-regate" data-act="regate" style="display:none"><span class="no">02</span> RESTART FROM LAST GATE</button>
+      <button class="btn" data-act="restart"><span class="no">03</span> BACK TO RUNWAY</button>
+      <button class="btn" data-act="menu"><span class="no">04</span> MAIN MENU</button>
     </div>
   </div>
 </div>
