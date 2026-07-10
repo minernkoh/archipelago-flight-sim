@@ -379,6 +379,22 @@ export function createTrainingSystem(deps) {
         return { steps, setup: () => gSet(course), teardown: gClear };
       },
     },
+    {
+      id: 'night-circuit', title: 'Night circuit',
+      blurb: 'One full pattern after dark — fly the lit runway edges, ride the PAPI, and grease it on with the landing light.',
+      extraProgress: { night: true },
+      // The integrator forces NIGHT lighting for this lesson (modes.beginLesson);
+      // the runway edge lights + PAPI + landing-light cone come from the world.
+      build: () => {
+        const course = patternCourse();
+        const steps = [
+          ...buildTakeoffSteps(),
+          ...buildPatternSteps(course),
+          ...buildLandingSteps({ fpmLimit: 350 }),
+        ];
+        return { steps, setup: () => gSet(course), teardown: gClear };
+      },
+    },
   ];
 
   // ============================== engine =====================================

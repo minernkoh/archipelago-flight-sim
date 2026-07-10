@@ -5,6 +5,7 @@ import { createAircraft, step } from './physics/flightModel.js';
 import { createTerrain } from './terrain.js';
 import { archipelagoMap } from './maps/archipelago.js';
 import { singaporeMap } from './maps/singapore.js';
+import { alpineMap } from './maps/alpine.js';
 import { CATALOG, byId } from './aircraft/catalog.js';
 import { createControls } from './controls.js';
 import { createCameraRig } from './camera.js';
@@ -21,7 +22,7 @@ import { createPanel } from './panel.js';
 import { createAutopilot } from './autopilot.js';
 
 const PHYS_DT = 1 / 120;
-const MAPS = [archipelagoMap, singaporeMap];
+const MAPS = [archipelagoMap, singaporeMap, alpineMap];
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -40,7 +41,7 @@ window.addEventListener('resize', () => {
 });
 
 // --- world state (swappable) ---
-const env = createEnvironment(scene);
+const env = createEnvironment(scene, renderer);
 let currentMap = archipelagoMap;
 let terrain = createTerrain(scene, currentMap);
 let scenery = currentMap.createScenery(scene);
@@ -58,6 +59,7 @@ const physEnv = {
   wind: (x, y, z) => windField.at(x, y, z),
 };
 env.setGround(collisionHeight);
+env.onMapLoaded(currentMap, scenery);
 
 function disposeGroup(g) {
   g.traverse(o => {
@@ -85,6 +87,7 @@ async function loadMap(map) {
   rings = createRings(scene, { course: map.raceCourse, heightFn: map.height, finalDir: map.finalGateDir });
   rings.show(false);
   env.setGround(collisionHeight);
+  env.onMapLoaded(currentMap, scenery);
   terrain.prime(map.runway.spawn.x, map.runway.spawn.z);
   while (terrain.pendingCount() > 0) {
     terrain.update(map.runway.spawn.x, map.runway.spawn.z, 8);
@@ -142,6 +145,7 @@ const world = {
   aircraft: CATALOG,
   async apply(sel) {
     await loadMap(MAPS.find(m => m.id === sel.map) || MAPS[0]);
+    env.setTimeOfDay(sel.time || 'day');
     setAircraft(byId(sel.aircraft));
     // fresh wind each flight: preset strength, semi-random direction
     windField.set({ ...(WEATHER[sel.weather] || WEATHER.calm), dirDeg: Math.round(Math.random() * 360) });
@@ -182,7 +186,7 @@ controls.on('ap-ias', () => { if (flying()) autopilot.toggleIas(ac, controls); }
 controls.on('ap-nav', () => { if (flying()) autopilot.toggleNav(ac); });
 controls.on('ap-wing', () => { if (flying()) autopilot.toggleWing(ac); });
 
-window.__sim = { ac, controls, game, world, autopilot, get rings() { return rings; }, get map() { return currentMap; } };
+window.__sim = { ac, controls, game, world, autopilot, env, get rings() { return rings; }, get map() { return currentMap; } };
 
 // --- boot: pre-build terrain around the spawn, then reveal the menu ---
 // (setTimeout, not rAF: headless/hidden pages stop delivering animation frames

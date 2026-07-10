@@ -14,6 +14,31 @@ const M = {
   hull: lam(0x54382e), hull2: lam(0x3a4a63), deck: lam(0x8b93a0),
 };
 
+// Night window glow: baked as material emissive on the shared building
+// materials (one glow per building type), NEVER per-window point lights. The
+// glass towers glow warm; concrete/decks get a fainter cool wash.
+const WARM = new THREE.Color(0xffcf87), COOL = new THREE.Color(0x8fb4d6), BLACK = new THREE.Color(0x000000);
+const WARM_MATS = [M.glassDark, M.glassBlue, M.glassTeal];
+const COOL_MATS = [M.concrete, M.white, M.deck];
+export function setNightGlow(on) {
+  for (const m of WARM_MATS) { m.emissive.copy(on ? WARM : BLACK); m.emissiveIntensity = on ? 0.42 : 0; }
+  for (const m of COOL_MATS) { m.emissive.copy(on ? COOL : BLACK); m.emissiveIntensity = on ? 0.16 : 0; }
+}
+
+// A red obstruction beacon (aviation warning light) atop a tall tower. Hidden
+// by default; the environment shows + blinks it at night. Returns the mesh so
+// createScenery can collect it into scenery.userData.beacons.
+export function addBeacon(g, x, y, z) {
+  const b = new THREE.Mesh(
+    new THREE.SphereGeometry(2.2, 6, 5),
+    new THREE.MeshLambertMaterial({ color: 0x300806, emissive: 0xff3020, emissiveIntensity: 1 }),
+  );
+  b.position.set(x, y, z);
+  b.visible = false;
+  g.add(b);
+  return b;
+}
+
 function box(g, mat, w, h, d, x, y, z, ry = 0) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
   m.position.set(x, y, z);

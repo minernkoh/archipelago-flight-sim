@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import {
   addMBS, addFlyer, addEsplanade, addCBD, addHDBEstate, addPort, addShips, addChangi,
+  setNightGlow, addBeacon,
 } from './sgLandmarks.js';
 
 const RWY_Y = 7;
@@ -261,6 +262,16 @@ export function createScenery(scene) {
   addPort(g, reg, -10600, 4050, gy(-10600, 4050), rng);
   for (const [dx, dz] of DISTRICTS.slice(0, 7)) addHDBEstate(g, reg, dx, dz, gy(dx, dz), rng);
   addShips(g, reg, rng, 0, [[-7300, 5600, 7], [-4500, 5500, 5]]);
+
+  // Night content: red obstruction beacons atop the three MBS towers + the
+  // Changi control tower. The environment shows/blinks them after dark.
+  const mbsY = gy(-5600, 4350) + 200 + 20;
+  const beacons = [
+    addBeacon(g, -5690, mbsY, 4350), addBeacon(g, -5600, mbsY, 4350), addBeacon(g, -5510, mbsY, 4350),
+    addBeacon(g, -260, RWY_Y + 98, 330),
+  ];
+  g.userData.beacons = beacons;
+  g.userData.nightGlow = setNightGlow;
 
   scene.add(g);
   return g;

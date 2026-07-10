@@ -15,6 +15,7 @@ const splitsKey = (map, aircraft) => `${bestKey(map, aircraft)}.splits`; // sibl
 const MAP_DESC = {
   archipelago: 'procedural islands, one strip of asphalt',
   singapore: 'stylised city-state — Changi to Marina Bay',
+  alpine: 'high valley airstrip ringed by jagged peaks',
 };
 
 // Human-terms numbers derived from the physics params (never hand-maintained):
@@ -41,6 +42,14 @@ const WEATHERS = [
   { id: 'calm', label: 'CALM', hint: 'still air' },
   { id: 'breezy', label: 'BREEZY', hint: '8 kt, light gusts' },
   { id: 'gusty', label: 'GUSTY', hint: '16 kt gusting 28 — hold on' },
+];
+
+// Time-of-day drives environment.js lighting (fog, sun, exposure) + night content.
+const TIMES = [
+  { id: 'dawn', label: 'DAWN', hint: 'low warm sun, soft haze' },
+  { id: 'day', label: 'DAY', hint: 'bright, high sun' },
+  { id: 'dusk', label: 'DUSK', hint: 'orange light, long shadows' },
+  { id: 'night', label: 'NIGHT', hint: 'runway lights, PAPI, landing light' },
 ];
 
 const CRASH_TEXT = {
@@ -80,7 +89,7 @@ function crashWhy(snap, reason) {
 export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) {
   let crashT = null; // delay before the crash screen so the debris burst reads
   let state = 'menu';           // menu | flying | paused | crash | results
-  let sel = { mode: 'free', map: 'archipelago', aircraft: 'c172', weather: 'calm' };
+  let sel = { mode: 'free', map: 'archipelago', aircraft: 'c172', weather: 'calm', time: 'day' };
   try { sel = { ...sel, ...JSON.parse(localStorage.getItem(SEL_KEY) || '{}') }; } catch { /* fresh defaults */ }
   let map = null, rings = null;  // live handles, set by begin()
   let raceT = 0, raceStarted = false, raceDone = false;
@@ -169,11 +178,14 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
     const wx = WEATHERS.find(w => w.id === sel.weather) || WEATHERS[0];
     $('#sel-weather').textContent = wx.label;
     $('#sel-weather-hint').textContent = wx.hint;
+    const tm = TIMES.find(t => t.id === sel.time) || TIMES[1];
+    $('#sel-time').textContent = tm.label;
+    $('#sel-time-hint').textContent = tm.hint;
     localStorage.setItem(SEL_KEY, JSON.stringify(sel));
   }
 
   function cycle(kind) {
-    const lists = { mode: MODES.map(m => m.id), map: world.maps.map(m => m.id), aircraft: world.aircraft.map(a => a.id), weather: WEATHERS.map(w => w.id) };
+    const lists = { mode: MODES.map(m => m.id), map: world.maps.map(m => m.id), aircraft: world.aircraft.map(a => a.id), weather: WEATHERS.map(w => w.id), time: TIMES.map(t => t.id) };
     const list = lists[kind];
     const cur = list.indexOf(sel[kind]);
     sel[kind] = list[(cur + 1) % list.length];
@@ -246,7 +258,9 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx }) 
 
   async function beginLesson(id) {
     lessonId = id;
-    ({ map, rings } = await world.apply({ ...sel, aircraft: 'c172' })); // school flies the trainer
+    // The night circuit is flown after dark regardless of the menu time setting.
+    const time = id === 'night-circuit' ? 'night' : sel.time;
+    ({ map, rings } = await world.apply({ ...sel, aircraft: 'c172', time })); // school flies the trainer
     trainer = world.createTrainer(ui); // rebind to the active map's runway
     resetFlight();
     rings.show(false);

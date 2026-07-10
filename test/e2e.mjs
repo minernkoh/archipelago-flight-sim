@@ -423,6 +423,30 @@ check('NAV sequences to wp2 on capture radius', navSeq === 2, `idx=${navSeq}`);
 await press('p'); // master off — leave AP disengaged
 await settle(150);
 
+// --- Phase I: alpine map loads + time-of-day NIGHT darkens the scene ---
+// (assert env state / scalars via page.evaluate, never pixels).
+console.log('time-of-day / alpine…');
+await page.evaluate(() => { window.__sim.game.toMenu?.(); });
+await page.evaluate(() => window.__sim.game.select({ mode: 'free', map: 'archipelago', aircraft: 'c172', time: 'day' }));
+await click('#btn-start');
+await settle(900);
+const dayEnv = await sim('__sim.env.state()');
+check('DAY env reports daytime', dayEnv.timeOfDay === 'day' && dayEnv.night === false, JSON.stringify(dayEnv));
+
+await page.evaluate(() => { window.__sim.game.toMenu?.(); });
+await page.evaluate(() => window.__sim.game.select({ mode: 'free', map: 'alpine', aircraft: 'c172', time: 'night' }));
+await click('#btn-start');
+await page.waitForFunction('!document.querySelector("#loading").classList.contains("show") && window.__sim.game.state === "flying"', { timeout: 120000, polling: 1000 });
+await settle(1200);
+const alp = await sim('({ map: __sim.map.id, ground: __sim.ac.onGround, crashed: __sim.ac.crashed, rwy: __sim.map.runway.name })');
+check('alpine map loads and spawns on the strip', alp.map === 'alpine' && alp.ground && !alp.crashed, JSON.stringify(alp));
+const nightEnv = await sim('__sim.env.state()');
+check('NIGHT sets a night flag and darkens the scene',
+  nightEnv.night === true && nightEnv.timeOfDay === 'night'
+  && nightEnv.sunIntensity < dayEnv.sunIntensity && nightEnv.fogLum < dayEnv.fogLum,
+  `night sun=${nightEnv.sunIntensity} fogLum=${nightEnv.fogLum.toFixed(3)} vs day fogLum=${dayEnv.fogLum.toFixed(3)}`);
+await shot('11-alpine-night');
+
 check('no console errors', errors.length === 0, errors.slice(0, 4).join(' | '));
 
 await browser.close();
