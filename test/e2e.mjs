@@ -495,6 +495,36 @@ check('logbook shows badges + stat tiles', logb.badges === 6 && logb.stats >= 4 
 await shot('12-logbook');
 await page.evaluate(() => document.querySelector('#logbook [data-act="menu"]').click());
 
+// --- Phase E: settings screen, persistence, and mouse-fly ---
+console.log('phase E — settings / mouse-fly…');
+await page.evaluate(() => document.querySelector('#menu-foot [data-act="settings"]').click());
+await settle(300);
+const setShown = await page.evaluate(() => ({
+  shown: document.querySelector('#settings').classList.contains('show'),
+  rows: document.querySelectorAll('#settings .set-row').length,
+}));
+check('settings screen opens from the menu', setShown.shown && setShown.rows >= 5, JSON.stringify(setShown));
+// Toggling INVERT PITCH persists to localStorage
+await page.evaluate(() => document.querySelector('#settings [data-setting="invertPitch"]').click());
+const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem('archipelago.settings') || '{}'));
+check('settings edit persists to archipelago.settings', persisted.invertPitch === true, JSON.stringify(persisted));
+await page.evaluate(() => document.querySelector('#settings [data-setting="invertPitch"]').click()); // restore
+await page.evaluate(() => document.querySelector('#settings [data-act="menu"]').click());
+// Mouse-fly: hold RMB and drag up -> elevator goes positive (nose up). This is
+// pure controls-layer behaviour (poll writes state regardless of game mode),
+// so no flight/map reload is needed — keeps this immune to load stalls.
+const mfElev = await page.evaluate(() => {
+  const ev = (type, x, y, button = 2) => window.dispatchEvent(new MouseEvent(type, { clientX: x, clientY: y, button }));
+  ev('mousedown', 400, 400);
+  ev('mousemove', 400, 250); // drag up 150 px = nose up
+  window.__sim.controls.poll(1 / 60);
+  const held = window.__sim.controls.state.elevator;
+  ev('mouseup', 400, 250);
+  window.__sim.controls.poll(1 / 60);
+  return { held, released: window.__sim.controls.state.elevator };
+});
+check('mouse-fly RMB drag drives the elevator directly', mfElev.held > 0.5, JSON.stringify(mfElev));
+
 check('no console errors', errors.length === 0, errors.slice(0, 4).join(' | '));
 
 await browser.close();

@@ -3,6 +3,7 @@
 
 export function createAudio() {
   let ctx = null;
+  let masterVol = 0.55; // settings-driven; applied at init and via setVolume
   let engineOsc, engineOsc2, engineGain, engineFilter;
   let windSrc, windGain, windFilter;
   let hornOsc, hornGain;
@@ -16,7 +17,7 @@ export function createAudio() {
     if (ctx) return;
     ctx = new (window.AudioContext || window.webkitAudioContext)();
     master = ctx.createGain();
-    master.gain.value = 0.55;
+    master.gain.value = masterVol;
     master.connect(ctx.destination);
 
     engineOsc = ctx.createOscillator(); engineOsc.type = 'sawtooth';
@@ -74,6 +75,11 @@ export function createAudio() {
 
   return {
     resume() { init(); if (ctx.state === 'suspended') ctx.resume(); },
+    // Master volume 0..1 (settings). Safe before init — applied when ctx exists.
+    setVolume(v) {
+      masterVol = Math.max(0, Math.min(1, v));
+      if (master) master.gain.value = masterVol;
+    },
     suspend() { if (ctx && ctx.state === 'running') ctx.suspend(); },
     chime() {
       if (!ctx) return;

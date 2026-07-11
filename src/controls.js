@@ -14,6 +14,43 @@ export function createControls() {
   // ratio of the primary (pitch/roll) rate. Defaults match the original C172.
   let pitchRollRate = 5.5;
   let rudderRate = 4.5;
+  // Settings-driven input options (see settings.js). Invert applies to
+  // mouse-fly and gamepad pitch only — the arrow keys stay semantic.
+  let invertPitch = false, mouseFlyOn = true, gamepadOn = true;
+
+  // Mouse-fly: hold RMB = stick. Offset from the press point maps to a target
+  // deflection written DIRECTLY into state each poll — the mouse position IS
+  // the deflection, so the axis() keyboard ramp is bypassed (ramping a
+  // position input just adds lag). The autopilot yields via axisActive below.
+  let mouseHeld = false, mouseAnchor = null, mousePitch = 0, mouseRoll = 0;
+  const MOUSE_FULL_PX = 220; // px of travel for full deflection
+  const clamp1 = (v) => Math.max(-1, Math.min(1, v));
+  window.addEventListener('mousedown', (e) => {
+    if (e.button === 2 && mouseFlyOn) { mouseHeld = true; mouseAnchor = { x: e.clientX, y: e.clientY }; }
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!mouseHeld) return;
+    mouseRoll = clamp1((e.clientX - mouseAnchor.x) / MOUSE_FULL_PX);
+    mousePitch = clamp1((mouseAnchor.y - e.clientY) / MOUSE_FULL_PX); // mouse up = nose up (invert flips)
+  });
+  const mouseRelease = () => { mouseHeld = false; mousePitch = 0; mouseRoll = 0; };
+  window.addEventListener('mouseup', (e) => { if (e.button === 2) mouseRelease(); });
+  window.addEventListener('blur', mouseRelease);
+  window.addEventListener('contextmenu', (e) => { if (mouseFlyOn) e.preventDefault(); });
+
+  // Gamepad: first connected pad, standard mapping — left stick pitch/roll,
+  // right stick X rudder, right stick Y throttle rate. Deadzoned; an
+  // out-of-zone stick writes directly (it's already analog — no ramp needed).
+  const DEADZONE = 0.18;
+  const dz = (v) => Math.abs(v) < DEADZONE ? 0 : (v - Math.sign(v) * DEADZONE) / (1 - DEADZONE);
+  function padAxes() {
+    if (!gamepadOn || !navigator.getGamepads) return null;
+    let gp = null;
+    try { gp = [...navigator.getGamepads()].find(p => p && p.connected); } catch { return null; }
+    if (!gp) return null;
+    const a = gp.axes;
+    return { roll: dz(a[0] ?? 0), pitch: dz(a[1] ?? 0), yaw: dz(a[2] ?? 0), thr: dz(a[3] ?? 0) };
+  }
 
   const emit = (ev) => handlers[ev] && handlers[ev]();
 
@@ -62,13 +99,22 @@ export function createControls() {
       rudderRate = pitchRollRate * (4.5 / 5.5);
     },
     resetFlaps() { flapIdx = 0; state.flaps = 0; state.throttle = 0; state.trim = 0; },
-    // True when the human is holding a key that drives this axis — the autopilot
-    // reads this to yield that axis to live keyboard input.
+    // Apply the persisted settings (settings.js). Called at boot + on change.
+    applySettings(s) {
+      invertPitch = !!s.invertPitch;
+      mouseFlyOn = s.mouseFly !== false;
+      gamepadOn = s.gamepad !== false;
+      if (!mouseFlyOn) mouseRelease();
+    },
+    // True when the human is actively driving this axis (key held, RMB
+    // mouse-fly, or a gamepad stick out of its deadzone) — the autopilot
+    // reads this to yield that axis to live input.
     axisActive(name) {
-      if (name === 'elevator') return keys.has('ArrowUp') || keys.has('ArrowDown');
-      if (name === 'aileron') return keys.has('ArrowLeft') || keys.has('ArrowRight');
-      if (name === 'rudder') return keys.has('a') || keys.has('d');
-      if (name === 'throttle') return keys.has('w') || keys.has('s');
+      const pad = padAxes();
+      if (name === 'elevator') return keys.has('ArrowUp') || keys.has('ArrowDown') || mouseHeld || !!(pad && pad.pitch);
+      if (name === 'aileron') return keys.has('ArrowLeft') || keys.has('ArrowRight') || mouseHeld || !!(pad && pad.roll);
+      if (name === 'rudder') return keys.has('a') || keys.has('d') || !!(pad && pad.yaw);
+      if (name === 'throttle') return keys.has('w') || keys.has('s') || !!(pad && pad.thr);
       return false;
     },
     poll(dt) {
@@ -78,6 +124,20 @@ export function createControls() {
       s.rudder   = axis(s.rudder, (keys.has('d') ? 1 : 0) + (keys.has('a') ? -1 : 0), dt, rudderRate);
       if (keys.has('w')) s.throttle = Math.min(1, s.throttle + dt * 0.55);
       if (keys.has('s')) s.throttle = Math.max(0, s.throttle - dt * 0.7);
+      // Mouse-fly and gamepad write their axes directly (position inputs —
+      // see the notes above). Keyboard keeps the ramped path untouched.
+      const inv = invertPitch ? -1 : 1;
+      if (mouseHeld) {
+        s.elevator = mousePitch * inv;
+        s.aileron = mouseRoll;
+      }
+      const pad = padAxes();
+      if (pad) {
+        if (pad.pitch) s.elevator = -pad.pitch * inv; // stick fwd (+) = nose down
+        if (pad.roll) s.aileron = pad.roll;
+        if (pad.yaw) s.rudder = pad.yaw;
+        if (pad.thr) s.throttle = Math.max(0, Math.min(1, s.throttle - pad.thr * dt * 0.8)); // stick up (-) increases
+      }
       s.flaps = axis(s.flaps, FLAP_DETENTS[flapIdx], dt, 1.6); // flaps travel slowly
       s.brakes = keys.has('b');
       return s;

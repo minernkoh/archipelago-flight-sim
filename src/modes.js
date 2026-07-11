@@ -7,6 +7,7 @@ import { renderGlossary } from './groundschool.js';
 import { runwayFrame } from './runwayUtil.js';
 import { createComfortMeter, createManeuverDetector, GAUNTLET } from './activities.js';
 import { loadLogbook, saveLogbook, accumulate, renderLogbook } from './logbook.js';
+import { loadSettings, saveSettings, renderSettings } from './settings.js';
 
 const $ = (s) => document.querySelector(s);
 const SEL_KEY = 'archipelago.sel';
@@ -116,7 +117,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
   let flightAircraft = sel.aircraft;       // effective aircraft this flight
   let flightAcc = null;                    // this flight's logbook accumulator
 
-  const screens = { menu: $('#menu'), pause: $('#pause'), crash: $('#crash'), results: $('#results'), lessons: $('#lessons'), groundschool: $('#groundschool'), logbook: $('#logbook') };
+  const screens = { menu: $('#menu'), pause: $('#pause'), crash: $('#crash'), results: $('#results'), lessons: $('#lessons'), groundschool: $('#groundschool'), logbook: $('#logbook'), settings: $('#settings') };
   const showScreen = (name) => {
     for (const [k, el] of Object.entries(screens)) el.classList.toggle('show', k === name);
     hud.show(name === null);
@@ -131,6 +132,19 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
   // Populate the ground-school glossary screen once at boot (BACK -> menu via
   // the global [data-act] wiring below).
   renderGlossary($('#groundschool'), { backAct: 'menu' });
+
+  // Settings: load once, apply everywhere, re-apply + persist on every edit.
+  const settings = loadSettings();
+  const applySettingsEverywhere = () => {
+    audio.setVolume(settings.volume);
+    controls.applySettings(settings);
+    world.setPixelRatioCap?.(settings.pixelRatioCap);
+  };
+  applySettingsEverywhere();
+  renderSettings($('#settings'), {
+    settings,
+    onChange: (s) => { saveSettings(s); applySettingsEverywhere(); },
+  });
 
   // Logbook screen is re-rendered each time it opens so stats/badges are fresh.
   function refreshLogbook() {
@@ -435,6 +449,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
     menu: toMenu,
     groundschool: () => showScreen('groundschool'),
     logbook: () => { refreshLogbook(); showScreen('logbook'); },
+    settings: () => showScreen('settings'),
     // Race retry-from-gate: respawn on the approach to the last passed gate
     // rather than the runway, rewinding the clock to that gate's split.
     regate: () => {

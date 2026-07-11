@@ -148,6 +148,8 @@ const gatesAdapter = {
 const world = {
   maps: MAPS,
   aircraft: CATALOG,
+  // Settings hook: cap the render pixel ratio (high-DPI perf knob).
+  setPixelRatioCap(cap) { renderer.setPixelRatio(Math.min(window.devicePixelRatio, cap)); },
   async apply(sel) {
     await loadMap(MAPS.find(m => m.id === sel.map) || MAPS[0]);
     env.setTimeOfDay(sel.time || 'day');
