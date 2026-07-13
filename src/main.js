@@ -6,6 +6,8 @@ import { createTerrain } from './terrain.js';
 import { archipelagoMap } from './maps/archipelago.js';
 import { singaporeMap } from './maps/singapore.js';
 import { alpineMap } from './maps/alpine.js';
+import { createRealWorldMap } from './maps/realworld.js';
+import { AIRPORTS } from './maps/airports.js';
 import { CATALOG, byId } from './aircraft/catalog.js';
 import { createControls } from './controls.js';
 import { createCameraRig } from './camera.js';
@@ -23,7 +25,8 @@ import { createAutopilot } from './autopilot.js';
 import { buildGauntletCourse, GAUNTLET } from './activities.js';
 
 const PHYS_DT = 1 / 120;
-const MAPS = [archipelagoMap, singaporeMap, alpineMap];
+// Fictional maps first, then real-world airfields (streamed elevation).
+const MAPS = [archipelagoMap, singaporeMap, alpineMap, ...AIRPORTS.map(createRealWorldMap)];
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -84,6 +87,18 @@ async function loadMap(map) {
   gauntletRings?.dispose(); gauntletRings = null;
   gatesAdapter.clear();
   currentMap = map;
+  // Real-world maps stream elevation tiles; wait for the ones around the spawn
+  // before building terrain so chunks/minimap sample real ground, not sea. Caps
+  // at 12 s so a slow network degrades to a flat world rather than hanging;
+  // ready() also returns once fetches have failed, so offline resolves fast.
+  if (map.prefetch) {
+    map.prefetch(map.runway.spawn.x, map.runway.spawn.z, 3600);
+    const t0 = Date.now();
+    while (!map.ready(map.runway.spawn.x, map.runway.spawn.z, 3600) && Date.now() - t0 < 12000) {
+      await new Promise(r => setTimeout(r, 60));
+    }
+    if (map.elevationOffline) hud.message('Elevation tiles offline — flying a flat world.', 5000);
+  }
   terrain = createTerrain(scene, map);
   scenery = map.createScenery(scene);
   rings = createRings(scene, { course: map.raceCourse, heightFn: map.height, finalDir: map.finalGateDir });
@@ -300,6 +315,7 @@ function frame(now) {
   }
 
   if (!mapLoading) terrain.update(ac.pos.x, ac.pos.z);
+  if (!mapLoading && currentMap.prefetch) currentMap.prefetch(ac.pos.x, ac.pos.z, 2500);
   env.update(ac, dt, elapsed);
   camRig.update(ac, dt);
   if (isFlying) {
