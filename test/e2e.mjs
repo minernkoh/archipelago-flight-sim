@@ -525,6 +525,26 @@ const mfElev = await page.evaluate(() => {
 });
 check('mouse-fly RMB drag drives the elevator directly', mfElev.held > 0.5, JSON.stringify(mfElev));
 
+// --- v5 R1: real-world airfields registered + one loads and spawns on runway ---
+// Deterministic without network: the runway flatten makes height(spawn)==elev
+// with zero tiles, and loadMap's ready() resolves whether tiles load or fail —
+// so "spawns on the runway" holds online or offline.
+console.log('real-world terrain…');
+const rwMaps = await sim('window.__sim.world.maps.map(m => m.id)');
+check('real-world airfields registered in the map list',
+  ['changi', 'courchevel', 'innsbruck', 'queenstown', 'sanfrancisco'].every(id => rwMaps.includes(id)),
+  JSON.stringify(rwMaps));
+const flat = await sim(`(() => { const m = window.__sim.world.maps.find(m => m.id === 'changi');
+  return { h: Math.round(m.height(m.runway.spawn.x, m.runway.spawn.z)), elev: m.runway.y }; })()`);
+check('real-world runway flattens to field elevation (no tiles needed)', flat.h === flat.elev, JSON.stringify(flat));
+await page.evaluate(() => { window.__sim.game.toMenu?.(); });
+await page.evaluate(() => window.__sim.game.select({ mode: 'free', map: 'changi', aircraft: 'c172', time: 'day' }));
+await click('#btn-start');
+await page.waitForFunction('!document.querySelector("#loading").classList.contains("show") && window.__sim.game.state === "flying"', { timeout: 120000, polling: 1000 });
+await settle(800);
+const rw = await sim('({ map: window.__sim.map.id, ground: window.__sim.ac.onGround, crashed: window.__sim.ac.crashed, rwy: window.__sim.map.runway.name })');
+check('real-world Changi loads and spawns on the runway', rw.map === 'changi' && rw.ground && !rw.crashed, JSON.stringify(rw));
+
 check('no console errors', errors.length === 0, errors.slice(0, 4).join(' | '));
 
 await browser.close();

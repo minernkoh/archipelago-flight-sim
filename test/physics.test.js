@@ -464,5 +464,37 @@ import { createWind, WEATHER } from '../src/physics/wind.js';
   check('badge: nothing earned on an empty logbook', none.every(b => !b.earned));
 }
 
+// ---- Real-world tile math (v5-R1): pure projection + Terrarium decode ----
+import { makeProjection, worldPx, decodeTerrarium, bilerp, bearingToHeadingRad, metresPerPixel }
+  from '../src/maps/tilesampler.js';
+{
+  // Terrarium decode: 128,0,0 = exactly sea level; +100 g adds 100 m.
+  check('tilesampler: decode sea level', decodeTerrarium(128, 0, 0) === 0);
+  check('tilesampler: decode +100 m', decodeTerrarium(128, 100, 0) === 100, `${decodeTerrarium(128,100,0)}`);
+  check('tilesampler: decode bathymetry', decodeTerrarium(127, 156, 0) === -100, `${decodeTerrarium(127,156,0)}`);
+
+  // Bilinear blend corners + centre.
+  check('tilesampler: bilerp corner', bilerp(10, 20, 30, 40, 0, 0) === 10);
+  check('tilesampler: bilerp centre', bilerp(0, 10, 20, 30, 0.5, 0.5) === 15, `${bilerp(0,10,20,30,0.5,0.5)}`);
+
+  // Bearing -> spawn yaw is the inverse of hud.js's compass formula.
+  const compass = (h) => ((90 - h * 180 / Math.PI) % 360 + 360) % 360;
+  check('tilesampler: bearing 023 round-trips through the HUD formula',
+    Math.abs(compass(bearingToHeadingRad(23)) - 23) < 1e-9, `${compass(bearingToHeadingRad(23))}`);
+  check('tilesampler: bearing 284 round-trips', Math.abs(compass(bearingToHeadingRad(284)) - 284) < 1e-9);
+
+  // Web-Mercator projection: origin maps to its own pixel; z0 equator resolution
+  // is the textbook 156543 m/px; local ENU offset scales by metres-per-pixel.
+  check('tilesampler: z0 equator resolution', Math.abs(metresPerPixel(0, 0) - 156543.03392) < 0.01, `${metresPerPixel(0,0)}`);
+  const proj = makeProjection(45.3967, 6.6347, 13); // Courchevel
+  const o = proj.toPixel(0, 0);
+  check('tilesampler: ENU origin maps to origin pixel',
+    Math.abs(o.gpx - proj.gpx0) < 1e-9 && Math.abs(o.gpy - proj.gpy0) < 1e-9);
+  const east = proj.toPixel(proj.mpp, 0);  // 1 pixel east
+  check('tilesampler: +east moves +1 px, +south moves +1 py',
+    Math.abs(east.gpx - (proj.gpx0 + 1)) < 1e-9 && Math.abs(proj.toPixel(0, proj.mpp).gpy - (proj.gpy0 + 1)) < 1e-9);
+  check('tilesampler: worldPx z13', worldPx(13) === 256 * 8192);
+}
+
 console.log(failures === 0 ? '\nAll physics checks passed.' : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

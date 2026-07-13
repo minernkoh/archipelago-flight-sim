@@ -8,6 +8,7 @@ import { runwayFrame } from './runwayUtil.js';
 import { createComfortMeter, createManeuverDetector, GAUNTLET } from './activities.js';
 import { loadLogbook, saveLogbook, accumulate, renderLogbook } from './logbook.js';
 import { loadSettings, saveSettings, renderSettings } from './settings.js';
+import { AIRPORTS } from './maps/airports.js';
 
 const $ = (s) => document.querySelector(s);
 const SEL_KEY = 'archipelago.sel';
@@ -19,6 +20,8 @@ const MAP_DESC = {
   archipelago: 'procedural islands, one strip of asphalt',
   singapore: 'stylised city-state — Changi to Marina Bay',
   alpine: 'high valley airstrip ringed by jagged peaks',
+  // Real-world airfields (streamed elevation) — descriptions from airports.js.
+  ...Object.fromEntries(AIRPORTS.map(a => [a.id, a.desc])),
 };
 
 // Human-terms numbers derived from the physics params (never hand-maintained):
