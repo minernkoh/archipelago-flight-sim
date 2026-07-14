@@ -57,6 +57,7 @@ const WEATHERS = [
   { id: 'calm', label: 'CALM', hint: 'still air' },
   { id: 'breezy', label: 'BREEZY', hint: '8 kt, light gusts' },
   { id: 'gusty', label: 'GUSTY', hint: '16 kt gusting 28 — hold on' },
+  { id: 'live', label: 'LIVE', hint: 'real current weather at this field' },
 ];
 
 // Time-of-day drives environment.js lighting (fog, sun, exposure) + night content.

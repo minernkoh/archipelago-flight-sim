@@ -19,6 +19,7 @@ import { createGameFlow } from './modes.js';
 import { createTrainingSystem } from './training.js';
 import { createEffects } from './effects.js';
 import { createWind, WEATHER } from './physics/wind.js';
+import { fetchLiveWeather } from './liveweather.js';
 import { createMinimap } from './minimap.js';
 import { createPanel } from './panel.js';
 import { createAutopilot } from './autopilot.js';
@@ -160,6 +161,32 @@ const gatesAdapter = {
   active() { return trainGates ? trainGates.active : 0; },
 };
 
+// Nominal coordinates so LIVE weather works on the fictional maps too; the
+// real-world maps carry their own map.latLon.
+const NOMINAL_LL = {
+  archipelago: { lat: 10.5, lon: -60.0 },
+  singapore: { lat: 1.36, lon: 103.99 },
+  alpine: { lat: 46.0, lon: 7.0 },
+};
+const mapLatLon = (map) => map.latLon || NOMINAL_LL[map.id] || { lat: 1.36, lon: 103.99 };
+
+// Fire-and-forget: fetch real conditions and apply them; fall back to calm on
+// any failure. Not awaited by world.apply, so a slow/offline API never delays
+// the flight — the wind just updates a moment later.
+async function applyLiveWeather(map) {
+  const ll = mapLatLon(map);
+  try {
+    const w = await fetchLiveWeather(ll.lat, ll.lon);
+    windField.set(w.wind);
+    env.setWeather(w.vis);
+    hud.message(`Live weather · ${w.wind.kts} kt from ${String(w.wind.dirDeg).padStart(3, '0')}°${w.clamped ? ' (capped for flyability)' : ''}.`, 5200);
+  } catch {
+    windField.set({ ...WEATHER.calm, dirDeg: Math.round(Math.random() * 360) });
+    env.resetWeather();
+    hud.message('Live weather unavailable — calm winds.', 4500);
+  }
+}
+
 const world = {
   maps: MAPS,
   aircraft: CATALOG,
@@ -169,8 +196,16 @@ const world = {
     await loadMap(MAPS.find(m => m.id === sel.map) || MAPS[0]);
     env.setTimeOfDay(sel.time || 'day');
     setAircraft(byId(sel.aircraft));
-    // fresh wind each flight: preset strength, semi-random direction
-    windField.set({ ...(WEATHER[sel.weather] || WEATHER.calm), dirDeg: Math.round(Math.random() * 360) });
+    if (sel.weather === 'live') {
+      // Neutral until the async fetch resolves — never block flight start on it.
+      windField.set({ kts: 0, gustKts: 0, turb: 0, dirDeg: Math.round(Math.random() * 360) });
+      env.resetWeather();
+      applyLiveWeather(currentMap);
+    } else {
+      // fresh preset wind each flight: preset strength, semi-random direction
+      windField.set({ ...(WEATHER[sel.weather] || WEATHER.calm), dirDeg: Math.round(Math.random() * 360) });
+      env.resetWeather();
+    }
     if (sel.mode === 'gauntlet') {
       gauntletRings?.dispose();
       gauntletRings = createRings(scene, {
@@ -219,7 +254,7 @@ controls.on('ap-ias', () => { if (flying()) autopilot.toggleIas(ac, controls); }
 controls.on('ap-nav', () => { if (flying()) autopilot.toggleNav(ac); });
 controls.on('ap-wing', () => { if (flying()) autopilot.toggleWing(ac); });
 
-window.__sim = { ac, controls, game, world, autopilot, env,
+window.__sim = { ac, controls, game, world, autopilot, env, windField,
   get rings() { return gauntletRings || rings; }, get map() { return currentMap; } };
 
 // --- boot: pre-build terrain around the spawn, then reveal the menu ---
