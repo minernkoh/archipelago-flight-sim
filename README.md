@@ -1,6 +1,6 @@
 # Archipelago Flight Sim
 
-A browser flight simulator built with **Three.js** — 5 aircraft, a procedural archipelago plus a stylized Singapore, ring races, and a PPL-style flight school.
+A browser flight simulator built with **Three.js**
 
 ## Features
 
@@ -32,6 +32,3 @@ test/           # physics + e2e tests
 package.json
 ```
 
-## Status
-
-Personal project, actively developed. See `CLAUDE.md` for the current phase roadmap.
