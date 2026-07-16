@@ -68,6 +68,13 @@ export function createAircraft(opts = {}) {
     fuelFrac: 1,
     iasIndicated: 0,
     systems: { engine: true, electrical: true, hydraulics: true, gear: true, pitot: true },
+    // v5-R3: piston start/electrical state (only exercised for p.startup aircraft).
+    // Defaults are ready-to-fly so every existing caller spawns hot.
+    sys: { battery: true, mags: 'BOTH', mixture: 1 }, // player switch positions
+    engineRunning: true,   // is the engine actually turning under its own power
+    batteryCharge: 1,      // 0..1; alternator recharges, loads drain
+    crankT: 0,             // seconds the starter has been engaged
+    avionics: true,        // electrical power to instruments (battery or alternator)
   };
   // `ac.engineFailed` is a bidirectional alias of `systems.engine === false` so
   // existing callers (training.js lessons 8-9, wind.js, the reset path, the fuel
@@ -92,6 +99,44 @@ export function resetSystems(ac) {
   ac.systems.hydraulics = true;  // no-op consequence until a later phase
   ac.systems.gear = true;        // no-op consequence until a later phase
   ac.systems.pitot = true;
+  // Ready-to-fly: master on, mags BOTH, mixture rich, engine turning, full battery.
+  ac.sys = { battery: true, mags: 'BOTH', mixture: 1 };
+  ac.engineRunning = true; ac.batteryCharge = 1; ac.crankT = 0; ac.avionics = true;
+}
+
+// Cold & dark (v5-R3): master OFF, mags OFF, mixture cut, engine stopped. The
+// player must run the start sequence. Battery is charged — it's just switched off.
+export function setColdStart(ac) {
+  ac.sys = { battery: false, mags: 'OFF', mixture: 0 };
+  ac.engineRunning = false; ac.spool = 0; ac.crankT = 0;
+  ac.batteryCharge = 1; ac.avionics = false;
+}
+
+// Piston start/electrical state machine. Only meaningful for p.startup aircraft;
+// everything else just mirrors the engineFailed flag so behaviour is unchanged.
+export function updateEngineSystems(ac, dt) {
+  const p = ac.p;
+  if (!p.startup) { ac.engineRunning = !ac.engineFailed; ac.avionics = true; return; }
+  const s = ac.sys;
+  const magsHot = s.mags === 'L' || s.mags === 'R' || s.mags === 'BOTH' || s.mags === 'START';
+  const mixOk = s.mixture > 0.3;
+  const fuelOk = ac.fuelKg > 0;
+  if (ac.engineRunning) {
+    // Runs on its own magnetos; quits if mags cut, mixture starved, out of fuel, or failed.
+    if (!magsHot || !mixOk || !fuelOk || ac.engineFailed) ac.engineRunning = false;
+  } else if (s.mags === 'START' && s.battery && ac.batteryCharge > 0.12 && mixOk && fuelOk && !ac.engineFailed) {
+    ac.crankT += dt;                       // starter cranking
+    if (ac.crankT > 1.6) { ac.engineRunning = true; ac.crankT = 0; }
+  } else {
+    ac.crankT = 0;
+  }
+  // Battery: alternator recharges while running; loads (and the starter) drain it when off.
+  if (s.battery) {
+    const rate = ac.engineRunning ? -0.05 : (0.008 + (s.mags === 'START' ? 0.06 : 0)); // per second
+    ac.batteryCharge = Math.max(0, Math.min(1, ac.batteryCharge - rate * dt));
+  }
+  // Instruments have power from the battery (while charged) or the running alternator.
+  ac.avionics = s.battery && (ac.batteryCharge > 0.1 || ac.engineRunning);
 }
 
 // controls: { elevator -1..1 (+=nose up), aileron -1..1 (+=roll right),
@@ -137,7 +182,11 @@ export function step(ac, controls, env, dt) {
   // --- Thrust: engine spools toward commanded throttle with lag tau ---
   const densityRatio = rho / RHO0;
   const eng = p.engine;
-  const cmdThrottle = ac.engineFailed ? 0 : controls.throttle; // trainer can fail the engine
+  // v5-R3: update the piston start/electrical state (no-op for hot aircraft).
+  updateEngineSystems(ac, dt);
+  // A startup aircraft only makes power when actually running; failed engine cuts all.
+  const noPower = ac.engineFailed || (p.startup && !ac.engineRunning);
+  const cmdThrottle = noPower ? 0 : controls.throttle;
   ac.spool += (cmdThrottle - ac.spool) * (1 - Math.exp(-dt / eng.tau));
   let thrust;
   if (eng.type === 'jet') {
@@ -149,7 +198,8 @@ export function step(ac, controls, env, dt) {
     const thrustAvail = Math.min(eng.staticThrust, eng.propEff * eng.powerW / Math.max(V, 12));
     thrust = ac.spool * thrustAvail * densityRatio;
     ac.abOn = false;
-    ac.rpmNorm = 0.25 + 0.75 * ac.spool;
+    if (p.startup && !ac.engineRunning) ac.rpmNorm = ac.crankT > 0 ? 0.1 : 0; // cranking blip or dead prop
+    else ac.rpmNorm = 0.25 + 0.75 * ac.spool;
   }
   F = vAdd(F, v3(thrust, 0, 0));
   ac.thrust = thrust;

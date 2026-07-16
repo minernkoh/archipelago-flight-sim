@@ -568,6 +568,31 @@ const liveWx = await sim('window.__sim.windField.get()');
 check('LIVE weather applies real wind (12 kt from 210)', liveWx.kts === 12 && liveWx.dirDeg === 210, JSON.stringify(liveWx));
 await page.evaluate(() => { if (window.__origFetch) window.fetch = window.__origFetch; });
 
+// --- v5 R3: cold & dark C172 + the start sequence brings the engine to life ---
+console.log('cold & dark…');
+await page.evaluate(() => document.querySelector('#menu-foot [data-act="settings"]').click());
+await page.evaluate(() => document.querySelector('#settings [data-setting="coldDark"]').click());
+await page.evaluate(() => document.querySelector('#settings [data-act="menu"]').click());
+await page.evaluate(() => window.__sim.game.select({ mode: 'free', map: 'archipelago', aircraft: 'c172', time: 'day', weather: 'calm' }));
+await click('#btn-start');
+await page.waitForFunction('!document.querySelector("#loading").classList.contains("show") && window.__sim.game.state === "flying"', { timeout: 120000, polling: 1000 });
+await settle(800);
+const cold = await sim('({ running: __sim.ac.engineRunning, avionics: __sim.ac.avionics, mags: __sim.ac.sys.mags, panelShown: document.querySelector("#ap-sixpack").classList.contains("ap-visible"), chk: document.querySelector("#ap-sixpack").classList.contains("ap-show-chk") })');
+check('cold & dark spawns engine-off with the panel + checklist up',
+  !cold.running && cold.avionics === false && cold.mags === 'OFF' && cold.panelShown && cold.chk, JSON.stringify(cold));
+// run the real sequence through the switch state (battery, mixture, crank, release)
+await page.evaluate(() => { const s = window.__sim.ac.sys; s.battery = true; s.mixture = 1; s.mags = 'START'; });
+await settle(2600);
+await page.evaluate(() => { window.__sim.ac.sys.mags = 'BOTH'; window.__sim.controls.state.throttle = 0.3; });
+await settle(1200);
+const hotNow = await sim('({ running: __sim.ac.engineRunning, avionics: __sim.ac.avionics, thrust: Math.round(__sim.ac.thrust) })');
+check('start sequence brings the engine to life', hotNow.running && hotNow.avionics && hotNow.thrust > 100, JSON.stringify(hotNow));
+// restore: cold & dark OFF for anything after
+await page.evaluate(() => { window.__sim.game.toMenu?.(); });
+await page.evaluate(() => document.querySelector('#menu-foot [data-act="settings"]').click());
+await page.evaluate(() => document.querySelector('#settings [data-setting="coldDark"]').click());
+await page.evaluate(() => document.querySelector('#settings [data-act="menu"]').click());
+
 check('no console errors', errors.length === 0, errors.slice(0, 4).join(' | '));
 
 await browser.close();

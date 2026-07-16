@@ -19,6 +19,7 @@ export const AIRCRAFT = {
     Cnbeta: 0.11, Cnr: -0.14, Cndr: 0.075, CnAdverse: 0.012,
     engine: { type: 'prop', tau: 0.15, powerW: 134000, propEff: 0.75, staticThrust: 2250 },
     fuel: { capacityKg: 180, tsfc: 1.0e-5 },   // ~56 US gal usable; piston, low burn
+    startup: true,   // v5-R3: study-level cold-start (battery/mags/mixture/starter)
     sas: null,
     maxSpeed: 88, gearHeight: 1.25,
     crashSink: 3.6, maxSteer: 0.38,

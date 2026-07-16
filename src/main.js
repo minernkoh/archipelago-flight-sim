@@ -226,7 +226,7 @@ const world = {
 };
 
 const fx = createEffects(scene);
-const game = createGameFlow({ ac, hud, audio, controls, camRig, world, fx, autopilot });
+const game = createGameFlow({ ac, hud, audio, controls, camRig, world, fx, autopilot, panel });
 setAircraft(byId('c172'));
 hud.setCamera(camRig.modeName);
 

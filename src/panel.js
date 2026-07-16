@@ -313,6 +313,42 @@ const STYLE = `
 .ap-tube { fill: #0c1116; stroke: var(--ink-dim, #9aa7b2); stroke-width: 1; }
 .ap-tube-ref { stroke: var(--ink-dim, #9aa7b2); stroke-width: 1.4; }
 .ap-ball { fill: var(--ink, #e8edf2); stroke: var(--ink-dim, #9aa7b2); stroke-width: 1; }
+/* v5-R3: unpowered avionics dim the gauge faces */
+.ap-panel.ap-unpowered .ap-svg { opacity: .26; }
+/* engine-management switch strip (C172 study level) */
+.ap-switches {
+  display: none; pointer-events: auto; margin-top: .35rem;
+  background: rgba(16,21,26,.85); border: 1px solid rgba(232,237,242,.25);
+  border-left: 3px solid #ffb300; padding: .35rem .5rem;
+  font-family: "B612 Mono", ui-monospace, monospace; font-size: .58rem;
+  letter-spacing: .12em; color: #9aa7b2;
+  gap: .5rem; align-items: center; justify-content: center; flex-wrap: wrap;
+}
+.ap-panel.ap-has-sys .ap-switches { display: flex; }
+.ap-sw {
+  background: #10151a; color: #9aa7b2; border: 1px solid rgba(232,237,242,.3);
+  font: inherit; letter-spacing: .12em; padding: .3rem .55rem; cursor: pointer;
+}
+.ap-sw.on { color: #ffb300; border-color: #ffb300; }
+.ap-sw:active { transform: translateY(1px); }
+.ap-batt { display: inline-block; width: 3.2rem; height: .45rem;
+  border: 1px solid rgba(232,237,242,.3); vertical-align: middle; }
+.ap-batt i { display: block; height: 100%; background: #63d97c; }
+.ap-batt.low i { background: #ff5b45; }
+/* live checklist card (shown while cold & dark) */
+.ap-chk {
+  display: none; pointer-events: none; margin-bottom: .35rem;
+  background: rgba(16,21,26,.85); border: 1px solid rgba(232,237,242,.25);
+  border-left: 3px solid #ffb300; padding: .4rem .6rem;
+  font-family: "B612 Mono", ui-monospace, monospace; font-size: .6rem;
+  letter-spacing: .1em; color: #9aa7b2;
+}
+.ap-panel.ap-show-chk .ap-chk { display: block; }
+.ap-chk .t { color: #e8edf2; letter-spacing: .2em; margin-bottom: .2rem; }
+.ap-chk li { list-style: none; margin: .12rem 0; }
+.ap-chk li.done { color: #63d97c; }
+.ap-chk li.done::before { content: '\\2713  '; }
+.ap-chk li::before { content: '\\25CB  '; }
 `;
 
 let styleInjected = false;
@@ -344,6 +380,8 @@ export function createPanel() {
   let root = null;       // container div
   let visible = false;
   const updaters = {};   // gauge-name -> update closure
+  // v5-R3 engine-management UI state
+  let chkEl = null, swEl = null, curAc = null, runSince = null;
 
   function mount(parentEl) {
     if (root) return root; // idempotent
@@ -375,12 +413,78 @@ export function createPanel() {
     updaters.vsi = buildVSI(gVsi, COLS[2], ROWS[1]);
 
     root.appendChild(svg);
+
+    // v5-R3: live start checklist (above the gauges) + engine-management
+    // switches (below). Only shown for aircraft with p.startup (the C172).
+    chkEl = document.createElement('div');
+    chkEl.className = 'ap-chk';
+    chkEl.innerHTML = `<div class="t">START CHECKLIST</div><ul>
+      <li data-chk="bat">Battery master — ON</li>
+      <li data-chk="mix">Mixture — RICH</li>
+      <li data-chk="start">Hold START until the engine catches</li>
+      <li data-chk="run">Engine running — throttle when ready</li></ul>`;
+    root.insertBefore(chkEl, svg);
+
+    swEl = document.createElement('div');
+    swEl.className = 'ap-switches';
+    swEl.innerHTML =
+      `<button class="ap-sw" data-sw="bat">BAT</button>` +
+      `<span class="ap-batt"><i style="width:100%"></i></span>` +
+      `<button class="ap-sw" data-sw="mags">MAGS BOTH</button>` +
+      `<button class="ap-sw" data-sw="start">START</button>` +
+      `<button class="ap-sw" data-sw="mix">MIX RICH</button>`;
+    root.appendChild(swEl);
+    const sw = (n) => swEl.querySelector(`[data-sw="${n}"]`);
+    sw('bat').addEventListener('click', () => { if (curAc) curAc.sys.battery = !curAc.sys.battery; });
+    sw('mix').addEventListener('click', () => { if (curAc) curAc.sys.mixture = curAc.sys.mixture > 0.3 ? 0 : 1; });
+    const MAG_CYCLE = ['OFF', 'R', 'L', 'BOTH'];
+    sw('mags').addEventListener('click', () => {
+      if (!curAc || curAc.sys.mags === 'START') return;
+      curAc.sys.mags = MAG_CYCLE[(MAG_CYCLE.indexOf(curAc.sys.mags) + 1) % MAG_CYCLE.length];
+    });
+    // START is a spring-loaded key: held = cranking, released = BOTH.
+    const startDown = () => { if (curAc) curAc.sys.mags = 'START'; };
+    const startUp = () => { if (curAc && curAc.sys.mags === 'START') curAc.sys.mags = 'BOTH'; };
+    sw('start').addEventListener('pointerdown', startDown);
+    sw('start').addEventListener('pointerup', startUp);
+    sw('start').addEventListener('pointerleave', startUp);
+
     parent.appendChild(root);
     return root;
   }
 
   function update(ac) {
     if (!root || !ac) return;
+    curAc = ac;
+
+    // v5-R3: engine-management strip + checklist + unpowered dimming.
+    const hasSys = !!ac.p?.startup;
+    root.classList.toggle('ap-has-sys', hasSys);
+    root.classList.toggle('ap-unpowered', hasSys && ac.avionics === false);
+    if (hasSys && swEl) {
+      const s = ac.sys || {};
+      const q = (n) => swEl.querySelector(`[data-sw="${n}"]`);
+      q('bat').classList.toggle('on', !!s.battery);
+      q('mix').classList.toggle('on', s.mixture > 0.3);
+      q('mix').textContent = s.mixture > 0.3 ? 'MIX RICH' : 'MIX CUT';
+      q('mags').classList.toggle('on', s.mags !== 'OFF');
+      q('mags').textContent = 'MAGS ' + (s.mags === 'START' ? 'START' : s.mags);
+      q('start').classList.toggle('on', s.mags === 'START');
+      const bar = swEl.querySelector('.ap-batt');
+      bar.classList.toggle('low', ac.batteryCharge < 0.25);
+      bar.firstElementChild.style.width = `${Math.round(safeNum(ac.batteryCharge, 0) * 100)}%`;
+      // checklist: visible while cold; ticks live; hides a few s after start
+      if (ac.engineRunning) { if (runSince == null) runSince = Date.now(); }
+      else runSince = null;
+      root.classList.toggle('ap-show-chk', visible && (!ac.engineRunning || Date.now() - runSince < 5000));
+      const tick = (n, done) => chkEl.querySelector(`[data-chk="${n}"]`).classList.toggle('done', !!done);
+      tick('bat', s.battery);
+      tick('mix', s.mixture > 0.3);
+      tick('start', ac.engineRunning || ac.crankT > 0.2);
+      tick('run', ac.engineRunning);
+    } else {
+      root.classList.remove('ap-show-chk');
+    }
 
     const iasKt = safeNum(ac.iasIndicated, 0) * KT;
     const altFt = safeNum(ac?.pos?.y, 0) * FT;

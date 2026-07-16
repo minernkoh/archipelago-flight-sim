@@ -221,6 +221,8 @@ export function createHUD() {
       }
     },
     update(ac, controls, dt, ringBearing) {
+      // v5-R3: no electrical power -> the glass HUD goes dark (panel dims too).
+      $('#hud').classList.toggle('unpowered', ac.avionics === false);
       const kt = ac.airspeed * KT;
       const altFt = ac.pos.y * FT;
       setSpd(kt); setAlt(altFt);

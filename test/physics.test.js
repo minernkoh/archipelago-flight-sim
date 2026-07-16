@@ -512,5 +512,71 @@ import { mapWeather } from '../src/liveweather.js';
   check('liveweather: empty response -> calm, no NaNs', still.wind.kts === 0 && still.wind.gustKts === 0 && Number.isFinite(still.wind.turb));
 }
 
+// ---- Study-level C172 start/electrical (v5-R3) ----
+import { setColdStart } from '../src/physics/flightModel.js';
+{
+  const flatEnv = { groundHeight: () => 0, isRunway: () => true };
+  const mk = () => {
+    const a = createAircraft({ params: AIRCRAFT.c172, pos: v3(0, 1.3, 0), vel: v3(0, 0, 0) });
+    setColdStart(a);
+    return a;
+  };
+  const run = (a, c, secs) => { for (let i = 0; i < secs * 120; i++) step(a, { throttle: 0, elevator: 0, aileron: 0, rudder: 0, flaps: 0, trim: 0, brakes: true, ...c }, flatEnv, 1 / 120); };
+
+  // Cold & dark: nothing happens without the sequence.
+  const a1 = mk();
+  run(a1, { throttle: 1 }, 3);
+  check('coldstart: throttle alone does nothing cold & dark', !a1.engineRunning && a1.thrust < 1, `thrust ${a1.thrust.toFixed(1)}`);
+
+  // Starter without battery: no crank.
+  const a2 = mk();
+  a2.sys.mags = 'START'; a2.sys.mixture = 1;
+  run(a2, {}, 3);
+  check('coldstart: starter needs the battery master ON', !a2.engineRunning);
+
+  // Starter without mixture: cranks but never catches.
+  const a3 = mk();
+  a3.sys.battery = true; a3.sys.mags = 'START'; a3.sys.mixture = 0;
+  run(a3, {}, 3);
+  check('coldstart: no mixture -> cranks, never catches', !a3.engineRunning);
+
+  // Full correct sequence: battery ON, mixture rich, mags START ~2 s -> running.
+  const a4 = mk();
+  a4.sys.battery = true; a4.sys.mixture = 1; a4.sys.mags = 'START';
+  run(a4, {}, 2.5);
+  a4.sys.mags = 'BOTH'; // release the key
+  run(a4, { throttle: 0.3 }, 2);
+  check('coldstart: correct sequence starts the engine', a4.engineRunning && a4.thrust > 100, `thrust ${a4.thrust.toFixed(0)}`);
+
+  // Cutting the mags kills a running engine.
+  a4.sys.mags = 'OFF';
+  run(a4, { throttle: 0.5 }, 1.5);
+  check('coldstart: mags OFF kills the engine', !a4.engineRunning && a4.thrust < 50, `thrust ${a4.thrust.toFixed(0)}`);
+
+  // Battery drains with master on + engine off; avionics die on a dead battery.
+  const a5 = mk();
+  a5.sys.battery = true;
+  a5.batteryCharge = 0.12;
+  run(a5, {}, 10);
+  check('coldstart: master-on engine-off drains the battery', a5.batteryCharge < 0.12, `charge ${a5.batteryCharge.toFixed(3)}`);
+  a5.batteryCharge = 0.05;
+  run(a5, {}, 0.2);
+  check('coldstart: dead battery -> avionics unpowered', a5.avionics === false);
+
+  // Alternator recharges in flight; resetOnRunway restores ready-to-fly.
+  const a6 = mk();
+  a6.sys.battery = true; a6.sys.mixture = 1; a6.sys.mags = 'BOTH';
+  a6.engineRunning = true; a6.batteryCharge = 0.5;
+  run(a6, { throttle: 0.6, brakes: false }, 5);
+  check('coldstart: alternator recharges while running', a6.batteryCharge > 0.5, `charge ${a6.batteryCharge.toFixed(3)}`);
+  resetOnRunway(a6, { x: 0, z: 0, y: 0, headingRad: 0 });
+  check('coldstart: resetOnRunway restores ready-to-fly', a6.engineRunning && a6.sys.mags === 'BOTH' && a6.avionics);
+
+  // Hot aircraft without p.startup are untouched by the machinery.
+  const hot = createAircraft({ params: AIRCRAFT.hornet, pos: v3(0, 1000, 0), vel: v3(150, 0, 0) });
+  run(hot, { throttle: 1, brakes: false }, 2);
+  check('coldstart: non-startup aircraft unaffected', hot.engineRunning && hot.thrust > 1000);
+}
+
 console.log(failures === 0 ? '\nAll physics checks passed.' : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

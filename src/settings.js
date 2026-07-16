@@ -13,6 +13,7 @@ export const DEFAULTS = {
   pixelRatioCap: 2,    // renderer.setPixelRatio(min(devicePixelRatio, cap))
   mouseFly: true,      // hold right mouse button = stick
   gamepad: true,       // first connected gamepad drives the primary axes
+  coldDark: false,     // v5-R3: C172 spawns shut down; run the start checklist
 };
 
 export function loadSettings() {
@@ -36,6 +37,8 @@ const ROWS = [
     values: [true, false], fmt: v => v ? 'ON' : 'OFF' },
   { id: 'gamepad', label: 'GAMEPAD', hint: 'left stick pitch/roll, right stick rudder/throttle',
     values: [true, false], fmt: v => v ? 'ON' : 'OFF' },
+  { id: 'coldDark', label: 'COLD & DARK', hint: 'Skyhawk spawns shut down — run the real start checklist (I opens the panel)',
+    values: [false, true], fmt: v => v ? 'ON' : 'OFF' },
 ];
 
 // Populate the #settings screen. onChange(next) fires with the full settings

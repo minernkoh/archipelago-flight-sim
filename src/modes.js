@@ -1,7 +1,7 @@
 // Game flow: menu (mode/map/aircraft selection) / free flight / ring race /
 // pause / crash / results. World swapping is delegated to main.js via `world`.
 
-import { resetOnRunway, KT, FT } from './physics/flightModel.js';
+import { resetOnRunway, setColdStart, KT, FT } from './physics/flightModel.js';
 import { createTour } from './tour.js';
 import { renderGlossary } from './groundschool.js';
 import { runwayFrame } from './runwayUtil.js';
@@ -102,7 +102,7 @@ function crashWhy(snap, reason) {
   }
 }
 
-export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, autopilot }) {
+export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, autopilot, panel }) {
   let crashT = null; // delay before the crash screen so the debris burst reads
   let state = 'menu';           // menu | flying | paused | crash | results
   let sel = { mode: 'free', map: 'archipelago', aircraft: 'c172', weather: 'calm', time: 'day' };
@@ -298,6 +298,14 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
       freestyle: `${FREESTYLE_SECONDS}s of open sky — loops, rolls, barrel rolls. We'll name what we see.`,
     }[sel.mode] || `Runway ${rwy} — full throttle <b>W</b>, rotate with <b>&uarr;</b>.`;
     hud.message(msg, 5200);
+    // v5-R3: cold & dark spawn (free flight, startup-capable aircraft only — the
+    // clock-driven modes and lessons keep the engine hot). Auto-opens the panel
+    // so the switches + live checklist sit in front of the player.
+    if (settings.coldDark && ac.p.startup && sel.mode === 'free') {
+      setColdStart(ac);
+      panel?.setVisible(true);
+      hud.message('Cold &amp; dark — run the START CHECKLIST on the panel below.', 6800);
+    }
     if (sel.mode === 'race') hud.countdown(); // visual 3-2-1-GO; clock still arms on roll
     tour.offerOnce(); // first flight ever: auto-open the guided HUD tour
   }
