@@ -139,17 +139,23 @@ const hudState = await page.evaluate(() => ({
 }));
 check('HUD live', hudState.hudOn && Number(hudState.spd) > 30, `IAS ${hudState.spd} kt`);
 
-// --- U7: minimap toggles with M (assert via DOM/state, not pixels) ---
+// --- U7 + v5-R4: M cycles off -> chart -> GPS -> off (DOM/state, not pixels) ---
 const mmExists = await sim('!!document.querySelector("#minimap")');
 const mmBefore = await sim('document.querySelector("#minimap").classList.contains("on")');
+const mmOnEl = () => sim('document.querySelector("#minimap").classList.contains("on")');
 await press('m');
 await settle(500);
-const mmOn = await sim('document.querySelector("#minimap").classList.contains("on")');
+const mmChart = { on: await mmOnEl(), mode: await sim('window.__sim.minimap.mode') };
 await press('m');
 await settle(500);
-const mmOff = await sim('document.querySelector("#minimap").classList.contains("on")');
-check('minimap toggles with M', mmExists && !mmBefore && mmOn && !mmOff,
-  `exists=${mmExists} before=${mmBefore} on=${mmOn} off=${mmOff}`);
+const mmGps = { on: await mmOnEl(), mode: await sim('window.__sim.minimap.mode') };
+await press('m');
+await settle(500);
+const mmOff = { on: await mmOnEl(), mode: await sim('window.__sim.minimap.mode') };
+check('M cycles minimap off -> chart -> GPS -> off',
+  mmExists && !mmBefore && mmChart.on && mmChart.mode === 1
+  && mmGps.on && mmGps.mode === 2 && !mmOff.on && mmOff.mode === 0,
+  `before=${mmBefore} chart=${JSON.stringify(mmChart)} gps=${JSON.stringify(mmGps)} off=${JSON.stringify(mmOff)}`);
 
 // --- G1: instrument six-pack toggles with I (assert via DOM class, not pixels) ---
 const panelExists = await sim('!!document.querySelector("#ap-sixpack")');
@@ -592,6 +598,32 @@ await page.evaluate(() => { window.__sim.game.toMenu?.(); });
 await page.evaluate(() => document.querySelector('#menu-foot [data-act="settings"]').click());
 await page.evaluate(() => document.querySelector('#settings [data-setting="coldDark"]').click());
 await page.evaluate(() => document.querySelector('#settings [data-act="menu"]').click());
+
+// --- v5 R4: flight planner — click waypoints, fly plan, persistence ---
+console.log('flight planner…');
+await page.evaluate(() => localStorage.removeItem('archipelago.plan.archipelago'));
+await page.evaluate(() => document.querySelector('#menu-foot [data-act="plan"]').click());
+await settle(400);
+const planOpen = await sim('document.querySelector("#plan").classList.contains("show") && !!document.querySelector("#pl-canvas")');
+check('flight-plan screen opens with the map canvas', planOpen === true);
+await page.evaluate(() => {
+  const cv = document.querySelector('#pl-canvas');
+  const r = cv.getBoundingClientRect();
+  const clickAt = (fx, fy) => cv.dispatchEvent(new MouseEvent('click', {
+    clientX: r.left + r.width * fx, clientY: r.top + r.height * fy, bubbles: true }));
+  clickAt(0.62, 0.42);
+  clickAt(0.72, 0.6);
+});
+const planState = await page.evaluate(() => ({
+  rows: document.querySelectorAll('#pl-list li:not(.pl-empty)').length,
+  saved: (JSON.parse(localStorage.getItem('archipelago.plan.archipelago') || '[]')).length,
+}));
+check('two clicked waypoints appear in the list and persist', planState.rows === 2 && planState.saved === 2, JSON.stringify(planState));
+await page.evaluate(() => document.querySelector('#pl-fly').click());
+const apPlan = await sim('({ len: window.__sim.autopilot.planLength })');
+check('FLY PLAN loads the route into the autopilot', apPlan.len === 2, JSON.stringify(apPlan));
+await page.evaluate(() => document.querySelector('#pl-clear').click());
+await page.evaluate(() => document.querySelector('#plan [data-act="menu"]').click());
 
 check('no console errors', errors.length === 0, errors.slice(0, 4).join(' | '));
 

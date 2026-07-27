@@ -8,6 +8,7 @@ import { runwayFrame } from './runwayUtil.js';
 import { createComfortMeter, createManeuverDetector, GAUNTLET } from './activities.js';
 import { loadLogbook, saveLogbook, accumulate, renderLogbook } from './logbook.js';
 import { loadSettings, saveSettings, renderSettings } from './settings.js';
+import { createPlanner } from './planner.js';
 import { AIRPORTS } from './maps/airports.js';
 
 const $ = (s) => document.querySelector(s);
@@ -121,7 +122,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
   let flightAircraft = sel.aircraft;       // effective aircraft this flight
   let flightAcc = null;                    // this flight's logbook accumulator
 
-  const screens = { menu: $('#menu'), pause: $('#pause'), crash: $('#crash'), results: $('#results'), lessons: $('#lessons'), groundschool: $('#groundschool'), logbook: $('#logbook'), settings: $('#settings') };
+  const screens = { menu: $('#menu'), pause: $('#pause'), crash: $('#crash'), results: $('#results'), lessons: $('#lessons'), groundschool: $('#groundschool'), logbook: $('#logbook'), settings: $('#settings'), plan: $('#plan') };
   const showScreen = (name) => {
     for (const [k, el] of Object.entries(screens)) el.classList.toggle('show', k === name);
     hud.show(name === null);
@@ -149,6 +150,24 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
     settings,
     onChange: (s) => { saveSettings(s); applySettingsEverywhere(); },
   });
+
+  // Flight planner (v5-R4): plans on the PLAN screen; DIRECT-TO/FLY PLAN feed
+  // the autopilot; NAV engages automatically if already airborne.
+  const planner = createPlanner({
+    getMap: () => map || world.maps.find(m => m.id === sel.map) || world.maps[0],
+    getAc: () => ac,
+    autopilot,
+    onFlyPlan: (kind) => {
+      if (state === 'flying') {
+        autopilot.engageNav();
+        showScreen(null);
+        hud.message(kind === 'direct' ? 'Direct-to engaged — NAV is steering.' : 'Plan loaded — NAV is steering.', 4200);
+      } else {
+        hud.message('Plan loaded — engage NAV (<b>N</b>) once airborne.', 4200);
+      }
+    },
+  });
+  planner.mount($('#plan'));
 
   // Logbook screen is re-rendered each time it opens so stats/badges are fresh.
   function refreshLogbook() {
@@ -462,6 +481,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
     groundschool: () => showScreen('groundschool'),
     logbook: () => { refreshLogbook(); showScreen('logbook'); },
     settings: () => showScreen('settings'),
+    plan: () => { planner.refresh(); showScreen('plan'); },
     // Race retry-from-gate: respawn on the approach to the last passed gate
     // rather than the runway, rewinding the clock to that gate's split.
     regate: () => {

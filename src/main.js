@@ -20,6 +20,7 @@ import { createTrainingSystem } from './training.js';
 import { createEffects } from './effects.js';
 import { createWind, WEATHER } from './physics/wind.js';
 import { fetchLiveWeather } from './liveweather.js';
+import { loadPlan } from './planner.js';
 import { createMinimap } from './minimap.js';
 import { createPanel } from './panel.js';
 import { createAutopilot } from './autopilot.js';
@@ -142,7 +143,11 @@ const minimap = createMinimap();
 const panel = createPanel();
 panel.mount(document.body);
 const autopilot = createAutopilot();
-controls.on('minimap', () => minimap.toggle());
+controls.on('minimap', () => {
+  // v5-R4: M cycles off -> north-up chart -> aircraft-centered GPS.
+  const m = minimap.toggle();
+  if (m) hud.message(m === 1 ? 'Chart — north up.' : 'GPS — moving map, plan overlaid.', 1600);
+});
 controls.on('panel', () => panel.toggle());
 
 // Low-level gauntlet gates — a low course built on demand for the gauntlet
@@ -241,7 +246,9 @@ function buildDemoPlan(map) {
   return pts;
 }
 function refreshPlan() {
-  autopilot.setPlan(buildDemoPlan(currentMap), [currentMap.runway.spawn.x, currentMap.runway.spawn.z]);
+  // v5-R4: a plan the player saved on the PLAN screen beats the demo plan.
+  const saved = loadPlan(currentMap.id);
+  autopilot.setPlan(saved || buildDemoPlan(currentMap), [currentMap.runway.spawn.x, currentMap.runway.spawn.z]);
 }
 refreshPlan();
 
@@ -254,7 +261,7 @@ controls.on('ap-ias', () => { if (flying()) autopilot.toggleIas(ac, controls); }
 controls.on('ap-nav', () => { if (flying()) autopilot.toggleNav(ac); });
 controls.on('ap-wing', () => { if (flying()) autopilot.toggleWing(ac); });
 
-window.__sim = { ac, controls, game, world, autopilot, env, windField,
+window.__sim = { ac, controls, game, world, autopilot, env, windField, minimap,
   get rings() { return gauntletRings || rings; }, get map() { return currentMap; } };
 
 // --- boot: pre-build terrain around the spawn, then reveal the menu ---
@@ -336,6 +343,7 @@ function frame(now) {
   minimap.frame({
     flying: isFlying, map: currentMap, ac, rings,
     trainGates, raceMode: isFlying && game.mode === 'race',
+    plan: autopilot.getPlan(), // v5-R4 moving-map route overlay
   });
   panel.update(ac);
   fx.update(dt);

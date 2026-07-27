@@ -1,5 +1,9 @@
 // U7 — north-up minimap. A ~180px panel-styled canvas, bottom-right.
 //
+// v5-R4 adds a second view: M cycles off -> chart (whole map) -> GPS, where GPS
+// is an aircraft-centered window over the same baked terrain with the flight
+// plan drawn on top. Race mode forces the chart view so the course stays whole.
+//
 // The terrain silhouette is BAKED ONCE per map load onto a coarse offscreen
 // canvas (map.height sampled on a grid capped at 96×96 — it's O(grid²) height
 // calls, so the bake MUST run inside main.js's loadMap pre-gen/setTimeout path,
@@ -40,11 +44,16 @@ export function createMinimap() {
   ctx.scale(dpr, dpr);
 
   let bounds = null, terrain = null; // baked offscreen canvas
-  let userShown = false, forced = false;
+  let mode = 0, forced = false;      // 0 = off, 1 = chart (whole map), 2 = GPS (aircraft-centered)
+
+  // The window of world currently drawn. Chart mode shows the baked extent;
+  // GPS mode (v5-R4) is a zoomed box that follows the aircraft, still north-up.
+  let view = null;
+  const GPS_SPAN = 5000;             // metres across the GPS window
 
   const toPx = (x, z) => [
-    (x - bounds.minX) / bounds.span * SIZE,
-    (z - bounds.minZ) / bounds.span * SIZE,
+    (x - view.minX) / view.span * SIZE,
+    (z - view.minZ) / view.span * SIZE,
   ];
 
   // Sample map.height (and map.obstacleTop for urban tint) on a coarse grid.
@@ -108,11 +117,19 @@ export function createMinimap() {
     ctx.fill();
   }
 
-  function draw(map, ac, rings, trainGates, showGates) {
+  function draw(map, ac, rings, trainGates, showGates, plan) {
     ctx.clearRect(0, 0, SIZE, SIZE);
     if (terrain) {
       ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(terrain, 0, 0, SIZE, SIZE);
+      // Blit the slice of the bake the view covers. In chart mode that's the
+      // whole thing; in GPS mode it's a moving sub-rect. Anything outside the
+      // baked extent falls back to the bake's own sea tone.
+      const k = GRID / bounds.span;
+      const sx = (view.minX - bounds.minX) * k, sy = (view.minZ - bounds.minZ) * k;
+      const sw = view.span * k;
+      ctx.fillStyle = '#204e58';
+      ctx.fillRect(0, 0, SIZE, SIZE);
+      ctx.drawImage(terrain, sx, sy, sw, sw, 0, 0, SIZE, SIZE);
     }
 
     // runway tick
@@ -132,6 +149,24 @@ export function createMinimap() {
       });
     }
 
+    // flight-plan route (v5-R4): magenta legs, active fix ringed
+    if (plan && plan.points?.length) {
+      ctx.strokeStyle = 'rgba(255,79,216,.85)';
+      ctx.lineWidth = 1.4;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      const [sx, sy] = toPx(ac.pos.x, ac.pos.z);
+      ctx.moveTo(sx, sy);
+      for (let i = plan.idx; i < plan.points.length; i++) {
+        const [x, y] = toPx(plan.points[i][0], plan.points[i][1]);
+        ctx.lineTo(x, y);
+      }
+      ctx.stroke(); ctx.setLineDash([]);
+      plan.points.forEach((p, i) => {
+        dot(p[0], p[1], i === plan.idx && plan.navOn ? '#ff5fd2' : i < plan.idx ? '#6b3a5c' : '#b04a95', i === plan.idx ? 3 : 2);
+      });
+    }
+
     // amber training gates (from the live rings instance)
     if (trainGates && trainGates.group?.visible) {
       const kids = trainGates.group.children;
@@ -145,17 +180,23 @@ export function createMinimap() {
   return {
     el,
     bake,
-    toggle() { userShown = !userShown; },
-    show(on) { userShown = on; },
+    // M cycles off -> chart -> GPS -> off.
+    toggle() { mode = (mode + 1) % 3; return mode; },
+    show(on) { mode = on ? 1 : 0; },
     setForced(on) { forced = on; },
-    get visible() { return userShown || forced; },
+    get visible() { return mode > 0 || forced; },
+    get mode() { return mode; },
     // Called every frame from main.js. Hidden entirely unless flying.
-    frame({ flying, map, ac, rings, trainGates, raceMode }) {
+    frame({ flying, map, ac, rings, trainGates, raceMode, plan }) {
       forced = !!raceMode;
-      const vis = flying && (userShown || forced);
+      const vis = flying && (mode > 0 || forced);
       el.classList.toggle('on', vis);
       if (!vis || !bounds) return;
-      draw(map, ac, rings, trainGates, raceMode);
+      // Race forces the chart view — the whole course has to stay on screen.
+      view = (mode === 2 && !forced)
+        ? { minX: ac.pos.x - GPS_SPAN / 2, minZ: ac.pos.z - GPS_SPAN / 2, span: GPS_SPAN }
+        : bounds;
+      draw(map, ac, rings, trainGates, raceMode, plan);
     },
   };
 }

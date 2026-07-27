@@ -114,6 +114,10 @@ export function createAutopilot() {
     setPlan(points, origin) { plan = { points: (points || []).map(p => [p[0], p[1], p[2]]), origin: origin || null }; navIdx = 0; },
     get planLength() { return plan ? plan.points.length : 0; },
     get activeFix() { return navIdx; },
+    // Route snapshot for the minimap's moving-map overlay (v5-R4).
+    getPlan() { return plan ? { points: plan.points, idx: navIdx, navOn: m.nav } : null; },
+    get navOn() { return m.nav; },
+    engageNav() { if (!m.nav) { m.nav = true; m.wing = false; } navIdx = 0; },
 
     // Runs after controls.poll() each frame. Writes only idle axes.
     update(ac, controls, dt) {
