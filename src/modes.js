@@ -9,6 +9,7 @@ import { createComfortMeter, createManeuverDetector, GAUNTLET } from './activiti
 import { loadLogbook, saveLogbook, accumulate, renderLogbook } from './logbook.js';
 import { loadSettings, saveSettings, renderSettings } from './settings.js';
 import { createPlanner } from './planner.js';
+import { createAtc, createVoice, callsignFor } from './atc.js';
 import { AIRPORTS } from './maps/airports.js';
 
 const $ = (s) => document.querySelector(s);
@@ -140,10 +141,20 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
 
   // Settings: load once, apply everywhere, re-apply + persist on every edit.
   const settings = loadSettings();
+  // v5-R5: ATC-lite. The tower is rebuilt per flight (field/runway/callsign all
+  // change with the selection); the voice is a single long-lived synth handle.
+  const atcVoice = createVoice();
+  let atc = null;
+  const sayAtc = (text) => { hud.atc(text); atcVoice.speak(text); };
+  const silenceAtc = () => { atcVoice.cancel(); hud.clearAtc?.(); };
+
   const applySettingsEverywhere = () => {
     audio.setVolume(settings.volume);
     controls.applySettings(settings);
     world.setPixelRatioCap?.(settings.pixelRatioCap);
+    atcVoice.setEnabled(settings.atc);
+    atc?.setArmed(settings.atc);
+    if (!settings.atc) silenceAtc();
   };
   applySettingsEverywhere();
   renderSettings($('#settings'), {
@@ -291,6 +302,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
       apUsed: false, gauntletDone: false, comfort: null, night: sel.time === 'night' };
     hud.clearMessage();
     hud.clearDebrief?.();
+    silenceAtc();
   }
 
   async function begin() {
@@ -306,6 +318,12 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
     rings.show(gated);
     hud.race(gated || scored);
     maneuver = sel.mode === 'freestyle' ? createManeuverDetector() : null;
+    // Fresh tower for this field/runway/aircraft; holds short until we roll.
+    atc = createAtc({
+      field: map.name, rwyName: map.runway.name,
+      callsign: callsignFor(flightAircraft), say: sayAtc,
+    });
+    atc.setArmed(settings.atc);
     state = 'flying';
     showScreen(null);
     audio.resume();
@@ -370,6 +388,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
     ({ map, rings } = await world.apply({ ...sel, aircraft: 'c172', time })); // school flies the trainer
     trainer = world.createTrainer(ui); // rebind to the active map's runway
     resetFlight();
+    atc = null;   // the instructor has the frequency — no tower during lessons
     if (flightAcc) flightAcc.night = time === 'night';
     rings.show(false);
     hud.race(false);
@@ -383,6 +402,8 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
     commitFlight();
     trainer?.stop();
     lessonId = null;
+    atc = null;
+    silenceAtc();
     instrEl.classList.remove('show');
     hud.setPapi(null); hud.setSlip(null);
     state = 'menu';
@@ -554,6 +575,21 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
       }
 
       if (lessonId) { trainer?.tick(dt); return null; }
+
+      // v5-R5: tower calls. Sits below the lesson early-return above, so the
+      // instructor never has to talk over ATC. `touchdown` is passed only on
+      // the tick it is new — lastTouchdown is still the previous value here
+      // (the debrief block updates it further down), and a stale one would
+      // re-trigger the landing call after every touch-and-go.
+      if (atc) {
+        atc.update({
+          onGround: ac.onGround,
+          agl: ac.agl,
+          vsFpm: ac.vel.y * FT * 60,          // positive up
+          cross: runwayFrame(map.runway).cross(ac.pos),
+          touchdown: ac.touchdown && ac.touchdown !== lastTouchdown ? ac.touchdown : null,
+        }, dt);
+      }
 
       // flight-time + autopilot-usage accounting for the logbook.
       if (flightAcc) {

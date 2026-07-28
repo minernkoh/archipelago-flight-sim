@@ -116,6 +116,17 @@
           opacity: 0; transition: opacity .4s; white-space: nowrap; }
   #msg.show { opacity: 1; }
 
+  /* ATC transcript (v5-R5) — radio-log line, top-center under the HUD band */
+  #atc { position: absolute; top: max(7vh, 3.4rem); left: 50%; transform: translateX(-50%);
+          max-width: min(46rem, 88vw); font-family: "B612 Mono", ui-monospace, monospace;
+          font-size: .72rem; letter-spacing: .04em; line-height: 1.5; color: var(--ink);
+          background: var(--panel); border: 1px solid var(--panel-line);
+          border-left: 3px solid var(--amber); padding: .4rem .8rem; text-align: left;
+          opacity: 0; transition: opacity .3s; pointer-events: none; }
+  #atc.show { opacity: 1; }
+  #atc i { color: var(--amber); font-style: normal; letter-spacing: .2em;
+          margin-right: .6rem; font-size: .62rem; }
+
   /* landing debrief card (bottom-center) */
   #debrief { position: absolute; bottom: max(9vh, 4.5rem); left: 50%; transform: translateX(-50%);
           min-width: 18rem; background: var(--panel); border: 1px solid var(--panel-line);
@@ -325,6 +336,7 @@
   </div>
   <div id="ap-cdi"><div class="scale"><i></i></div><div class="needle"></div><div class="info"></div></div>
   <div id="msg"></div>
+  <div id="atc"></div>
   <div id="debrief"></div>
   <div id="countdown"></div>
   <div id="split"></div>

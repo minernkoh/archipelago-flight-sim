@@ -47,6 +47,15 @@ check('boots to menu (terrain generated)', true);
 await page.waitForFunction('(window.__sim.frames || 0) > 3', { timeout: 120000, polling: 1000 });
 await shot('1-menu');
 
+// ATC (v5-R5) ships ON, and this box has ~180 speech voices, so every spawn
+// would synthesise audio through the timing-sensitive flying sections below.
+// Silence it here and switch it back on for the dedicated R5 block at the end.
+await page.evaluate(() => document.querySelector('#menu-foot [data-act="settings"]').click());
+await page.evaluate(() => document.querySelector('#settings [data-setting="atc"]').click());
+await page.evaluate(() => document.querySelector('#settings [data-act="menu"]').click());
+check('ATC can be silenced from settings before the flying suite',
+  (await sim('JSON.parse(localStorage.getItem("archipelago.settings")||"{}").atc')) === false);
+
 // --- U1: pressing ? opens the guided tour, and it pages through the cards ---
 const tourVisible = () => sim('!!document.querySelector(".tour-root") && !document.querySelector(".tour-root").classList.contains("hidden")');
 await keyEv('keydown', '?');
@@ -624,6 +633,39 @@ const apPlan = await sim('({ len: window.__sim.autopilot.planLength })');
 check('FLY PLAN loads the route into the autopilot', apPlan.len === 2, JSON.stringify(apPlan));
 await page.evaluate(() => document.querySelector('#pl-clear').click());
 await page.evaluate(() => document.querySelector('#plan [data-act="menu"]').click());
+
+// --- v5 R5: ATC-lite — tower calls on spawn, silent during lessons ---
+// ATC was switched off after boot (above); this block turns it back on. The
+// transcript is what gets asserted — speech is best-effort by design.
+console.log('ATC…');
+const atcState = () => page.evaluate(() => ({
+  shown: document.querySelector('#atc').classList.contains('show'),
+  text: document.querySelector('#atc').textContent,
+}));
+await page.evaluate(() => document.querySelector('#menu-foot [data-act="settings"]').click());
+await page.evaluate(() => document.querySelector('#settings [data-setting="atc"]').click());
+await page.evaluate(() => document.querySelector('#settings [data-act="menu"]').click());
+check('ATC switches back on from settings',
+  (await sim('JSON.parse(localStorage.getItem("archipelago.settings")||"{}").atc')) === true);
+
+await page.evaluate(() => window.__sim.game.select({ mode: 'free', map: 'archipelago', aircraft: 'c172', time: 'day' }));
+await page.evaluate(() => document.querySelector('#btn-start').click());
+await settle(1200);
+const atcSpawn = await atcState();
+check('tower clears you for takeoff on spawn',
+  atcSpawn.shown && /cleared for takeoff/i.test(atcSpawn.text) && /runway zero niner/i.test(atcSpawn.text),
+  JSON.stringify(atcSpawn));
+
+// A lesson must leave the frequency to the instructor.
+await page.evaluate(() => window.__sim.game.toMenu());
+await settle(300);
+await page.evaluate(() => window.__sim.game.select({ mode: 'training' }));
+await page.evaluate(() => window.__sim.game.beginLesson('controls-taxi'));
+await settle(1500);
+const atcLesson = await atcState();
+check('tower stays quiet during a lesson', atcLesson.shown === false, JSON.stringify(atcLesson));
+await page.evaluate(() => window.__sim.game.toMenu());
+await settle(300);
 
 check('no console errors', errors.length === 0, errors.slice(0, 4).join(' | '));
 

@@ -14,6 +14,7 @@ export const DEFAULTS = {
   mouseFly: true,      // hold right mouse button = stick
   gamepad: true,       // first connected gamepad drives the primary axes
   coldDark: false,     // v5-R3: C172 spawns shut down; run the start checklist
+  atc: true,           // v5-R5: spoken tower calls + transcript (off during lessons)
 };
 
 export function loadSettings() {
@@ -39,6 +40,8 @@ const ROWS = [
     values: [true, false], fmt: v => v ? 'ON' : 'OFF' },
   { id: 'coldDark', label: 'COLD & DARK', hint: 'Skyhawk spawns shut down — run the real start checklist (I opens the panel)',
     values: [false, true], fmt: v => v ? 'ON' : 'OFF' },
+  { id: 'atc', label: 'ATC', hint: 'tower talks you round the circuit — stays quiet during lessons',
+    values: [true, false], fmt: v => v ? 'ON' : 'OFF' },
 ];
 
 // Populate the #settings screen. onChange(next) fires with the full settings

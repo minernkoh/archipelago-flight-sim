@@ -578,5 +578,104 @@ import { setColdStart } from '../src/physics/flightModel.js';
   check('coldstart: non-startup aircraft unaffected', hot.engineRunning && hot.thrust > 1000);
 }
 
+import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
+
+// ---- ATC-lite phrase + sequencing (v5-R5) ----
+// The tower is a pure state machine over the debrief's own geometry, so the
+// whole circuit is testable here with no browser and no speech synthesis.
+{
+  const said = [];
+  const mkAtc = () => {
+    said.length = 0;
+    return createAtc({ field: 'SINGAPORE CHANGI', rwyName: '02L',
+      callsign: callsignFor('c172'), say: (t, id) => said.push({ t, id }) });
+  };
+
+  check('atc: runway read digit by digit', sayRunway('02L') === 'zero two left', sayRunway('02L'));
+  check('atc: niner, not nine', sayRunway('09') === 'zero niner', sayRunway('09'));
+  check('atc: unknown aircraft still gets a callsign', callsignFor('nope').length > 0);
+
+  const a = mkAtc();
+  // Holding short: the first call is takeoff clearance naming the real runway.
+  a.update({ onGround: true, agl: 0, vsFpm: 0, cross: 0 }, 0);
+  check('atc: clearance names the field and runway',
+    said[0]?.id === 'clearance' && /Changi/.test(said[0].t) && /zero two left/.test(said[0].t),
+    said[0]?.t);
+
+  // Airborne -> departure, then pattern once properly climbing.
+  a.update({ onGround: false, agl: 50, vsFpm: 600, cross: 0 }, 5);
+  check('atc: departure call once the wheels are off', said[1]?.id === 'departure', said[1]?.t);
+  a.update({ onGround: false, agl: 300, vsFpm: 600, cross: 0 }, 5);
+  check('atc: pattern call on the climb-out', said[2]?.id === 'pattern', said[2]?.t);
+
+  // Radio discipline: a call cannot step on the one before it.
+  const before = said.length;
+  a.update({ onGround: false, agl: 300, vsFpm: -400, cross: 0 }, 0.1);
+  check('atc: never steps on the previous call', said.length === before);
+
+  // Descending, lined up -> inbound, then cleared to land on a stable final.
+  a.update({ onGround: false, agl: 300, vsFpm: -400, cross: 20 }, 5);
+  check('atc: inbound call when descending on the centerline', said[3]?.id === 'inbound', said[3]?.t);
+  a.update({ onGround: false, agl: 120, vsFpm: -400, cross: 20 }, 5);
+  check('atc: cleared to land on a stable final', said[4]?.id === 'clearLand', said[4]?.t);
+  a.update({ onGround: true, agl: 0, vsFpm: 0, cross: 5,
+    touchdown: { onRunway: true, fpm: 120 } }, 5);
+  check('atc: landing call after touchdown', said[5]?.id === 'landed', said[5]?.t);
+
+  // Respawn reality: the first tick after resetOnRunway reports onGround false
+  // (gear contact is computed by the physics step, which has not run yet) while
+  // the aircraft sits on the pavement at agl 0. The tower must keep holding
+  // rather than assume an airborne start and skip to the approach — that bug
+  // made the spawn call come out as "report midfield downwind".
+  const f = mkAtc();
+  f.update({ onGround: false, agl: 0, vsFpm: 0, cross: 0 }, 0);
+  check('atc: agl-0 tick with onGround false is still holding short',
+    said.length === 0 && f.phase === 'hold', `${f.phase} ${JSON.stringify(said.map(s => s.id))}`);
+  f.update({ onGround: true, agl: 0, vsFpm: 0, cross: 0 }, 0.1);
+  check('atc: clearance lands once gear contact settles', said[0]?.id === 'clearance', said[0]?.t);
+
+  // A genuine mid-air start (teleport/reset in flight) skips the ground phase.
+  const g = mkAtc();
+  g.update({ onGround: false, agl: 800, vsFpm: 0, cross: 0 }, 0);
+  check('atc: a real airborne start skips takeoff clearance',
+    said.length === 0 && g.phase === 'cruise', `${g.phase} ${JSON.stringify(said.map(s => s.id))}`);
+
+  // A hot, off-centerline final earns a go-around instead of a landing clearance.
+  const b = mkAtc();
+  b.update({ onGround: true, agl: 0, vsFpm: 0, cross: 0 }, 0);
+  b.update({ onGround: false, agl: 50, vsFpm: 600, cross: 0 }, 5);
+  b.update({ onGround: false, agl: 300, vsFpm: 600, cross: 0 }, 5);
+  b.update({ onGround: false, agl: 300, vsFpm: -400, cross: 20 }, 5);
+  b.update({ onGround: false, agl: 120, vsFpm: -1600, cross: 20 }, 5);
+  check('atc: sinking hot on short final gets a go-around',
+    said[said.length - 1]?.id === 'goAround', said[said.length - 1]?.t);
+  check('atc: go-around returns to the en-route phase', b.phase === 'cruise', b.phase);
+
+  const c = mkAtc();
+  c.update({ onGround: true, agl: 0, vsFpm: 0, cross: 0 }, 0);
+  c.update({ onGround: false, agl: 50, vsFpm: 600, cross: 0 }, 5);
+  c.update({ onGround: false, agl: 300, vsFpm: 600, cross: 0 }, 5);
+  c.update({ onGround: false, agl: 300, vsFpm: -400, cross: 900 }, 5);
+  check('atc: descending far off the centerline is not an approach',
+    !said.some(s => s.id === 'inbound'), JSON.stringify(said.map(s => s.id)));
+
+  // Off-field arrival is acknowledged differently from a runway landing.
+  const d = mkAtc();
+  d.update({ onGround: true, agl: 0, vsFpm: 0, cross: 0 }, 0);
+  d.update({ onGround: false, agl: 200, vsFpm: 300, cross: 0 }, 5);
+  d.update({ onGround: false, agl: 300, vsFpm: 300, cross: 0 }, 5);
+  d.update({ onGround: true, agl: 0, vsFpm: 0, cross: 4000,
+    touchdown: { onRunway: false, fpm: 400 } }, 5);
+  check('atc: off-field arrival is called differently',
+    said[said.length - 1]?.id === 'offField', said[said.length - 1]?.t);
+
+  // Disarming (settings OFF / lesson running) silences the tower entirely.
+  const e = mkAtc();
+  e.setArmed(false);
+  e.update({ onGround: true, agl: 0, vsFpm: 0, cross: 0 }, 0);
+  e.update({ onGround: false, agl: 300, vsFpm: 600, cross: 0 }, 5);
+  check('atc: disarmed tower says nothing', said.length === 0, JSON.stringify(said));
+}
+
 console.log(failures === 0 ? '\nAll physics checks passed.' : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

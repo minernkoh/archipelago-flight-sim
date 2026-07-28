@@ -32,5 +32,5 @@ ring race, and a 7-lesson flight school.
 ## Conventions
 
 - Verify with the scripts above, not by eyeballing — extend test/physics.test.js for physics changes, test/e2e.mjs for flow changes.
-- localStorage keys: `archipelago.best.{map}.{aircraft}`, `archipelago.training`, `archipelago.sel`.
+- localStorage keys: `archipelago.best.{map}.{aircraft}` (+ `.splits`), `archipelago.training`, `archipelago.sel`, `archipelago.settings`, `archipelago.logbook`, `archipelago.plan.{map}`.
 - Aesthetic: PFD/avionics HUD (B612 font, amber cautions, red warnings, magenta race guidance); low-poly flat-shaded world. Keep new UI in that system.

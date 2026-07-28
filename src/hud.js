@@ -115,7 +115,8 @@ export function createHUD() {
   const debriefEl = $('#debrief');
   const countEl = $('#countdown');
   const splitEl = $('#split');
-  let debriefTimer = null, countTimer = null, splitTimer = null;
+  const atcEl = $('#atc');
+  let debriefTimer = null, countTimer = null, splitTimer = null, atcTimer = null;
 
   return {
     // Rebuild tapes/labels for a different aircraft (hud meta from the catalog)
@@ -168,6 +169,15 @@ export function createHUD() {
       if (ms) msgTimer = setTimeout(() => msgEl.classList.remove('show'), ms);
     },
     clearMessage() { msgEl.classList.remove('show'); },
+    // v5-R5: ATC transcript line. Its own element so tower calls and the
+    // first-use hint toasts never overwrite each other.
+    atc(text, ms = 5200) {
+      atcEl.innerHTML = `<i>TWR</i>${text}`;
+      atcEl.classList.add('show');
+      clearTimeout(atcTimer);
+      if (ms) atcTimer = setTimeout(() => atcEl.classList.remove('show'), ms);
+    },
+    clearAtc() { atcEl.classList.remove('show'); clearTimeout(atcTimer); },
     // Landing debrief card (bottom-center, auto-dismiss). data: { grade, fpm,
     // speedKt, offset (metres, null when off-runway), coach }.
     debrief(data, ms = 6000) {
