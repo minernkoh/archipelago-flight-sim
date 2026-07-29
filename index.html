@@ -235,6 +235,9 @@
   .screen.show { display: block; }
   .screen .inner { position: absolute; left: clamp(2rem, 10vw, 12rem); top: 50%; transform: translateY(-50%);
           max-width: 34rem; }
+  /* The menu's rows are wider than a prose column — 34rem clipped the START
+     value. Scoped to #menu so the other screens keep their measure. */
+  #menu .inner { max-width: 40rem; }
   .kicker { font-family: "B612 Mono", monospace; font-size: .72rem; letter-spacing: .38em;
           color: var(--amber); margin-bottom: 1.1rem; }
   .screen h1 { font-size: clamp(2.6rem, 6vw, 4.2rem); font-weight: 700; letter-spacing: .01em;
@@ -251,8 +254,48 @@
   .btn:hover .hint { color: var(--ink-dim); }
   .btn .lbl { color: var(--ink-dim); font-size: .8rem; letter-spacing: .18em; min-width: 7.5ch; }
   .btn .val { font-weight: 700; }
-  .btn.sel:hover .val::after { content: " ▸"; color: var(--amber); }
-  #btn-start { margin-top: 1.1rem; font-size: 1.3rem; }
+
+  /* ---------- Menu selector rows ----------
+     A 4-column grid so the value column cannot drift: "AIRCRAFT" is 8ch at
+     .18em tracking and used to shove row 03's value right of the others. */
+  #sel-rows .btn { display: grid; width: 100%; align-items: baseline; gap: 0 .9rem;
+          grid-template-columns: 2ch 9.5ch auto;
+          padding: .5rem .9rem .5rem .75rem; margin-left: -.75rem;
+          border-left: 2px solid transparent; transition: border-color .18s ease,
+          background-color .18s ease, transform .18s cubic-bezier(.22,1,.36,1); }
+  /* Hints live in the DOM but are surfaced one at a time in #sel-desc — inline
+     they had to be ellipsed ("explore, land …") or they wrapped and broke the
+     row rhythm. */
+  #sel-rows .btn .hint { display: none; }
+  .seldesc { min-height: 1.35rem; margin-top: 1.1rem; font-family: "B612", sans-serif;
+          font-size: .82rem; color: var(--ink-dim); max-width: 30rem; }
+  .valwrap { display: inline-flex; align-items: baseline; gap: .5rem; }
+  /* Persistent cycle affordance — the old one only appeared on hover, so
+     nothing told a newcomer these rows were interactive at all. */
+  .cyc { font-style: normal; font-size: .95rem; color: rgba(232,237,242,.22);
+          transition: color .18s ease; }
+  /* Cursor row: shared by keyboard and mouse so the two never disagree. */
+  #sel-rows .btn.cur { border-left-color: var(--amber);
+          background: linear-gradient(90deg, rgba(255,179,0,.09), rgba(255,179,0,0) 62%);
+          transform: translateX(3px); }
+  #sel-rows .btn.cur .cyc { color: var(--amber); }
+  #sel-rows .btn.cur .lbl { color: var(--ink); }
+
+  /* START: the one primary action on the screen, and it should look like it. */
+  #btn-start { margin-top: 1.3rem; font-size: 1.3rem; }
+  /* Values must never wrap — "CLEARED FOR TAKEOFF" broke onto a second line and
+     made row 06 taller than the five rows above it. */
+  #sel-rows .val { white-space: nowrap; }
+  #sel-rows .btn.go .val { color: var(--amber); letter-spacing: .04em; }
+  #sel-rows .btn.go.cur { background: linear-gradient(90deg, rgba(255,179,0,.18), rgba(255,179,0,0) 70%); }
+  #sel-rows .btn.go .hint b { color: var(--ink); }
+
+  .navhint { margin-top: 1.5rem; font-family: "B612 Mono", monospace; font-size: .66rem;
+          letter-spacing: .16em; color: var(--ink-dim); }
+  .navhint b { color: var(--amber); font-weight: 400; }
+  .navhint i { font-style: normal; opacity: .4; margin: 0 .45rem; }
+  .footlink { pointer-events: auto; display: inline-flex; font-size: .68rem;
+          letter-spacing: .14em; padding: .35rem 0; color: var(--amber); }
   .screen .foot { position: absolute; left: clamp(2rem, 10vw, 12rem); bottom: 2.2rem;
           font-family: "B612 Mono", monospace; font-size: .68rem; color: var(--ink-dim);
           letter-spacing: .1em; line-height: 2; }
@@ -265,9 +308,31 @@
           letter-spacing: .3em; color: var(--ink-dim); margin-bottom: 2rem; }
   .newbest { color: var(--good); }
   /* ---------- U4: menu aircraft preview panel ---------- */
-  #craft-panel { position: absolute; right: clamp(2rem, 8vw, 9rem); top: 50%; transform: translateY(-50%);
-          width: 17rem; background: var(--panel); border: 1px solid var(--panel-line);
-          border-top: 3px solid var(--amber); padding: 1.2rem 1.3rem 1.4rem; }
+  /* ---------- Menu brief column (map chart + aircraft card) ----------
+     Was a lone card floating at top:50% with no relationship to the row it
+     describes. Now one right-hand unit: where you're going, then what in. */
+  #brief { position: absolute; right: clamp(2rem, 7vw, 8rem); top: 50%;
+          transform: translateY(-50%); width: min(26rem, 36vw);
+          max-height: calc(100vh - 3rem);
+          display: flex; flex-direction: column; gap: .9rem; }
+  #mp-fig { margin: 0; background: var(--panel); border: 1px solid var(--panel-line);
+          border-top: 3px solid var(--amber); padding: 1rem 1.05rem 1.05rem; }
+  .mp-kicker { font-family: "B612 Mono", monospace; font-size: .6rem; letter-spacing: .3em;
+          color: var(--amber); margin-bottom: .7rem; }
+  #mp-canvas { display: block; width: 100%; height: auto; aspect-ratio: 4 / 3;
+          background: #0c1116; border: 1px solid rgba(232,237,242,.14); }
+  #mp-caption { margin-top: .7rem; font-family: "B612 Mono", monospace; font-size: .62rem;
+          letter-spacing: .12em; color: var(--ink-dim); }
+  #mp-caption .mp-row { display: flex; flex-wrap: wrap; align-items: baseline; }
+  #mp-caption .mp-row > span { white-space: nowrap; }
+  #mp-caption .mp-row b { color: var(--ink); font-weight: 700; }
+  #mp-caption .mp-row i { font-style: normal; opacity: .45; margin: 0 .5rem; }
+  #mp-caption .mp-note { margin-top: .4rem; letter-spacing: .02em; font-size: .66rem;
+          font-family: "B612", sans-serif; line-height: 1.45; }
+  #mp-caption .mp-wait { color: var(--amber); }
+
+  #craft-panel { background: var(--panel); border: 1px solid var(--panel-line);
+          border-top: 3px solid var(--amber); padding: 1.1rem 1.3rem 1.2rem; }
   #craft-panel .cp-kicker { font-family: "B612 Mono", monospace; font-size: .6rem; letter-spacing: .3em;
           color: var(--amber); margin-bottom: .5rem; }
   #craft-panel .cp-name { font-size: 1.7rem; font-weight: 700; line-height: 1; }
@@ -281,7 +346,64 @@
   #craft-panel .cp-nums { margin-top: 1rem; padding-top: .9rem; border-top: 1px solid var(--panel-line);
           font-family: "B612 Mono", monospace; font-size: .74rem; color: var(--ink); line-height: 1.9; }
   #craft-panel .cp-nums span { color: var(--ink-dim); }
-  @media (max-width: 780px) { #craft-panel { display: none; } }
+  /* Narrow: reflow the brief under the selectors rather than deleting it —
+     the old rule hid the aircraft card entirely below 780px. */
+  @media (max-width: 980px) {
+    #menu .inner { position: static; transform: none; top: auto;
+            padding: clamp(1.5rem, 5vh, 3rem) clamp(1.5rem, 6vw, 3rem) 0; max-width: none; }
+    #menu { overflow-y: auto; }
+    #brief { position: static; transform: none; width: auto; max-height: none;
+            max-width: 32rem; margin: 2rem clamp(1.5rem, 6vw, 3rem) 7rem;
+            flex-direction: row; flex-wrap: wrap; }
+    #mp-fig, #craft-panel { flex: 1 1 15rem; }
+    #sel-rows .btn { grid-template-columns: 2ch 9.5ch minmax(11rem, auto); }
+    #sel-rows .btn .hint { display: none; }   /* hints move to the brief column */
+    .screen .foot { position: static; margin: 0 clamp(1.5rem, 6vw, 3rem) 2rem; }
+  }
+  @media (max-width: 560px) {
+    #sel-rows .btn { grid-template-columns: 2ch 1fr; row-gap: .15rem; }
+    #sel-rows .btn .valwrap { grid-column: 2; }
+  }
+
+  /* Staged reveal — the menu is the first thing a visitor sees; let it arrive. */
+  @keyframes menu-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  /* #brief is vertically centred with translateY(-50%); a reveal ending in
+     `transform: none` would cancel that centring and push it off the bottom of
+     the viewport (it did). Centred elements need their own keyframes. */
+  @keyframes menu-rise-centered {
+    from { opacity: 0; transform: translateY(calc(-50% + 10px)); }
+    to { opacity: 1; transform: translateY(-50%); } }
+  #menu.show .kicker, #menu.show h1, #menu.show .sub,
+  #menu.show #sel-rows .btn, #menu.show .navhint, #menu.show .seldesc, #menu.show .foot {
+          animation: menu-rise .62s cubic-bezier(.22, 1, .36, 1) both; }
+  #menu.show #brief { animation: menu-rise-centered .62s cubic-bezier(.22, 1, .36, 1) both; }
+  /* Stacked layout is NOT centred, so it must use the uncentred keyframes —
+     an animation's fill beats `transform: none`, and this has to come after
+     the rule above to win on source order (same specificity). */
+  @media (max-width: 980px) {
+    #menu.show #brief { animation-name: menu-rise; }
+  }
+  #menu.show h1 { animation-delay: .05s; }
+  #menu.show .sub { animation-delay: .11s; }
+  #menu.show #sel-rows .btn:nth-child(1) { animation-delay: .17s; }
+  #menu.show #sel-rows .btn:nth-child(2) { animation-delay: .21s; }
+  #menu.show #sel-rows .btn:nth-child(3) { animation-delay: .25s; }
+  #menu.show #sel-rows .btn:nth-child(4) { animation-delay: .29s; }
+  #menu.show #sel-rows .btn:nth-child(5) { animation-delay: .33s; }
+  #menu.show #sel-rows .btn:nth-child(6) { animation-delay: .39s; }
+  #menu.show .navhint { animation-delay: .45s; }
+  #menu.show #brief { animation-delay: .24s; }
+  #menu.show .foot { animation-delay: .5s; }
+  /* The cursor row's own transform must not fight the reveal animation. */
+  #menu.show #sel-rows .btn.cur { animation: none; }
+  @media (prefers-reduced-motion: reduce) {
+    #menu.show .kicker, #menu.show h1, #menu.show .sub, #menu.show #sel-rows .btn,
+    #menu.show .navhint, #menu.show .seldesc, #menu.show .foot { animation: none; }
+    /* Must stay `none` rather than inherit the centred keyframes, or the
+       reveal's transform would again fight #brief's translateY(-50%). */
+    #menu.show #brief { animation: none; }
+    #sel-rows .btn { transition: none; }
+  }
   #loading { z-index: 20; }
   #loading .inner { font-family: "B612 Mono", monospace; color: var(--ink-dim); font-size: .8rem;
           letter-spacing: .25em; }
@@ -365,35 +487,50 @@
     <h1>ARCHI&shy;PELAGO<em>.</em></h1>
     <p class="sub">One small plane, a scatter of procedural islands, and a strip of
       asphalt to bring it back to. Throttle up.</p>
-    <div class="btnrow">
+    <div class="btnrow" id="sel-rows">
       <button class="btn sel" data-sel="mode"><span class="no">01</span><span class="lbl">MODE</span>
-        <span class="val" id="sel-mode">FREE FLIGHT</span><span class="hint" id="sel-mode-hint"></span></button>
+        <span class="valwrap"><i class="cyc">&lsaquo;</i><span class="val" id="sel-mode">FREE FLIGHT</span><i class="cyc">&rsaquo;</i></span>
+        <span class="hint" id="sel-mode-hint"></span></button>
       <button class="btn sel" data-sel="map"><span class="no">02</span><span class="lbl">MAP</span>
-        <span class="val" id="sel-map">ARCHIPELAGO</span><span class="hint" id="sel-map-hint"></span></button>
+        <span class="valwrap"><i class="cyc">&lsaquo;</i><span class="val" id="sel-map">ARCHIPELAGO</span><i class="cyc">&rsaquo;</i></span>
+        <span class="hint" id="sel-map-hint"></span></button>
       <button class="btn sel" data-sel="aircraft"><span class="no">03</span><span class="lbl">AIRCRAFT</span>
-        <span class="val" id="sel-aircraft">SKYHAWK</span><span class="hint" id="sel-aircraft-hint"></span></button>
+        <span class="valwrap"><i class="cyc">&lsaquo;</i><span class="val" id="sel-aircraft">SKYHAWK</span><i class="cyc">&rsaquo;</i></span>
+        <span class="hint" id="sel-aircraft-hint"></span></button>
       <button class="btn sel" data-sel="weather"><span class="no">04</span><span class="lbl">WEATHER</span>
-        <span class="val" id="sel-weather">CALM</span><span class="hint" id="sel-weather-hint"></span></button>
+        <span class="valwrap"><i class="cyc">&lsaquo;</i><span class="val" id="sel-weather">CALM</span><i class="cyc">&rsaquo;</i></span>
+        <span class="hint" id="sel-weather-hint"></span></button>
       <button class="btn sel" data-sel="time"><span class="no">05</span><span class="lbl">TIME</span>
-        <span class="val" id="sel-time">DAY</span><span class="hint" id="sel-time-hint"></span></button>
-      <button class="btn" id="btn-start"><span class="no">06</span><span class="lbl">START</span>
-        <span class="val">&rarr;</span></button>
+        <span class="valwrap"><i class="cyc">&lsaquo;</i><span class="val" id="sel-time">DAY</span><i class="cyc">&rsaquo;</i></span>
+        <span class="hint" id="sel-time-hint"></span></button>
+      <button class="btn go" id="btn-start"><span class="no">06</span><span class="lbl">START</span>
+        <span class="valwrap"><span class="val">CLEARED FOR TAKEOFF</span></span>
+        <span class="hint">press <b>ENTER</b></span></button>
     </div>
+    <div class="seldesc" id="sel-desc"></div>
+    <div class="navhint" id="menu-navhint"><b>&uarr;&darr;</b> select <i>·</i> <b>&larr;&rarr;</b> change <i>·</i> <b>ENTER</b> fly</div>
   </div>
-  <aside id="craft-panel">
-    <div class="cp-kicker">AIRCRAFT</div>
-    <div class="cp-name" id="cp-name">SKYHAWK</div>
-    <div class="cp-tag" id="cp-tag"></div>
-    <div id="cp-bars"></div>
-    <div class="cp-nums" id="cp-nums"></div>
+
+  <aside id="brief">
+    <figure id="mp-fig">
+      <figcaption class="mp-kicker">DESTINATION</figcaption>
+      <canvas id="mp-canvas" width="360" height="270"></canvas>
+      <div id="mp-caption"></div>
+    </figure>
+    <div id="craft-panel">
+      <div class="cp-kicker">PERFORMANCE</div>
+      <div id="cp-bars"></div>
+      <div class="cp-nums" id="cp-nums"></div>
+    </div>
   </aside>
+
   <div class="foot" id="menu-foot">
     ARROWS pitch/roll &nbsp;&middot;&nbsp; <b>A/D</b> rudder &nbsp;&middot;&nbsp; <b>W/S</b> throttle &nbsp;&middot;&nbsp;
     <b>F</b> flaps &nbsp;&middot;&nbsp; <b>B</b> brakes &nbsp;&middot;&nbsp; <b>C</b> camera &nbsp;&middot;&nbsp; <b>ESC</b> pause
-    <br><button class="btn" data-act="groundschool" style="pointer-events:auto;display:inline-flex;font-size:.68rem;letter-spacing:.14em;padding:.35rem 0;color:var(--amber)">GROUND SCHOOL &rarr;</button>
-    &nbsp;&middot;&nbsp;<button class="btn" data-act="logbook" style="pointer-events:auto;display:inline-flex;font-size:.68rem;letter-spacing:.14em;padding:.35rem 0;color:var(--amber)">LOGBOOK &rarr;</button>
-    &nbsp;&middot;&nbsp;<button class="btn" data-act="plan" style="pointer-events:auto;display:inline-flex;font-size:.68rem;letter-spacing:.14em;padding:.35rem 0;color:var(--amber)">FLIGHT PLAN &rarr;</button>
-    &nbsp;&middot;&nbsp;<button class="btn" data-act="settings" style="pointer-events:auto;display:inline-flex;font-size:.68rem;letter-spacing:.14em;padding:.35rem 0;color:var(--amber)">SETTINGS &rarr;</button>
+    <br><button class="btn footlink" data-act="groundschool">GROUND SCHOOL &rarr;</button>
+    &nbsp;&middot;&nbsp;<button class="btn footlink" data-act="logbook">LOGBOOK &rarr;</button>
+    &nbsp;&middot;&nbsp;<button class="btn footlink" data-act="plan">FLIGHT PLAN &rarr;</button>
+    &nbsp;&middot;&nbsp;<button class="btn footlink" data-act="settings">SETTINGS &rarr;</button>
   </div>
 </div>
 

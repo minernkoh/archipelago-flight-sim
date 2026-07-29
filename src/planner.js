@@ -3,6 +3,8 @@
 // plan per map (archipelago.plan.{mapId}). Feeds autopilot.setPlan; the HUD CDI
 // + NAV mode and the minimap's route overlay do the in-flight work.
 
+import { bakeHeightfield, courseBounds, chartShade } from './heightbake.js';
+
 const SIZE = 560;     // css px of the plan canvas (square)
 const GRID = 160;     // terrain sample grid for the bake (O(GRID²) height calls, click-time only)
 const STYLE_ID = 'planner-style';
@@ -22,19 +24,8 @@ export function savePlan(mapId, pts) {
 }
 
 // Span of world the plan map shows: cover the race course + runway generously.
-function computeBounds(map) {
-  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-  const eat = (x, z) => {
-    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
-    minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
-  };
-  eat(map.runway.spawn.x, map.runway.spawn.z);
-  // raceCourse entries are [x, z, desiredY] — index 1 is z, index 2 is altitude.
-  for (const [x, z] of map.raceCourse || []) eat(x, z);
-  const span = Math.max(maxX - minX, maxZ - minZ, 6000) * 1.35;
-  const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
-  return { minX: cx - span / 2, minZ: cz - span / 2, span };
-}
+// Shared with the menu preview so both frame a map identically.
+const computeBounds = courseBounds;
 
 export function createPlanner({ getMap, getAc, autopilot, onFlyPlan }) {
   let mountEl = null, canvas = null, listEl = null, hintEl = null;
@@ -54,27 +45,7 @@ export function createPlanner({ getMap, getAc, autopilot, onFlyPlan }) {
   ];
 
   function bakeTerrain() {
-    terrainCanvas = document.createElement('canvas');
-    terrainCanvas.width = GRID; terrainCanvas.height = GRID;
-    const tctx = terrainCanvas.getContext('2d');
-    const img = tctx.createImageData(GRID, GRID);
-    const step = bounds.span / (GRID - 1);
-    for (let iz = 0; iz < GRID; iz++) {
-      const z = bounds.minZ + iz * step;
-      for (let ix = 0; ix < GRID; ix++) {
-        const x = bounds.minX + ix * step;
-        const h = map.height(x, z);
-        const o = (iz * GRID + ix) * 4;
-        let r, g, b;
-        if (h < 0.6) { r = 26; g = 58; b = 76; }                    // sea
-        else if (h < 400) { r = 68; g = 102; b = 58; }              // low land
-        else if (h < 1400) { r = 104; g = 112; b = 78; }            // hills
-        else if (h < 2600) { r = 120; g = 112; b = 100; }           // rock
-        else { r = 214; g = 220; b = 220; }                          // snow
-        img.data[o] = r; img.data[o + 1] = g; img.data[o + 2] = b; img.data[o + 3] = 255;
-      }
-    }
-    tctx.putImageData(img, 0, 0);
+    terrainCanvas = bakeHeightfield(map, bounds, GRID, chartShade);
     bakedId = map.id;
   }
 

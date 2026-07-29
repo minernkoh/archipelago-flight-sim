@@ -86,6 +86,53 @@ for (let i = 0; i < 6 && (await page.evaluate(() => document.querySelector('#sel
   await click('[data-sel="weather"]');
 }
 
+// --- menu: keyboard navigation (the menu used to be mouse-only) ---
+// NOTE press(), never a bare keydown: controls.js tracks held keys, so a
+// keydown without its keyup leaves the axis stuck for the REST of the suite.
+// A stray held ArrowDown here cancels the ArrowUp during rotation later, and
+// the aircraft rolls off the end of the runway instead of flying.
+const curSel = () => sim('document.querySelector("#sel-rows .btn.cur")?.dataset.sel ?? "none"');
+const menuDesc = () => sim('document.querySelector("#sel-desc").textContent');
+// Cursor starts on row 01 and Down walks it to the MAP row.
+const cur0 = await curSel();
+await press('ArrowDown');
+const cur1 = await curSel();
+check('ArrowDown moves the menu cursor', cur0 === 'mode' && cur1 === 'map', `${cur0} -> ${cur1}`);
+// The description line follows the cursor and is not truncated.
+const desc = await menuDesc();
+check('the description line follows the cursor', /procedural islands/.test(desc), desc);
+// Left/Right cycle the focused row, and Left is the reverse of Right.
+const map0 = await sim('document.querySelector("#sel-map").textContent');
+await press('ArrowRight');
+const map1 = await sim('document.querySelector("#sel-map").textContent');
+await press('ArrowLeft');
+const map2 = await sim('document.querySelector("#sel-map").textContent');
+check('ArrowRight/ArrowLeft cycle the focused row both ways',
+  map0 !== map1 && map2 === map0, `${map0} -> ${map1} -> ${map2}`);
+// The selection still persists through the keyboard path.
+await press('ArrowRight');
+const shown = await sim('document.querySelector("#sel-map").textContent');
+const agree = await page.evaluate(() => {
+  const id = JSON.parse(localStorage.getItem('archipelago.sel') || '{}').map;
+  const m = window.__sim.world.maps.find(x => x.id === id);
+  return { id, name: m?.name };
+});
+check('keyboard cycling persists the selection that is displayed',
+  agree.name === shown, `shown ${shown}, stored ${agree.id} (${agree.name})`);
+await press('ArrowLeft');
+// The map preview exists and has actually drawn something (non-blank canvas).
+const previewInk = await page.evaluate(() => {
+  const cv = document.querySelector('#mp-canvas');
+  if (!cv) return -1;
+  const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+  const seen = new Set();
+  for (let i = 0; i < d.length; i += 4 * 97) seen.add(`${d[i]},${d[i + 1]},${d[i + 2]}`);
+  return seen.size;   // a blank fill would be 1
+});
+check('map preview renders a real chart', previewInk > 4, `${previewInk} distinct sampled colours`);
+// Put the cursor back on row 01 so later menu tests start from a known place.
+await press('ArrowUp');
+
 // --- every aircraft spawns and sits on its gear ---
 for (const id of ['extra300', 'hornet', 'heavy', 'spirit']) {
   await page.evaluate((i) => window.__sim.game.select({ aircraft: i, mode: 'free' }), id);

@@ -10,6 +10,7 @@ import { loadLogbook, saveLogbook, accumulate, renderLogbook } from './logbook.j
 import { loadSettings, saveSettings, renderSettings } from './settings.js';
 import { createPlanner } from './planner.js';
 import { createAtc, createVoice, callsignFor } from './atc.js';
+import { createMenuPreview } from './menupreview.js';
 import { AIRPORTS } from './maps/airports.js';
 
 const $ = (s) => document.querySelector(s);
@@ -180,6 +181,17 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
   });
   planner.mount($('#plan'));
 
+  // Menu map preview (chart of the selected world). Baking samples map.height
+  // on a grid, so it runs only on selection change and is cached by map id —
+  // the first bake rides main.js's boot() -> toMenu() setTimeout pre-gen path,
+  // never rAF. Real-world maps stream elevation, so poll on a slow timer to
+  // upgrade the placeholder once tiles land.
+  const menuPreview = createMenuPreview($('#mp-canvas'), $('#mp-caption'));
+  setInterval(() => {
+    if (state !== 'menu' || !menuPreview.awaiting) return;
+    menuPreview.retryIfPending(world.maps.find(m => m.id === sel.map));
+  }, 900);
+
   // Logbook screen is re-rendered each time it opens so stats/badges are fresh.
   function refreshLogbook() {
     renderLogbook($('#logbook'), {
@@ -243,8 +255,8 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
   // U4: aircraft preview panel — name, tagline, 3 editorial stat bars, and two
   // derived human-terms numbers (stall / Vne).
   function renderCraftPanel(craft) {
-    $('#cp-name').textContent = craft.params.name.toUpperCase();
-    $('#cp-tag').textContent = craft.tagline;
+    // Name + tagline deliberately absent: row 03 and the description line
+    // already say them, and repeating them cost the panel its vertical room.
     const stats = craft.stats || { speed: 0, handling: 0, difficulty: 0 };
     const bar = (label, n) =>
       `<div class="cp-bar"><span class="bl">${label}</span><span class="cp-seg">` +
@@ -265,6 +277,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
     const mapObj = world.maps.find(m => m.id === sel.map) || world.maps[0];
     $('#sel-map').textContent = mapObj.name;
     $('#sel-map-hint').textContent = MAP_DESC[mapObj.id] || '';
+    menuPreview.show(mapObj);   // cached per map id; one bake on a miss
     const craft = world.aircraft.find(a => a.id === sel.aircraft) || world.aircraft[0];
     $('#sel-aircraft').textContent = craft.params.name.toUpperCase();
     $('#sel-aircraft-hint').textContent = craft.tagline;
@@ -275,16 +288,65 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
     const tm = TIMES.find(t => t.id === sel.time) || TIMES[1];
     $('#sel-time').textContent = tm.label;
     $('#sel-time-hint').textContent = tm.hint;
+    // Must run AFTER every hint is written — it copies the focused row's hint
+    // into the description line, so an earlier call would show a stale one.
+    paintMenuCursor();
     localStorage.setItem(SEL_KEY, JSON.stringify(sel));
   }
 
-  function cycle(kind) {
+  // dir +1 / -1 so the keyboard can step backwards; clicking still means "next".
+  function cycle(kind, dir = 1) {
     const lists = { mode: MODES.map(m => m.id), map: world.maps.map(m => m.id), aircraft: world.aircraft.map(a => a.id), weather: WEATHERS.map(w => w.id), time: TIMES.map(t => t.id) };
     const list = lists[kind];
     const cur = list.indexOf(sel[kind]);
-    sel[kind] = list[(cur + 1) % list.length];
+    sel[kind] = list[(cur + dir + list.length) % list.length];
     updateMenuLabels();
   }
+
+  // --- Menu keyboard navigation -------------------------------------------
+  // The whole sim is flown from the keyboard, but the menu used to be
+  // mouse-only. Up/Down move a cursor, Left/Right cycle the focused row, Enter
+  // launches. Mouse hover moves the same cursor so the two inputs never
+  // disagree about which row is live.
+  const menuRows = () => Array.from(document.querySelectorAll('#sel-rows .btn'));
+  let menuIndex = 0;
+
+  // One description line for the focused row, instead of a hint per row: the
+  // per-row hints had to be ellipsed to fit ("explore, land …") and the ones
+  // that did fit wrapped, which broke the row rhythm.
+  function paintMenuCursor() {
+    const rows = menuRows();
+    rows.forEach((el, i) => el.classList.toggle('cur', i === menuIndex));
+    const desc = $('#sel-desc');
+    if (desc) desc.textContent = rows[menuIndex]?.querySelector('.hint')?.textContent || '';
+  }
+
+  function moveMenuCursor(delta) {
+    const rows = menuRows();
+    if (!rows.length) return;
+    menuIndex = (menuIndex + delta + rows.length) % rows.length;
+    paintMenuCursor();
+  }
+
+  function menuKey(e) {
+    if (state !== 'menu') return;
+    // Only drive the menu while the menu itself is the visible screen —
+    // lessons/settings/logbook/plan are all screens with their own controls.
+    if (!screens.menu.classList.contains('show')) return;
+    const rows = menuRows();
+    const row = rows[menuIndex];
+    const kind = row?.dataset.sel;
+    switch (e.key) {
+      case 'ArrowUp': moveMenuCursor(-1); break;
+      case 'ArrowDown': moveMenuCursor(1); break;
+      case 'ArrowLeft': if (kind) cycle(kind, -1); else return; break;
+      case 'ArrowRight': if (kind) cycle(kind, 1); else return; break;
+      case 'Enter': audio.resume(); begin(); break;
+      default: return;
+    }
+    e.preventDefault();   // arrows must not scroll the menu behind the cursor
+  }
+  window.addEventListener('keydown', menuKey);
 
   function resetFlight() {
     const r = map.runway;
@@ -493,6 +555,13 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
   // --- wire screens ---
   document.querySelectorAll('#menu .btn.sel').forEach(b =>
     b.addEventListener('click', () => { audio.resume(); cycle(b.dataset.sel); }));
+  // Hover adopts the keyboard cursor, so mouse and keys always agree on the
+  // live row (and clicking then arrowing continues from where you clicked).
+  menuRows().forEach((el, i) => el.addEventListener('mouseenter', () => {
+    if (state !== 'menu') return;
+    menuIndex = i; paintMenuCursor();
+  }));
+  paintMenuCursor();
   $('#btn-start').addEventListener('click', () => { audio.resume(); begin(); });
 
   const actions = {
