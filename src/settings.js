@@ -8,13 +8,17 @@ const KEY = 'archipelago.settings';
 const STYLE_ID = 'settings-style';
 
 export const DEFAULTS = {
-  volume: 0.55,        // 0..1 master gain
+  volume: 0.5,         // 0..1 MASTER gain (sfx + music ride inside it)
+  sfxVolume: 1,        // engine, wind, stall horn, touchdown, UI
+  musicVolume: 0.6,    // wired to the music bus; no track ships yet
+  muted: false,        // one switch that silences everything
   invertPitch: false,  // applies to mouse-fly + gamepad pitch only (arrows stay semantic)
   pixelRatioCap: 2,    // renderer.setPixelRatio(min(devicePixelRatio, cap))
   mouseFly: true,      // hold right mouse button = stick
   gamepad: true,       // first connected gamepad drives the primary axes
   coldDark: false,     // v5-R3: C172 spawns shut down; run the start checklist
   atc: true,           // v5-R5: spoken tower calls + transcript (off during lessons)
+  quality: 'high',     // v6: 'low' = near terrain only, no shadows | 'high' = both
 };
 
 export function loadSettings() {
@@ -28,8 +32,14 @@ export function saveSettings(s) {
 
 // Each row cycles through its values on click (same feel as the menu selectors).
 const ROWS = [
-  { id: 'volume', label: 'VOLUME', hint: 'master audio level',
-    values: [0, 0.15, 0.3, 0.55, 0.8, 1], fmt: v => v === 0 ? 'MUTED' : `${Math.round(v * 100)}%` },
+  { id: 'muted', label: 'MUTE', hint: 'silence everything — your levels are kept',
+    values: [false, true], fmt: v => v ? 'ON' : 'OFF' },
+  { id: 'volume', label: 'MASTER', hint: 'overall level; SFX and music sit inside it',
+    values: [0, 0.15, 0.3, 0.5, 0.75, 1], fmt: v => v === 0 ? 'SILENT' : `${Math.round(v * 100)}%` },
+  { id: 'sfxVolume', label: 'SFX', hint: 'engine, wind, stall horn, touchdown, chimes',
+    values: [0, 0.25, 0.5, 0.75, 1], fmt: v => v === 0 ? 'OFF' : `${Math.round(v * 100)}%` },
+  { id: 'musicVolume', label: 'MUSIC', hint: 'reserved for a soundtrack — no track ships yet',
+    values: [0, 0.25, 0.5, 0.6, 0.8, 1], fmt: v => v === 0 ? 'OFF' : `${Math.round(v * 100)}%` },
   { id: 'invertPitch', label: 'INVERT PITCH', hint: 'mouse-fly & gamepad only — push forward = nose down',
     values: [false, true], fmt: v => v ? 'ON' : 'OFF' },
   { id: 'pixelRatioCap', label: 'PIXEL RATIO', hint: 'lower = faster on high-DPI screens',
@@ -42,6 +52,8 @@ const ROWS = [
     values: [false, true], fmt: v => v ? 'ON' : 'OFF' },
   { id: 'atc', label: 'ATC', hint: 'tower talks you round the circuit — stays quiet during lessons',
     values: [true, false], fmt: v => v ? 'ON' : 'OFF' },
+  { id: 'quality', label: 'QUALITY', hint: 'HIGH draws terrain to 9 km and casts real shadows; LOW is the lighter old view',
+    values: ['high', 'low'], fmt: v => v.toUpperCase() },
 ];
 
 // Populate the #settings screen. onChange(next) fires with the full settings

@@ -1,9 +1,21 @@
 // WebAudio: engine hum keyed to RPM, wind rush keyed to airspeed,
 // stall horn, ring chime. Created lazily on first user gesture.
+//
+// Bus layout (everything routes through master, so MUTE is one gain):
+//   engine / jet / wind / horn / chime / chirp / thud -> sfx -> master -> out
+//                                              (music) -> music -> master -> out
+// The music bus exists and is mixed, but nothing feeds it yet — the sim has no
+// music track. Its slider is therefore live but silent until one is added;
+// connectMusic() is the hook for that.
 
 export function createAudio() {
   let ctx = null;
-  let masterVol = 0.55; // settings-driven; applied at init and via setVolume
+  let masterVol = 0.5;  // settings-driven; applied at init and via setVolume
+  let sfxVol = 1;
+  let musicVol = 0.6;
+  let muted = false;
+  let sfx = null, music = null;
+  const applyMaster = () => { if (master) master.gain.value = muted ? 0 : masterVol; };
   let engineOsc, engineOsc2, engineGain, engineFilter;
   let windSrc, windGain, windFilter;
   let hornOsc, hornGain;
@@ -17,8 +29,11 @@ export function createAudio() {
     if (ctx) return;
     ctx = new (window.AudioContext || window.webkitAudioContext)();
     master = ctx.createGain();
-    master.gain.value = masterVol;
+    master.gain.value = muted ? 0 : masterVol;
     master.connect(ctx.destination);
+    // Sub-buses so SFX and music trim independently of the master fader.
+    sfx = ctx.createGain(); sfx.gain.value = sfxVol; sfx.connect(master);
+    music = ctx.createGain(); music.gain.value = musicVol; music.connect(master);
 
     engineOsc = ctx.createOscillator(); engineOsc.type = 'sawtooth';
     engineOsc2 = ctx.createOscillator(); engineOsc2.type = 'square';
@@ -27,7 +42,7 @@ export function createAudio() {
     const g2 = ctx.createGain(); g2.gain.value = 0.4;
     engineOsc.connect(engineFilter);
     engineOsc2.connect(g2).connect(engineFilter);
-    engineFilter.connect(engineGain).connect(master);
+    engineFilter.connect(engineGain).connect(sfx);
     engineOsc.start(); engineOsc2.start();
 
     const noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
@@ -40,7 +55,7 @@ export function createAudio() {
     windSrc = ctx.createBufferSource(); windSrc.buffer = noiseBuf; windSrc.loop = true;
     windFilter = ctx.createBiquadFilter(); windFilter.type = 'lowpass'; windFilter.frequency.value = 600;
     windGain = ctx.createGain(); windGain.gain.value = 0;
-    windSrc.connect(windFilter).connect(windGain).connect(master);
+    windSrc.connect(windFilter).connect(windGain).connect(sfx);
     windSrc.start();
 
     // jet roar: same noise buffer through a bandpass, centered/gained by spool
@@ -48,13 +63,13 @@ export function createAudio() {
     jetRoarFilter = ctx.createBiquadFilter(); jetRoarFilter.type = 'bandpass';
     jetRoarFilter.frequency.value = 180; jetRoarFilter.Q.value = 0.7;
     jetRoarGain = ctx.createGain(); jetRoarGain.gain.value = 0;
-    jetRoarSrc.connect(jetRoarFilter).connect(jetRoarGain).connect(master);
+    jetRoarSrc.connect(jetRoarFilter).connect(jetRoarGain).connect(sfx);
     jetRoarSrc.start();
 
     // turbine whine: pitch tracks spool
     whineOsc = ctx.createOscillator(); whineOsc.type = 'triangle'; whineOsc.frequency.value = 900;
     whineGain = ctx.createGain(); whineGain.gain.value = 0;
-    whineOsc.connect(whineGain).connect(master);
+    whineOsc.connect(whineGain).connect(sfx);
     whineOsc.start();
 
     // afterburner: lowpass rumble with a slow flicker LFO riding on its gain
@@ -63,23 +78,43 @@ export function createAudio() {
     abGain = ctx.createGain(); abGain.gain.value = 0;
     abLfo = ctx.createOscillator(); abLfo.type = 'sine'; abLfo.frequency.value = 8;
     abLfoGain = ctx.createGain(); abLfoGain.gain.value = 0;
-    abSrc.connect(abFilter).connect(abGain).connect(master);
+    abSrc.connect(abFilter).connect(abGain).connect(sfx);
     abLfo.connect(abLfoGain).connect(abGain.gain);
     abSrc.start(); abLfo.start();
 
     hornOsc = ctx.createOscillator(); hornOsc.type = 'square'; hornOsc.frequency.value = 640;
     hornGain = ctx.createGain(); hornGain.gain.value = 0;
-    hornOsc.connect(hornGain).connect(master);
+    hornOsc.connect(hornGain).connect(sfx);
     hornOsc.start();
   }
 
   return {
     resume() { init(); if (ctx.state === 'suspended') ctx.resume(); },
-    // Master volume 0..1 (settings). Safe before init — applied when ctx exists.
+    // All 0..1 and all safe before init — values are applied when ctx exists.
+    // Master is the overall fader; SFX and music trim within it.
     setVolume(v) {
       masterVol = Math.max(0, Math.min(1, v));
-      if (master) master.gain.value = masterVol;
+      applyMaster();
     },
+    setSfxVolume(v) {
+      sfxVol = Math.max(0, Math.min(1, v));
+      if (sfx) sfx.gain.value = sfxVol;
+    },
+    setMusicVolume(v) {
+      musicVol = Math.max(0, Math.min(1, v));
+      if (music) music.gain.value = musicVol;
+    },
+    // Mute rides on the master gain, so it silences everything at once and
+    // restores the previous levels exactly when switched back off.
+    setMuted(on) { muted = !!on; applyMaster(); },
+    get muted() { return muted; },
+    get levels() { return { master: masterVol, sfx: sfxVol, music: musicVol, muted }; },
+    /**
+     * Hook for a future music track: connect a source node to the music bus.
+     * NOTE nothing calls this yet — the sim ships no music, so the MUSIC
+     * slider is wired end-to-end but has no audio to move until one exists.
+     */
+    connectMusic(node) { if (music && node) node.connect(music); return music; },
     suspend() { if (ctx && ctx.state === 'running') ctx.suspend(); },
     chime() {
       if (!ctx) return;
@@ -87,7 +122,7 @@ export function createAudio() {
       o.type = 'sine'; o.frequency.value = 1180;
       g.gain.setValueAtTime(0.35, ctx.currentTime);
       g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
-      o.connect(g).connect(master);
+      o.connect(g).connect(sfx);
       o.start(); o.stop(ctx.currentTime + 0.55);
       o.frequency.exponentialRampToValueAtTime(1560, ctx.currentTime + 0.1);
     },
@@ -99,7 +134,7 @@ export function createAudio() {
       const g = ctx.createGain();
       g.gain.setValueAtTime(0.5, ctx.currentTime);
       g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.22);
-      src.connect(f).connect(g).connect(master);
+      src.connect(f).connect(g).connect(sfx);
       src.start(0, Math.random() * 1.5); src.stop(ctx.currentTime + 0.25);
     },
     thud() {
@@ -108,7 +143,7 @@ export function createAudio() {
       o.type = 'triangle'; o.frequency.value = 70;
       g.gain.setValueAtTime(0.6, ctx.currentTime);
       g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
-      o.connect(g).connect(master);
+      o.connect(g).connect(sfx);
       o.start(); o.stop(ctx.currentTime + 0.4);
     },
     update(ac, controls) {

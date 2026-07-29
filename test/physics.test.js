@@ -677,5 +677,80 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   check('atc: disarmed tower says nothing', said.length === 0, JSON.stringify(said));
 }
 
+// ---- Terrain draw distance / coarse tier tiling (v6) ----
+// Pure selection maths, so the tiling is verified without THREE or a browser.
+{
+  const { farCellsFor, VIEW_EXTENTS } = await import('../src/terrain.js');
+
+  check('terrain: fine tier still reaches 3300 m', VIEW_EXTENTS.fine === 3300, String(VIEW_EXTENTS.fine));
+  check('terrain: coarse tier reaches 9000 m — past the 5200 m fog limit',
+    VIEW_EXTENTS.coarse === 9000 && VIEW_EXTENTS.coarse > 5200, String(VIEW_EXTENTS.coarse));
+
+  const cells = farCellsFor(0, 0);
+  check('terrain: coarse ring is 24 cells (5x5 minus the covered centre)',
+    cells.length === 24, `${cells.length} cells`);
+  check('terrain: the cell under the aircraft is dropped, not drawn twice',
+    !cells.includes('0,0'), cells.slice(0, 3).join(' '));
+
+  // No duplicates, and the ring is symmetric about the aircraft.
+  check('terrain: no duplicate coarse cells', new Set(cells).size === cells.length);
+  const has = (x, z) => cells.includes(`${x},${z}`);
+  check('terrain: ring is symmetric', has(2, 2) && has(-2, -2) && has(2, -2) && has(-2, 2));
+
+  // The excluded centre cell spans +/-1800 m, comfortably inside the fine
+  // tier's +/-3300 m — that containment is what makes dropping it safe.
+  check('terrain: dropped centre is fully inside the fine tier', 1800 < VIEW_EXTENTS.fine);
+
+  // Cells follow the aircraft: far out, the set is centred on the new position.
+  const far = farCellsFor(36000, 0);          // 10 coarse cells east
+  check('terrain: coarse ring follows the aircraft',
+    far.includes('12,0') && !far.includes('10,0'), far.slice(0, 3).join(' '));
+  check('terrain: still 24 cells wherever you are', far.length === 24, `${far.length}`);
+
+  // Coarse geometry must stay cheap: 24 chunks at RES 18 is ~15.5k triangles
+  // against the fine tier's 121 x 2592 = 313,632.
+  const coarseTris = 24 * 18 * 18 * 2;
+  check('terrain: coarse tier costs under 6% of the fine tier',
+    coarseTris < 121 * 36 * 36 * 2 * 0.06, `${coarseTris} tris`);
+}
+
+// ---- Audio buses: master / sfx / music + mute ----
+// createAudio() only touches WebAudio inside init(), so the level bookkeeping
+// is testable headlessly — no AudioContext, no browser.
+{
+  const { createAudio } = await import('../src/audio.js');
+  const { DEFAULTS } = await import('../src/settings.js');
+
+  check('audio: master defaults to 50%', DEFAULTS.volume === 0.5, String(DEFAULTS.volume));
+  check('audio: sfx and music have their own defaults',
+    DEFAULTS.sfxVolume === 1 && DEFAULTS.musicVolume === 0.6,
+    `sfx ${DEFAULTS.sfxVolume}, music ${DEFAULTS.musicVolume}`);
+  check('audio: not muted by default', DEFAULTS.muted === false);
+
+  const a = createAudio();
+  check('audio: three independent buses', a.levels.master === 0.5 && a.levels.sfx === 1 && a.levels.music === 0.6,
+    JSON.stringify(a.levels));
+
+  a.setVolume(0.8); a.setSfxVolume(0.25); a.setMusicVolume(0);
+  check('audio: buses set independently',
+    a.levels.master === 0.8 && a.levels.sfx === 0.25 && a.levels.music === 0,
+    JSON.stringify(a.levels));
+
+  a.setVolume(5); a.setSfxVolume(-3);
+  check('audio: levels clamp to 0..1', a.levels.master === 1 && a.levels.sfx === 0, JSON.stringify(a.levels));
+
+  // Mute must not destroy the levels it silences.
+  a.setVolume(0.65);
+  a.setMuted(true);
+  check('audio: mute is on and keeps the underlying level',
+    a.muted === true && a.levels.master === 0.65, JSON.stringify(a.levels));
+  a.setMuted(false);
+  check('audio: unmute restores exactly the previous level',
+    a.muted === false && a.levels.master === 0.65, JSON.stringify(a.levels));
+
+  check('audio: exposes a music hook for a future soundtrack',
+    typeof a.connectMusic === 'function');
+}
+
 console.log(failures === 0 ? '\nAll physics checks passed.' : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

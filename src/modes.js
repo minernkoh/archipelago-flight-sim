@@ -151,8 +151,12 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
 
   const applySettingsEverywhere = () => {
     audio.setVolume(settings.volume);
+    audio.setSfxVolume?.(settings.sfxVolume);
+    audio.setMusicVolume?.(settings.musicVolume);
+    audio.setMuted?.(settings.muted);
     controls.applySettings(settings);
     world.setPixelRatioCap?.(settings.pixelRatioCap);
+    world.setQuality?.(settings.quality);   // v6: draw distance + shadows
     atcVoice.setEnabled(settings.atc);
     atc?.setArmed(settings.atc);
     if (!settings.atc) silenceAtc();

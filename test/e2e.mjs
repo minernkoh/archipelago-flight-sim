@@ -574,6 +574,18 @@ check('settings screen opens from the menu', setShown.shown && setShown.rows >= 
 await page.evaluate(() => document.querySelector('#settings [data-setting="invertPitch"]').click());
 const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem('archipelago.settings') || '{}'));
 check('settings edit persists to archipelago.settings', persisted.invertPitch === true, JSON.stringify(persisted));
+
+// Separate audio buses + a mute switch, all persisted.
+const audioRows = await page.evaluate(() => ['muted', 'volume', 'sfxVolume', 'musicVolume']
+  .filter(id => !!document.querySelector(`#settings [data-setting="${id}"]`)));
+check('settings expose master / sfx / music / mute separately',
+  audioRows.length === 4, audioRows.join(','));
+await page.evaluate(() => document.querySelector('#settings [data-setting="muted"]').click());
+const muted = await page.evaluate(() => JSON.parse(localStorage.getItem('archipelago.settings') || '{}'));
+check('MUTE persists and leaves the levels intact',
+  muted.muted === true && muted.volume === 0.5 && muted.sfxVolume === 1,
+  JSON.stringify({ muted: muted.muted, volume: muted.volume, sfx: muted.sfxVolume }));
+await page.evaluate(() => document.querySelector('#settings [data-setting="muted"]').click()); // unmute
 await page.evaluate(() => document.querySelector('#settings [data-setting="invertPitch"]').click()); // restore
 await page.evaluate(() => document.querySelector('#settings [data-act="menu"]').click());
 // Mouse-fly: hold RMB and drag up -> elevator goes positive (nose up). This is
