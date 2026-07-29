@@ -80,7 +80,19 @@ export function createEnvironment(scene, renderer) {
   const sun = new THREE.DirectionalLight(tod.sunColor.clone(), tod.sunI);
   sun.position.copy(tod.sunDir).multiplyScalar(1000);
   const ambient = new THREE.AmbientLight(tod.ambient.clone(), tod.ambientI);
-  scene.add(hemi, sun, ambient);
+  // v6 shadows: a tight orthographic box that rides with the aircraft. Only
+  // the fine terrain tier and the scenery receive; the box is deliberately
+  // small (SHADOW_HALF metres) so 1-2k of map covers the area you can actually
+  // judge height against, which is what a shadow is for on approach.
+  const SHADOW_HALF = 140;
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(1024, 1024);
+  sun.shadow.camera.left = -SHADOW_HALF; sun.shadow.camera.right = SHADOW_HALF;
+  sun.shadow.camera.top = SHADOW_HALF; sun.shadow.camera.bottom = -SHADOW_HALF;
+  sun.shadow.camera.near = 1; sun.shadow.camera.far = 1600;
+  sun.shadow.bias = -0.0012;
+  sun.shadow.normalBias = 0.6;
+  scene.add(hemi, sun, sun.target, ambient);
 
   // Landing light: a single spotlight cast forward from the aircraft nose.
   // No shadow map (cheap). Off (intensity 0) except at night while flying.
@@ -278,9 +290,20 @@ export function createEnvironment(scene, renderer) {
     // the map's night-content hooks (window glow toggle + beacon meshes).
     onMapLoaded(map, sceneryGroup) {
       scenery = sceneryGroup || null;
+      // Airfield dressing casts and receives, so hangars and the tower read as
+      // solid rather than pasted on (v6 shadows).
+      scenery?.traverse(o => {
+        if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; }
+      });
       buildRunwayLights(map);
       applyNightContent();
     },
+    /** Quality knob: real shadow maps on/off (the blob decal is the fallback). */
+    setShadows(on) {
+      sun.castShadow = !!on;
+      if (!on) sun.position.copy(tod.sunDir).multiplyScalar(1000);
+    },
+    get shadowsOn() { return sun.castShadow; },
     setTimeOfDay,
     // DOM/state probe for tests: string + darkening scalars (not pixels).
     state() {
@@ -326,14 +349,27 @@ export function createEnvironment(scene, renderer) {
         for (const b of scenery.userData.beacons) if (b.material) b.material.emissiveIntensity = pulse;
       }
 
+      // Keep the shadow box on the aircraft; the light stays a direction, so
+      // move both the source and its target together.
+      if (sun.castShadow) {
+        sun.target.position.set(ac.pos.x, 0, ac.pos.z);
+        sun.target.updateMatrixWorld();
+        sun.position.set(
+          ac.pos.x + tod.sunDir.x * 900,
+          tod.sunDir.y * 900,
+          ac.pos.z + tod.sunDir.z * 900);
+      }
+
       const gy = groundFn(ac.pos.x, ac.pos.z);
       shadow.position.set(ac.pos.x, Math.max(gy, 0) + 0.15, ac.pos.z);
       const agl = Math.max(ac.pos.y - gy, 0);
       const k = Math.max(0, 1 - agl / 120);
+      // The painted ellipse is the fallback for when real shadows are off; with
+      // shadow maps on it would double up under the aircraft.
       shadow.material.opacity = (tod.night ? 0.18 : 0.32) * k;
       const s = 1 + agl * 0.02;
       shadow.scale.set(s * 1.35, s, s);
-      shadow.visible = k > 0.01;
+      shadow.visible = !sun.castShadow && k > 0.01;
     },
   };
 }

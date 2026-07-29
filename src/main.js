@@ -35,6 +35,11 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
+// v6: real shadows near the aircraft. The shadow camera is a small box that
+// follows the plane (see environment.js) — a map-wide one would spend all its
+// resolution on terrain nobody is looking at.
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -50,6 +55,9 @@ window.addEventListener('resize', () => {
 const env = createEnvironment(scene, renderer);
 let currentMap = archipelagoMap;
 let terrain = createTerrain(scene, currentMap);
+// Survives map swaps: loadMap builds a fresh streamer, which would otherwise
+// come back with the coarse tier on regardless of the user's quality setting.
+let qualityHigh = true;
 let scenery = currentMap.createScenery(scene);
 let rings = createRings(scene, { course: currentMap.raceCourse, heightFn: currentMap.height });
 rings.show(false);
@@ -102,6 +110,7 @@ async function loadMap(map) {
     if (map.elevationOffline) hud.message('Elevation tiles offline — flying a flat world.', 5000);
   }
   terrain = createTerrain(scene, map);
+  terrain.setFarTier(qualityHigh);   // a fresh streamer defaults to on — re-apply the setting
   scenery = map.createScenery(scene);
   rings = createRings(scene, { course: map.raceCourse, heightFn: map.height, finalDir: map.finalGateDir });
   rings.show(false);
@@ -128,6 +137,7 @@ function setAircraft(craft) {
   currentCraft = craft;
   if (plane) { scene.remove(plane.group); disposeGroup(plane.group); }
   plane = craft.buildMesh();
+  plane.group.traverse(o => { if (o.isMesh) o.castShadow = true; });   // v6 shadows
   scene.add(plane.group);
   ac.p = { ...craft.params };
   controls.setRates(craft.params);
@@ -197,6 +207,14 @@ const world = {
   aircraft: CATALOG,
   // Settings hook: cap the render pixel ratio (high-DPI perf knob).
   setPixelRatioCap(cap) { renderer.setPixelRatio(Math.min(window.devicePixelRatio, cap)); },
+  // v6 quality knob: HIGH = coarse terrain tier out to 9 km + real shadows.
+  // LOW is the pre-v6 view for weaker GPUs.
+  setQuality(q) {
+    qualityHigh = q !== 'low';
+    terrain.setFarTier(qualityHigh);
+    env.setShadows(qualityHigh);
+    renderer.shadowMap.enabled = qualityHigh;
+  },
   async apply(sel) {
     await loadMap(MAPS.find(m => m.id === sel.map) || MAPS[0]);
     env.setTimeOfDay(sel.time || 'day');
@@ -262,6 +280,7 @@ controls.on('ap-nav', () => { if (flying()) autopilot.toggleNav(ac); });
 controls.on('ap-wing', () => { if (flying()) autopilot.toggleWing(ac); });
 
 window.__sim = { ac, controls, game, world, autopilot, env, windField, minimap,
+  terrainCounts: () => terrain.counts(),
   get rings() { return gauntletRings || rings; }, get map() { return currentMap; } };
 
 // --- boot: pre-build terrain around the spawn, then reveal the menu ---
@@ -358,7 +377,10 @@ function frame(now) {
   }
 
   if (!mapLoading) terrain.update(ac.pos.x, ac.pos.z);
-  if (!mapLoading && currentMap.prefetch) currentMap.prefetch(ac.pos.x, ac.pos.z, 2500);
+  // v6: the coarse terrain tier samples out to 9 km, so tiles must be fetched
+  // that far ahead or distant real terrain bakes as flat sea. Cheap: at z12 a
+  // tile spans ~7-10 km, so this is single digits of tiles (TILE_CAP is 220).
+  if (!mapLoading && currentMap.prefetch) currentMap.prefetch(ac.pos.x, ac.pos.z, 9500);
   env.update(ac, dt, elapsed);
   camRig.update(ac, dt);
   if (isFlying) {
