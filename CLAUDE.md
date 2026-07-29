@@ -24,6 +24,7 @@ ring race, and a 7-lesson flight school.
 
 - **Headless Chrome starves rAF** unpredictably; the main loop has a 250 ms setTimeout watchdog with a generation ticket (see main.js `schedule()`). Never drive boot/pre-gen loops with rAF.
 - **Never use page.click/page.keyboard in tests** — headless input dispatch waits on compositor frames and hangs when the compositor stalls. Dispatch DOM events via `page.evaluate` (see test/e2e.mjs helpers).
+- **In e2e, always `press(k)` (keydown+keyup), never a bare `keyEv('keydown', …)`** — controls.js tracks held keys, so a keydown without its keyup leaves that axis stuck for the REST of the suite. A stray held ArrowDown in a menu test cancelled the ArrowUp during rotation and rolled the aircraft off the runway, failing "airborne and climbing", "HUD live" and the minimap check ~40 lines later. `hold()`/`release()` exist for deliberately-held keys.
 - Puppeteer launches need `--enable-unsafe-swiftshader` and generous `protocolTimeout`; screenshots may fail when the compositor is stalled (wrap in try/catch).
 - Physics runs at fixed 120 Hz with dt clamp 0.25 s; sim-time ≈ wall-time only if the frame loop ticks ≥4 fps.
 - Elevator authority: `Cmde` ≈ 0.35–0.55 in these normalized units; higher over-rotates and tail-strikes.
