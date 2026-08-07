@@ -101,3 +101,19 @@ export function updateDamage(ac, dt) {
     ac.crashReason = ac.damageCause || 'overstress';
   }
 }
+
+// Landing-grade bands, scaled to the airframe's own gear limit rather than one
+// fleet-wide set. The bands were 130/300/500 fpm for everything, from a 950 kg
+// aerobat to a 200-tonne widebody — and the crash line (crashSink) is 709 fpm
+// on the Skyhawk, so "HARD ARRIVAL" only ever occupied 500-709. The fractions
+// below reproduce 128/298/496 for the C172, i.e. the numbers that were there,
+// while scaling sensibly for everything else.
+export function landingBands(p) {
+  const limitFpm = (p.crashSink ?? 3.6) * 196.85;
+  return {
+    greased: Math.round(0.18 * limitFpm),
+    smooth: Math.round(0.42 * limitFpm),
+    firm: Math.round(0.70 * limitFpm),
+    limitFpm: Math.round(limitFpm),
+  };
+}

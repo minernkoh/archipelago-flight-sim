@@ -1,11 +1,11 @@
 // Headless sanity checks for the flight model. Run: node test/physics.test.js
 import { createAircraft, step, PARAMS, attitude, KT, RHO0, G,
-         airDensity, failSystem, resetSystems, liftCoeff } from '../src/physics/flightModel.js';
+         airDensity, failSystem, resetSystems, liftCoeff, FT } from '../src/physics/flightModel.js';
 import { v3, qAxisAngle } from '../src/physics/vecmath.js';
 import { comfortFromRates, createComfortMeter, createManeuverDetector,
          buildGauntletCourse, GAUNTLET } from '../src/activities.js';
 import { emptyLogbook, accumulate, computeBadges } from '../src/logbook.js';
-import { vSpeeds } from '../src/physics/envelope.js';
+import { vSpeeds, landingBands } from '../src/physics/envelope.js';
 
 const DT = 1 / 120;
 const flat = { groundHeight: () => 0, isRunway: () => true };
@@ -756,6 +756,64 @@ import { createWind, WEATHER } from '../src/physics/wind.js';
   check('power-off best glide matches the POH 9.0 at 68 kt',
     off > 8.5 && off < 9.5 && vbg(p.CD0 + p.engine.windmillCD) > 64 && vbg(p.CD0 + p.engine.windmillCD) < 72,
     `${off.toFixed(1)}:1 at ${vbg(p.CD0 + p.engine.windmillCD).toFixed(0)} kt`);
+}
+
+// ---- 18h. Climb performance, and the number the flight school teaches ----
+// Measured as total height gained over many phugoid cycles. Instantaneous VS
+// is meaningless here — the phugoid is lightly damped with a ~25 s period, so
+// short runs read anything from +3466 to -6697 fpm on the same aircraft.
+{
+  const sustainedRoc = (elev, secs = 150) => {
+    const ac = createAircraft({ pos: v3(0, 1500, 0), vel: v3(50, 0, 0) });
+    ac.spool = 1;
+    const y0 = ac.pos.y;
+    let kSum = 0, n = 0;
+    fly(ac, (a) => ctl({ throttle: 1, elevator: elev,
+      aileron: Math.max(-1, Math.min(1, -attitude(a).roll * 3 - a.omega.x * 0.6)) }),
+      secs, flat, a => { kSum += a.iasIndicated * KT; n++; });
+    if (ac.crashed) return null;
+    return { fpm: ((ac.pos.y - y0) / secs) * FT * 60, kt: kSum / n };
+  };
+  let best = null;
+  for (const e of [0.00, 0.06, 0.12]) {
+    const r = sustainedRoc(e);
+    if (r && (!best || r.fpm > best.fpm)) best = r;
+  }
+  check('c172 best rate of climb is 600-800 fpm', best && best.fpm > 600 && best.fpm < 800,
+    best ? `${best.fpm.toFixed(0)} fpm at ${best.kt.toFixed(0)} kt` : 'crashed');
+  // training.js lesson 2 tells the student "hold 70-85 kt climbing — that's Vy".
+  check('Vy falls inside the 70-85 kt band lesson 2 teaches',
+    best && best.kt > 70 && best.kt < 85, best ? `${best.kt.toFixed(0)} kt` : 'n/a');
+}
+
+// ---- 18i. Landing grades scale to each airframe's own gear ----
+// The bands were a fleet-wide 130/300/500 fpm, from a 950 kg aerobat to a
+// 200-tonne widebody, while the gear actually gives out at 630-886 fpm
+// depending on the type.
+{
+  for (const id of Object.keys(AIRCRAFT)) {
+    const b = landingBands(AIRCRAFT[id]);
+    check(`${id} landing bands are ordered and below its gear limit`,
+      b.greased < b.smooth && b.smooth < b.firm && b.firm < b.limitFpm,
+      `${b.greased}/${b.smooth}/${b.firm} fpm, gear ${b.limitFpm}`);
+  }
+  const c = landingBands(AIRCRAFT.c172);
+  check('the c172 keeps the bands it always had', Math.abs(c.greased - 130) < 6
+    && Math.abs(c.smooth - 300) < 6 && Math.abs(c.firm - 500) < 6,
+    `${c.greased}/${c.smooth}/${c.firm} vs the old 130/300/500`);
+}
+
+// ---- 18j. Hornet roll is set by aerodynamics, not by the G softener ----
+{
+  const peak = (kts, alt) => {
+    const r = createAircraft({ params: AIRCRAFT.hornet, pos: v3(0, alt, 0), vel: v3(kts / KT, 0, 0) });
+    r.spool = 1;
+    let pk = 0;
+    fly(r, ctl({ throttle: 1, aileron: 1 }), 2.5, flat, a => { pk = Math.max(pk, Math.abs(a.omega.x)); });
+    return pk * 180 / Math.PI;
+  };
+  const mid = peak(350, 4000);
+  check('hornet rolls 170-230 deg/s at 350 kt', mid > 170 && mid < 230, `${mid.toFixed(0)} deg/s`);
 }
 
 // ---- 19. C172 trimmed cruise is byte-identical (softening must not touch it) ----

@@ -269,8 +269,13 @@ export function step(ac, controls, env, dt) {
   let ail = controls.aileron;
   let rud = controls.rudder;
   if (p.controlSoften) {
-    const soft = Math.pow(Math.min(1, p.controlSoften.qRef / qbar), p.controlSoften.exp ?? 0.7);
-    elev *= soft; ail *= soft; rud *= soft;
+    const r = Math.min(1, p.controlSoften.qRef / qbar);
+    const soft = Math.pow(r, p.controlSoften.exp ?? 0.7);
+    // Roll gets its own, gentler exponent. The softener is there to bound G,
+    // which is an elevator problem; applying the same curve to aileron left
+    // the Hornet rolling 163 deg/s against a real ~220 at 350 kt.
+    const softAil = Math.pow(r, p.controlSoften.ailExp ?? p.controlSoften.exp ?? 0.7);
+    elev *= soft; rud *= soft; ail *= softAil;
   }
 
   // Propwash: the tail of a single-engine prop sits in the slipstream, so both

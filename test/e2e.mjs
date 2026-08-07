@@ -5,13 +5,13 @@
 // All input goes through evaluate-dispatched DOM events, NOT page.click /
 // page.keyboard: headless input dispatch waits on compositor frames, and the
 // SwiftShader compositor stalls unpredictably. DOM events always deliver.
-import puppeteer from 'puppeteer';
+import { launch } from './browser.mjs';
 import { mkdirSync } from 'fs';
 
 const SHOTS = process.env.SHOTS_DIR || 'test/shots';
 mkdirSync(SHOTS, { recursive: true });
 
-const browser = await puppeteer.launch({
+const browser = await launch({
   headless: true,
   protocolTimeout: 300000,
   args: ['--window-size=1440,900', '--enable-unsafe-swiftshader'],

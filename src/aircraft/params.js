@@ -117,7 +117,7 @@ export const AIRCRAFT = {
     sas: null,
     // Fly-by-wire q-scheduling: full deflection at 250 kt (qbar ~10,100 Pa) and
     // it softens further with speed, so 500-kt full aft stick stays sub-9 g.
-    controlSoften: { qRef: 10100 }, inputRate: 6.5,
+    controlSoften: { qRef: 10100, ailExp: 0.45 }, inputRate: 6.5,
     maxSpeed: 360, gearHeight: 2.2,
     // 700 KIAS / Mach 1.8 / +7.5 g. mach.crit drives the wave-drag rise that
     // stops it walking to Mach 1.54 in level flight at 500 m.

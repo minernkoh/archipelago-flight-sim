@@ -4,7 +4,7 @@
 import { resetOnRunway, setColdStart, KT, FT } from './physics/flightModel.js';
 import { createTour } from './tour.js';
 import { renderGlossary } from './groundschool.js';
-import { vSpeeds } from './physics/envelope.js';
+import { vSpeeds, landingBands } from './physics/envelope.js';
 import { runwayFrame } from './runwayUtil.js';
 import { createComfortMeter, createManeuverDetector, GAUNTLET } from './activities.js';
 import { loadLogbook, saveLogbook, accumulate, renderLogbook } from './logbook.js';
@@ -97,7 +97,7 @@ function crashWhy(snap, reason) {
     return `Structural failure at ${snap.speedKt} kt — past Vne the airframe can't carry the aerodynamic loads.`;
   switch (reason) {
     case 'hard impact':
-      return `Came down at ${snap.fpm} fpm — the gear gives out near 500 fpm, so flare to bleed the sink before touchdown.`;
+      return `Came down at ${snap.fpm} fpm — this gear gives out near ${snap.gearLimitFpm} fpm, so flare to bleed the sink before touchdown.`;
     case 'terrain impact':
       return 'Flew into solid ground or a building — watch AGL, not just the altitude tape, near high terrain and the city.';
     case 'prop strike':
@@ -646,6 +646,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
             aglFt: ac.agl * FT,
             fpm: Math.round(-ac.vel.y * FT * 60),
             gLimit: ac.p.limits?.gPos ?? 3.8,
+            gearLimitFpm: landingBands(ac.p).limitFpm,
           };
           fx?.crash(ac.pos, ac.vel); audio.thud();
         }
@@ -769,12 +770,14 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
         }
         if (sel.mode === 'free') {
           const { fpm, speedKt, onRunway } = ac.touchdown;
-          const grade = fpm <= 130 ? 'GREASED IT' : fpm <= 300 ? 'SMOOTH' : fpm <= 500 ? 'FIRM' : 'HARD ARRIVAL';
+          const b = landingBands(ac.p);
+          const grade = fpm <= b.greased ? 'GREASED IT' : fpm <= b.smooth ? 'SMOOTH'
+            : fpm <= b.firm ? 'FIRM' : 'HARD ARRIVAL';
           const coach = !onRunway
             ? 'Off-field — down safe, but aim for the pavement next time.'
-            : fpm <= 130 ? 'Textbook — the mains barely chirped.'
-            : fpm <= 300 ? 'Nicely flared. Keep bleeding speed before you touch.'
-            : fpm <= 500 ? 'A touch firm — start the flare a beat earlier.'
+            : fpm <= b.greased ? 'Textbook — the mains barely chirped.'
+            : fpm <= b.smooth ? 'Nicely flared. Keep bleeding speed before you touch.'
+            : fpm <= b.firm ? 'A touch firm — start the flare a beat earlier.'
             : 'Heavy — carry a little power into the flare to ease the sink.';
           // centerline offset only makes sense on the runway (computed via the
           // shared runwayFrame — valid on both maps' runway definitions).
