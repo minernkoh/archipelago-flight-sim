@@ -165,17 +165,28 @@ while (v < 33 && Date.now() - t0 < 60000) {
 check('accelerates to rotate speed (64 kt)', v >= 33, `${(v * 1.94).toFixed(0)} kt in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
 
 console.log('rotating…');
+// v6 gave the single-engine prop a real left-turning tendency (slipstream
+// swirl + P-factor), and made the stall bite. Two consequences for this
+// scripted takeoff, which used to fly itself:
+//  - the old 260 ms elevator pulses zoom-climbed it to 37 kt (below the 49 kt
+//    stall), where it now departs instead of mushing. Halved to 130 ms.
+//  - open-loop key pulses cannot hold a heading against the yaw: with no
+//    rudder it spirals left, and with rudder pulses it over-corrects hundreds
+//    of metres right. So engage the sim's own wing-leveler ('l') for the
+//    climb, which is what a pilot has it for. Switched off again below.
+await press('l');
 let air = null;
 const t1 = Date.now();
 while (Date.now() - t1 < 45000) {
   await hold('ArrowUp');
-  await settle(260);
+  await settle(130);
   await release('ArrowUp');
-  await settle(340);
+  await settle(470);
   air = await sim('({agl: __sim.ac.agl, v: __sim.ac.airspeed, crashed: __sim.ac.crashed, vs: __sim.ac.vel.y})');
   if (air.crashed || air.agl > 60) break;
 }
 await release('w');
+await press('l');   // wing-leveler back off before the rest of the suite
 check('airborne and climbing', !air.crashed && air.agl > 60 && air.vs > 0,
   `AGL ${air.agl.toFixed(0)} m, VS ${air.vs.toFixed(1)} m/s, ${(air.v * 1.94).toFixed(0)} kt`);
 // stabilize to safe cruise — the scripted zoom climb is near stall

@@ -94,7 +94,8 @@ export function createHUD() {
   const hdgNum = $('#hdg-num');
   const stThr = $('#st-thr'), thrBar = $('#thr-bar i'), stFlaps = $('#st-flaps'),
         stBrk = $('#st-brk'), stCam = $('#st-cam'), stTrim = $('#st-trim');
-  const annStall = $('#ann-stall'), annOver = $('#ann-over');
+  const annStall = $('#ann-stall'), annOver = $('#ann-over'), annWarn = $('#ann-warn');
+  let warnOn = false;   // stall-warning latch (hysteresis, see update())
   const raceEl = $('#race'), raceT = raceEl.querySelector('.t'),
         raceRings = raceEl.querySelector('.rings'), raceBest = raceEl.querySelector('.best');
   const msgEl = $('#msg');
@@ -269,8 +270,20 @@ export function createHUD() {
         stTrim.textContent = tr === 0 ? '0' : (tr > 0 ? `+${tr}` : `${tr}`);
         stTrim.classList.toggle('set', tr !== 0);
       }
+      // Amber STALL WARN leads the red STALL light by ~2.5 deg of angle of
+      // attack — the margin a real aural warning gives you. Hysteresis (arm at
+      // 0.045 rad, clear at 0.065) stops it flickering on the edge.
+      const margin = ac.alphaMargin ?? 1;
+      warnOn = ac.stalled ? false : (warnOn ? margin < 0.065 : margin < 0.045);
+      annWarn.classList.toggle('show', warnOn);
       annStall.classList.toggle('show', ac.stalled);
-      annOver.classList.toggle('show', ac.airspeed > ac.p.maxSpeed);
+      // Vne is an INDICATED speed. This used to compare true airspeed against
+      // it, so at altitude the light fired while the tape still read well
+      // under the limit. iasIndicated (not eas) on purpose: the annunciator is
+      // an instrument, so a failed pitot hides the overspeed from the pilot
+      // exactly as it would in the aircraft — while the airframe still breaks.
+      annOver.classList.toggle('show',
+        ac.iasIndicated > (ac.p.limits?.vne ?? ac.p.maxSpeed));
     },
   };
 }

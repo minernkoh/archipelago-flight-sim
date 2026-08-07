@@ -173,7 +173,12 @@ export function createTrainingSystem(deps) {
         done: () => !ac.stalled && ctrl.throttle > 0.9 && Math.abs(attitude(ac).roll) < 0.17,
         fail: () => {
           if (stallRefAlt === null) return null;
-          return (stallRefAlt - ac.pos.y) * FT > 300 ? 'Lost too much altitude recovering from the stall.' : null;
+          // 500 ft, re-measured against the v6 stall. The old 300 ft budget was
+          // set when a stalled wing kept flying — it mushed at 887 fpm and
+          // never dropped a wing. A prompt, correct recovery now costs ~200 ft
+          // and a slightly late one a good deal more, so 300 ft would fail
+          // students for handling the stall properly.
+          return (stallRefAlt - ac.pos.y) * FT > 500 ? 'Lost too much altitude recovering from the stall.' : null;
         },
         hint: "Push the nose down first — power alone won't fly you out of a stall.",
       },
