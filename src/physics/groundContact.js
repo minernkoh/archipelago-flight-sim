@@ -69,7 +69,7 @@ export function gearForces(ac, controls, env, dt) {
     const muLong = braking ? MU_BRAKE : MU_ROLL;
     const slopeLong = (braking ? 900 : 30) * massScale;
     const fLong = -clamp(slopeLong * vLong, -muLong * N, muLong * N);
-    const fLat = -clamp(4000 * massScale * vLat, -MU_SIDE * N, MU_SIDE * N);
+    const fLat = -clamp(20000 * massScale * vLat, -MU_SIDE * N, MU_SIDE * N);
 
     const F = v3(
       fwd.x * fLong + side.x * fLat,

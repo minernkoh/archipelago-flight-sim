@@ -14,6 +14,7 @@
 // See createPanel() below for the full API.
 
 import { KT, FT, attitude } from './physics/flightModel.js';
+import { vSpeeds } from './physics/envelope.js';
 
 const SVGNS = 'http://www.w3.org/2000/svg';
 const RAD2DEG = 180 / Math.PI;
@@ -90,20 +91,68 @@ function buildBezel(g, cx, cy, caption) {
   append(g, label(cx, cy, 0, R + 20, caption, 'ap-caption'));
 }
 
+// Point on the dial at `deg` from vertical (the same convention the needle's
+// rotate() uses), radius r.
+function dialXY(cx, cy, r, deg) {
+  const a = deg * Math.PI / 180;
+  return [cx + r * Math.sin(a), cy - r * Math.cos(a)];
+}
+// Arc as a stroked path. Deliberately NOT a clipped group: test/e2e.mjs finds
+// the attitude indicator with `#ap-sixpack g[clip-path]` and takes the FIRST
+// match, and the ASI is built before the AI — a clipped group here would
+// silently steal that check.
+function arcPath(cx, cy, r, deg0, deg1, cls) {
+  const [x0, y0] = dialXY(cx, cy, r, deg0);
+  const [x1, y1] = dialXY(cx, cy, r, deg1);
+  return svgEl('path', {
+    d: `M ${x0} ${y0} A ${r} ${r} 0 ${Math.abs(deg1 - deg0) > 180 ? 1 : 0} 1 ${x1} ${y1}`,
+    class: cls, fill: 'none',
+  });
+}
+
+// The ASI was a fixed 0-200 kt dial shared by all five aircraft — the Hornet
+// (600+ kt) and the Heavy both pegged it permanently — and it carried no
+// airspeed arcs at all, so nothing on the panel told you where the limits
+// were. Both are now driven per-aircraft from physics/envelope.js, the same
+// source the airframe limits themselves use.
 function buildASI(g, cx, cy) {
   buildBezel(g, cx, cy, 'ASI · KT');
-  const min = 0, max = 200, startDeg = -130, endDeg = 130;
-  const span = endDeg - startDeg;
-  const v2d = (v) => startDeg + (clamp(v, min, max) - min) / (max - min) * span;
-  for (let v = min; v <= max; v += 10) {
-    const deg = v2d(v);
-    const major = v % 20 === 0;
-    append(g, tickLine(cx, cy, deg, R - 4, R - (major ? 14 : 8), major ? 'ap-tick ap-tick-major' : 'ap-tick'));
-    if (major) append(g, label(cx, cy, deg, R - 24, String(v), 'ap-label'));
-  }
+  const startDeg = -130, endDeg = 130, span = endDeg - startDeg;
+  const marks = svgEl('g');            // ticks + labels, rebuilt on scale change
+  const arcs = svgEl('g');             // white/green/yellow arcs + Vne radial
+  append(g, arcs, marks);
   const needle = needleShape(cx, cy, R - 10, R * 0.22, 3.4, 'ap-needle');
   append(g, needle, svgEl('circle', { cx, cy, r: 6.5, class: 'ap-hub' }));
-  return (kt) => {
+
+  let max = 200, step = 10, curId = null;
+  const v2d = (v) => startDeg + clamp(v, 0, max) / max * span;
+
+  function rescale(p) {
+    max = p?.hud?.asiMaxKt ?? 200;
+    step = max <= 250 ? 10 : max <= 500 ? 25 : 50;
+    marks.textContent = ''; arcs.textContent = '';
+    for (let v = 0; v <= max; v += step) {
+      const deg = v2d(v), major = (v / step) % 2 === 0;
+      append(marks, tickLine(cx, cy, deg, R - 4, R - (major ? 14 : 8),
+        major ? 'ap-tick ap-tick-major' : 'ap-tick'));
+      if (major) append(marks, label(cx, cy, deg, R - 24, String(v), 'ap-label'));
+    }
+    if (!p) return;
+    const s = vSpeeds(p);
+    const ar = R - 7;
+    // White: full-flap stall to Vfe — the speeds at which flaps may be out.
+    if (s.vfeKt) append(arcs, arcPath(cx, cy, ar - 7, v2d(s.vs0Kt), v2d(s.vfeKt), 'ap-arc-white'));
+    // Green: normal operating range, clean stall to Vno (or Vne without a Vno).
+    append(arcs, arcPath(cx, cy, ar, v2d(s.vs1Kt), v2d(s.vnoKt ?? s.vneKt), 'ap-arc-green'));
+    // Yellow: caution range, smooth air only.
+    if (s.vnoKt) append(arcs, arcPath(cx, cy, ar, v2d(s.vnoKt), v2d(s.vneKt), 'ap-arc-yellow'));
+    // Red radial at Vne.
+    append(arcs, tickLine(cx, cy, v2d(s.vneKt), R - 3, R - 17, 'ap-vne'));
+  }
+  rescale(null);
+
+  return (kt, p) => {
+    if (p && p.id !== curId) { curId = p.id; rescale(p); }
     needle.setAttribute('transform', `rotate(${v2d(safeNum(kt, 0))} ${cx} ${cy})`);
   };
 }
@@ -292,6 +341,11 @@ const STYLE = `
 }
 .ap-tick { stroke: var(--ink-dim, #9aa7b2); stroke-width: 1; }
 .ap-tick-major { stroke: var(--ink, #e8edf2); stroke-width: 1.6; }
+/* ASI airspeed arcs — the panel had none, so nothing showed you the limits. */
+.ap-arc-white { stroke: #e8edf2; stroke-width: 3.2; opacity: .85; }
+.ap-arc-green { stroke: #35c46a; stroke-width: 3.6; }
+.ap-arc-yellow { stroke: var(--amber, #ffb300); stroke-width: 3.6; }
+.ap-vne { stroke: var(--warn, #ff3b30); stroke-width: 3.4; }
 .ap-label {
   font-family: "B612 Mono", ui-monospace, monospace; font-size: 10px;
   fill: var(--ink, #e8edf2);
@@ -505,7 +559,7 @@ export function createPanel() {
       // ac.q missing/malformed on this call — hold last-known display attitude at level/0.
     }
 
-    updaters.asi(iasKt);
+    updaters.asi(iasKt, ac.p);
     updaters.attitude(pitch, roll);
     updaters.altimeter(altFt);
     updaters.turnCoord(turnRateDegPerSec, betaRad);

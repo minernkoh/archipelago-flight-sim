@@ -10,12 +10,17 @@ import {
   qIdent, qMul, qRot, qRotInv, qIntegrate, qAxisAngle, clamp,
 } from './vecmath.js';
 import { gearForces } from './groundContact.js';
+import { machDragRise, flapBlowback, updateDamage, speedOfSound } from './envelope.js';
 import { AIRCRAFT } from '../aircraft/params.js';
 
 export const G = 9.81;
 export const RHO0 = 1.225;          // sea-level air density kg/m^3
 export const KT = 1.94384;          // m/s -> knots
 export const FT = 3.28084;          // m -> feet
+// See the spanwise gust sampling in step(); tuned so the "gusty" preset gives
+// the continuous 5-15 deg bank corrections that flying a light aircraft in
+// wind actually involves.
+const GUST_ROLL_GAIN = 8;
 
 // The C172 preset doubles as the default aircraft and the v1-compat export.
 export const PARAMS = AIRCRAFT.c172;
@@ -67,6 +72,7 @@ export function createAircraft(opts = {}) {
     fuelKg: p.fuel ? p.fuel.capacityKg : Infinity,
     fuelFrac: 1,
     iasIndicated: 0,
+    eas: 0, mach: 0, damage: 0, damageCause: '', flapsEff: 0,
     systems: { engine: true, electrical: true, hydraulics: true, gear: true, pitot: true },
     // v5-R3: piston start/electrical state (only exercised for p.startup aircraft).
     // Defaults are ready-to-fly so every existing caller spawns hot.
@@ -155,6 +161,25 @@ export function step(ac, controls, env, dt) {
   const beta = Math.asin(clamp(vBody.z / V, -1, 1));
   const qbar = 0.5 * rho * V * V;
   const qS = qbar * p.wingArea;
+  // Equivalent airspeed and Mach drive every structural limit below. EAS is
+  // computed unconditionally (unlike iasIndicated, which freezes on a pitot
+  // failure) because the airframe feels the load whether the gauge shows it.
+  const densityRatio0 = rho / RHO0;
+  ac.eas = V * Math.sqrt(densityRatio0);
+  ac.mach = V / speedOfSound(ac.pos.y);
+  // Above Vfe the flaps blow back toward retracted rather than failing — the
+  // aero reads flapsEff from here on, never controls.flaps. Exactly identity
+  // at or below Vfe, so nothing in normal flight changes.
+  const flapsEff = flapBlowback(ac.eas, controls.flaps, p);
+  ac.flapsEff = flapsEff;
+  // A stopped or windmilling propeller is a large flat-plate drag source. It
+  // is why the POH glide (9.0 : 1) is so much worse than the clean airframe
+  // (10.8 : 1) — modelling them as one number was what forced the old 12.4.
+  const eng0 = p.engine;
+  const windmillFrac = eng0.type === 'prop'
+    ? (ac.engineFailed || (p.startup && !ac.engineRunning)
+        ? 1 : Math.max(0, 1 - controls.throttle / 0.25))
+    : 0;
 
   // --- Ground effect: reduce induced drag near the surface ---
   // Terrain-only height: overflying a rooftop shouldn't fake ground effect.
@@ -167,9 +192,24 @@ export function step(ac, controls, env, dt) {
   const geLift = 1 + 0.05 * clamp(1 - hb, 0, 1);
 
   // --- Aerodynamic forces (computed in body frame) ---
-  const CL = liftCoeff(alpha, controls.flaps, p);
-  const CD = p.CD0 + controls.flaps * p.flapCD + p.kInduced * CL * CL * geFactor
-           + 0.06 * Math.abs(beta);                    // sideslip drag
+  const CL = liftCoeff(alpha, flapsEff, p);
+  // Angle of attack past the stall break. BOTH post-stall terms (separation
+  // drag here, roll-damping reversal below) are built on `sep` and are
+  // provably zero at or below the break, so nothing in normal flight — the
+  // trimmed-cruise state hash included — ever sees them.
+  const aStall = p.alphaStall + p.flapStallShift * flapsEff;
+  const sep = Math.max(0, Math.abs(alpha) - aStall);
+  // A separated wing behaves like a flat plate, CD climbing toward
+  // 2*sin^2(alpha). Without this the polar stayed clean past the break (CD
+  // ~0.10 at 24 deg alpha), so a stalled aircraft kept most of its lift, paid
+  // almost no drag penalty and could mush indefinitely at 900 fpm instead of
+  // falling out of the sky. Fully separated ~7 deg past the break.
+  const sepBlend = clamp(sep / 0.12, 0, 1);
+  const CD = p.CD0 + flapsEff * p.flapCD + p.kInduced * CL * CL * geFactor
+           + 0.06 * Math.abs(beta)                     // sideslip drag
+           + sepBlend * (p.CDstall ?? 2.0) * Math.sin(alpha) ** 2
+           + machDragRise(ac.mach, p)    // transonic wave drag; zero below Mcrit
+           + (eng0.windmillCD ?? 0) * windmillFrac;   // stopped/windmilling prop
   const wHat = vScale(vBody, 1 / V);                   // direction of motion (body)
   let side = vCross(wHat, v3(0, 1, 0));                // spanwise unit vector
   side = vLen(side) > 1e-4 ? vNorm(side) : v3(0, 0, 1);
@@ -218,7 +258,7 @@ export function step(ac, controls, env, dt) {
   const pr = ac.omega.x, yr = ac.omega.y, qr = ac.omega.z; // roll, yaw, pitch rates
   const V2 = Math.max(V, 8);                                // control authority floor
   let stallMoment = 0;
-  if (alpha > p.alphaStall + p.flapStallShift * controls.flaps) stallMoment = -0.35 * (alpha - p.alphaStall);
+  if (alpha > aStall) stallMoment = -0.35 * (alpha - p.alphaStall);
 
   // Control-authority softener (fly-by-wire q-scheduling): fast jets scale their
   // deflections down as dynamic pressure climbs past a reference so full stick at
@@ -229,25 +269,159 @@ export function step(ac, controls, env, dt) {
   let ail = controls.aileron;
   let rud = controls.rudder;
   if (p.controlSoften) {
-    const soft = Math.pow(Math.min(1, p.controlSoften.qRef / qbar), p.controlSoften.exp ?? 0.7);
-    elev *= soft; ail *= soft; rud *= soft;
+    const r = Math.min(1, p.controlSoften.qRef / qbar);
+    const soft = Math.pow(r, p.controlSoften.exp ?? 0.7);
+    // Roll gets its own, gentler exponent. The softener is there to bound G,
+    // which is an elevator problem; applying the same curve to aileron left
+    // the Hornet rolling 163 deg/s against a real ~220 at 350 kt.
+    const softAil = Math.pow(r, p.controlSoften.ailExp ?? p.controlSoften.exp ?? 0.7);
+    elev *= soft; rud *= soft; ail *= softAil;
   }
 
-  // Pitch about +z (positive = nose up)
-  const Cm = p.Cm0 + p.Cmalpha * alpha + p.Cmq * (qr * c / (2 * V2))
-           + p.Cmde * elev
-           + p.CmFlap * controls.flaps + stallMoment;
+  // Propwash: the tail of a single-engine prop sits in the slipstream, so both
+  // elevator authority and pitch damping rise with power and fall away in the
+  // glide. Capped, because the ratio diverges at the low-speed floor and an
+  // uncapped value makes the elevator absurd on the takeoff roll.
+  // Capped at 1.0, not 2.5: qWash scales Cmde, and CLAUDE.md's hard-won note
+  // is that effective Cmde above ~0.55 over-rotates and strikes the tail. At
+  // washFrac 0.20 and a 2.5 cap the C172's 0.50 became 0.72 and every takeoff
+  // ended in a wing strike after rotation.
+  const qWash = eng.type === 'prop' && p.washFrac
+    ? 1 + p.washFrac * Math.min(1.0, 2 * thrust / (rho * (eng.discArea ?? 4.6) * Math.max(V, 8) ** 2))
+    : 1;
+  // Pitch about +z (positive = nose up). CmThrust is the nose-up moment that
+  // comes with the slipstream itself — this whole coupling was missing, so
+  // power changes did not move the nose at all.
+  const Cm = p.Cm0 + p.Cmalpha * alpha + p.Cmq * qWash * (qr * c / (2 * V2))
+           + p.Cmde * qWash * elev
+           + p.CmFlap * flapsEff + stallMoment
+           + (p.CmThrust ?? 0) * (qWash - 1);
   // Roll about +x (positive = roll right). Aileron + = roll right.
-  const Cl = p.Clbeta * beta + p.Clp * (pr * b / (2 * V2)) + p.Clda * ail
-           + p.Clr * (-yr * b / (2 * V2));
+  //
+  // Roll damping is evaluated as TWO WING STATIONS on the real lift curve
+  // rather than the single linear `Clp * (pb/2V)` term, because a rolling
+  // stalled wing is the whole mechanism behind autorotation: the down-going
+  // wing sits at a higher local alpha, and once it is past the break it loses
+  // lift while the up-going wing gains it, so damping first collapses and then
+  // goes positive. That is a spin. The old linear term could not represent it,
+  // which is why the stall was perfectly symmetric — measured roll 0.0 deg.
+  //
+  // Below the stall this is NOT an approximation of the old model, it IS the
+  // old model: in the linear range clL - clR = -2*CLalpha*dA exactly, so
+  // Cl_roll = -CLalpha*pr*rEff/(4*V2), and substituting rEff collapses it to
+  // Clp*pr*b/(2*V2), term for term. That identity is what keeps normal
+  // handling and the trimmed-cruise state hash untouched, and it is asserted
+  // to 1e-12 in the physics suite.
+  //
+  // rEff is derived from Clp, not tuned: it is the spanwise station where the
+  // strip pair reproduces the stored roll-damping derivative. The 1/8 is
+  // textbook strip theory — two half-wings of area S/2 acting at +-b/4.
+  const rEff = -2 * p.Clp * b / p.CLalpha;
+  // A gust that differs across the span tilts the aircraft, and it does it
+  // through the same two stations as the roll damping — so it inherits the
+  // post-stall nonlinearity and CL saturation for free, with the right sign.
+  // The wind used to be sampled once at the CG, so both wings always saw
+  // identical air and turbulence could not roll you at all: hands-off in the
+  // "gusty" 16G28 preset the total bank excursion was 5 degrees.
+  //
+  // The two samples are averaged nowhere — only their DIFFERENCE is used, and
+  // the translational aerodynamics above still use the single CG sample. A
+  // uniform wind field therefore contributes exactly zero here, which is what
+  // keeps the airspeed/groundspeed split test structurally immune.
+  let dAGust = 0;
+  if (env.wind) {
+    // Sampled at the WINGTIPS, not at rEff: a 1.9 m half-span sample on an
+    // 11 m wing barely separates the two points, so the field looked uniform
+    // whatever its content. Scaling the result back by rEff/(b/2) makes this
+    // exactly equivalent for a linear gust gradient while capturing the real
+    // spanwise structure of a non-linear one.
+    const half = b / 2;
+    const spanW = qRot(ac.q, v3(0, 0, half));
+    const wR = env.wind(ac.pos.x + spanW.x, ac.pos.y + spanW.y, ac.pos.z + spanW.z);
+    const wL = env.wind(ac.pos.x - spanW.x, ac.pos.y - spanW.y, ac.pos.z - spanW.z);
+    // GUST_ROLL_GAIN compensates for the wind field being a smooth
+    // interpolated noise function: real turbulence carries far more energy at
+    // span scale than value noise does, so the raw two-point differential
+    // comes out at only ~7% of full aileron at its peak and the aircraft
+    // barely moves. The gain lives HERE, on the differential alone, and
+    // deliberately not on the wind field itself — raising the field amplitude
+    // to get the same roll would have doubled the vertical gust loading (g
+    // swings of 0.0-2.4) to buy a couple of degrees of bank.
+    dAGust = qRotInv(ac.q, vSub(wR, wL)).y / (2 * V2) * (rEff / half) * GUST_ROLL_GAIN;
+  }
+  const dA = pr * rEff / V2 + dAGust;               // local alpha increment, right wing
+  const clR = liftCoeff(alpha + dA, flapsEff, p);
+  const clL = liftCoeff(alpha - dA, flapsEff, p);
+  const ClRoll = (clL - clR) / 8;
+  // No real wing stalls perfectly symmetrically — rigging tolerance and the
+  // propeller slipstream mean one wing always lets go a fraction before the
+  // other, and which one is a fixed property of the airframe. The strip pair
+  // above is symmetric at zero roll rate, so it needs something to amplify;
+  // without a seed the aircraft just mushed wings-level forever at idle power.
+  // Negative drops the LEFT wing, matching slipstream and torque on a single
+  // prop. Gated on sepBlend, so it is exactly zero in normal flight.
+  const Cl = p.Clbeta * beta + ClRoll + p.Clda * ail
+           + p.Clr * (-yr * b / (2 * V2))
+           + (p.stallAsym ?? 0) * sepBlend;
   // Yaw about +y (positive = nose LEFT). Rudder + = nose right -> negative Cn_y.
   // CnAdverse: rolling right drags the nose left (adverse yaw) -> positive M.y.
-  const CnAero = p.Cnbeta * beta + p.Cndr * rud - p.CnAdverse * ail;
-  const CnY = -CnAero + p.Cnr * (yr * b / (2 * V2)); // Cnr < 0 opposes yaw rate
-  // Prop left-turning tendency: nose left at high power / low speed.
-  const propYaw = eng.type === 'prop'
-    ? 0.004 * ac.spool * eng.staticThrust * b / Math.max(V, 15)
+  // Pro-spin yaw: past the break the dropping wing's drag is dominated by the
+  // separation term, so the same two stations give the drag differential that
+  // yaws the nose toward the low wing and sustains the rotation. Uses the same
+  // sepBlend gate, so it contributes exactly nothing below the stall.
+  const sepAt = (a) => clamp((Math.max(0, Math.abs(a) - aStall)) / 0.12, 0, 1)
+                     * (p.CDstall ?? 2.0) * Math.sin(a) ** 2;
+  const stallYaw = sepBlend > 0
+    ? (p.stallYawGain ?? 0.04) * (sepAt(alpha + dA) - sepAt(alpha - dA))
     : 0;
+  // Rudder effectiveness fades as sideslip builds: at large slip the fin is
+  // working in its own wake and the rudder stalls. Without it the fleet's
+  // Cndr/Cnbeta ratio let full rudder settle at 39-57 deg of steady sideslip
+  // (a real forward slip in a light single is 15-20), which made the yaw axis
+  // feel loose and slips cartoonish. Faded here rather than by cutting Cndr,
+  // because Cndr also buys the crosswind de-crab that flight-school lesson 7
+  // grades — at the ~12 deg of slip that needs, 67% of rudder authority
+  // remains. rud is zero in the trimmed-cruise case, so this cannot move the
+  // state hash.
+  const rudFade = 1 / (1 + (Math.abs(beta) / (p.betaRudFade ?? 0.30)) ** 2);
+  const CnAero = p.Cnbeta * beta + p.Cndr * rud * rudFade - p.CnAdverse * ail + stallYaw;
+  const CnY = -CnAero + p.Cnr * (yr * b / (2 * V2)); // Cnr < 0 opposes yaw rate
+  // Left-turning tendency. The old single term produced ~6.6 N.m at full
+  // power against ~7,400 N.m of full rudder — 0.09% of rudder authority — so
+  // the aircraft tracked the centreline hands-off and no rudder was ever
+  // needed. Four real effects now, all sized against rudder authority:
+  //   swirl    slipstream corkscrewing onto the fin; strongest slow and loud
+  //   pFactor  descending blade bites harder at high alpha
+  //   torque   the airframe rolls against the propeller
+  //   gyro     precession: pitching the tail up yaws the nose left
+  const fx = p.propfx;
+  let propYaw = 0, gyroPitch = 0;
+  if (eng.type === 'prop' && fx) {
+    // Slipstream swirl falls away steeply with speed: an airframe is rigged
+    // (wing washout, offset fin) to fly straight at CRUISE, so what the pilot
+    // actually feels is a takeoff/climb/slow-flight effect. The falloff has to
+    // be this steep — a gentler 25/V left a standing 0.1 deg sideslip at
+    // cruise which the dihedral effect turned into 12 deg of bank in 20 s
+    // hands-off. Real aircraft answer that with rudder trim; this one has none.
+    const slow = Math.min(1, 18 / Math.max(V, 1)) ** 4;
+    const raw = fx.swirl * ac.thrust * slow * 1.25
+              + fx.pFactor * ac.thrust * Math.sin(Math.max(0, alpha)) * 0.5;
+    // Bounded by the rudder authority available to correct it — which is what
+    // certification actually guarantees. Unbounded, the couple exceeded full
+    // rudder below ~15 kt and swung the aircraft off the runway before it
+    // reached flying speed.
+    const rudderAuth = p.Cndr * qbar * p.wingArea * b;
+    propYaw = Math.min(raw, 0.05 * rudderAuth);
+    // NOTE: engine torque roll is deliberately NOT modelled. It is a constant
+    // rolling moment and this sim gives the player no aileron trim to hold
+    // against it — hands-off it just integrates into bank (17 deg in 20 s at
+    // cruise power) and rolls a wing into the ground shortly after rotation.
+    // The stall departure it would have seeded is handled deterministically by
+    // p.stallAsym instead. Revisit if an aileron-trim axis is ever added.
+    const h = (fx.gyroH ?? 0) * ac.rpmNorm;   // angular momentum of the prop, +x
+    gyroPitch = yr * h;                        // M.z += r*h
+    propYaw -= qr * h;                         // M.y -= q*h  (tail up -> nose left)
+  }
 
   // Stability augmentation (fly-by-wire): artificial damping/stiffness for
   // airframes with none of their own. Gated off at taxi speed so it doesn't
@@ -261,7 +435,7 @@ export function step(ac, controls, env, dt) {
   let M = v3(
     Cl * qbar * p.wingArea * b,
     (CnY + sasCn) * qbar * p.wingArea * b + propYaw,
-    (Cm + sasCm) * qbar * p.wingArea * c,
+    (Cm + sasCm) * qbar * p.wingArea * c + gyroPitch - thrust * (p.thrustArmY ?? 0),
   );
 
   // --- Gravity ---
@@ -287,9 +461,14 @@ export function step(ac, controls, env, dt) {
     (M.y - gyro.y) / I.y,
     (M.z - gyro.z) / I.z,
   ), dt));
-  // Numerical safety: bleed residual rates, hard-clamp spins
+  // Numerical safety: hard-clamp runaway rates so a departure can't blow the
+  // integrator up. This is a NUMERICAL guard, not a flight-model limit — it
+  // used to sit at 6 rad/s, which silently capped the Extra 300 (a real one
+  // rolls at ~7.3 rad/s) and the Hornet, so the clamp rather than aerodynamics
+  // was setting their maximum roll rate. 12 rad/s clears every legitimate rate
+  // in the fleet while still catching genuine divergence.
   const wl = vLen(ac.omega);
-  if (wl > 6) ac.omega = vScale(ac.omega, 6 / wl);
+  if (wl > 12) ac.omega = vScale(ac.omega, 12 / wl);
   ac.q = qIntegrate(ac.q, ac.omega, dt);
 
   // --- Telemetry ---
@@ -299,11 +478,18 @@ export function step(ac, controls, env, dt) {
   if (ac.systems.pitot !== false) ac.iasIndicated = V * Math.sqrt(densityRatio);
   ac.agl = agl;
   ac.groundSpeed = Math.hypot(ac.vel.x, ac.vel.z);
-  ac.stalled = V > 15 && alpha > (p.alphaStall + p.flapStallShift * controls.flaps) && !ac.onGround;
+  ac.stalled = V > 15 && alpha > aStall && !ac.onGround;
+  // How much angle of attack is left before the break. Negative = stalled.
+  // Drives the stall WARNING annunciator, which the model had no concept of —
+  // the red STALL light was the first and only cue, with no margin ahead of it.
+  ac.alphaMargin = aStall - alpha;
   const upBody = qRot(ac.q, v3(0, 1, 0));
   const nonGravF = vSub(Fworld, v3(0, -p.mass * G, 0));
   ac.gLoad = vDot(nonGravF, upBody) / (p.mass * G); // ~1 in level flight
   ac.onGround = gear.contacts > 0;
+
+  // Structural limits: Vne and g. Reads telemetry, never touches forces.
+  updateDamage(ac, dt);
 
   if (gear.crash) { ac.crashed = true; ac.crashReason = gear.crash; }
   if (!Number.isFinite(ac.pos.x + ac.pos.y + ac.pos.z + ac.vel.x + ac.vel.y + ac.vel.z)) {

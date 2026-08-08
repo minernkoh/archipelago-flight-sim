@@ -94,6 +94,7 @@
   .ann { font-size: 1.1rem; font-weight: 700; letter-spacing: .3em; padding: .25rem 1.1rem .25rem 1.4rem;
           display: none; }
   .ann.show { display: block; }
+  #ann-warn { color: var(--amber); border: 2px solid var(--amber); }
   #ann-stall { color: var(--warn); border: 2px solid var(--warn); animation: blink .5s steps(1) infinite; }
   #ann-over  { color: var(--amber); border: 2px solid var(--amber); }
   #ann-gear  { color: var(--amber); border: 2px solid var(--amber); }
@@ -421,6 +422,7 @@
   <div class="datum" id="aoa">&alpha; <b>0.0&deg;</b></div>
   <div class="datum" id="gmeter">G <b>1.0</b></div>
   <div id="annunciator">
+    <div class="ann" id="ann-warn">STALL WARN</div>
     <div class="ann" id="ann-stall">STALL</div>
     <div class="ann" id="ann-over">OVERSPEED</div>
   </div>

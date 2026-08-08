@@ -4,6 +4,7 @@
 import { resetOnRunway, setColdStart, KT, FT } from './physics/flightModel.js';
 import { createTour } from './tour.js';
 import { renderGlossary } from './groundschool.js';
+import { vSpeeds, landingBands } from './physics/envelope.js';
 import { runwayFrame } from './runwayUtil.js';
 import { createComfortMeter, createManeuverDetector, GAUNTLET } from './activities.js';
 import { loadLogbook, saveLogbook, accumulate, renderLogbook } from './logbook.js';
@@ -30,10 +31,10 @@ const MAP_DESC = {
 // Human-terms numbers derived from the physics params (never hand-maintained):
 // clean 1g stall speed and the structural redline (Vne), both in knots.
 function derivedNumbers(p) {
-  const rho = 1.225, g = 9.81;
-  const clMax = p.CL0 + p.CLalpha * p.alphaStall;
-  const vStall = Math.sqrt((2 * p.mass * g) / (rho * p.wingArea * clMax)); // m/s
-  return { stallKt: Math.round(vStall * KT), vneKt: Math.round(p.maxSpeed * KT) };
+  // Both numbers come from physics/envelope.js so the card, the ASI arcs and
+  // the airframe limits can never disagree.
+  const v = vSpeeds(p);
+  return { stallKt: Math.round(v.vs1Kt), vneKt: Math.round(v.vneKt) };
 }
 
 const fmtTime = (t) => {
@@ -78,6 +79,9 @@ const CRASH_TEXT = {
   'tail strike': ['TAIL STRIKE.', 'Rotated a little too eagerly.'],
   'terrain impact': ['TERRAIN.', 'Controlled flight into terrain — the classic.'],
   'numerical': ['DEPARTED FLIGHT.', 'The airflow gave up entirely.'],
+  // v6: the airframe now actually has structural limits (see physics/envelope.js).
+  'overspeed': ['AIRFRAME FAILURE.', 'Past Vne, and it let go.'],
+  'overstress': ['AIRFRAME FAILURE.', 'Pulled harder than the wings could carry.'],
 };
 
 // U5: turn the crash telemetry snapshot into one coaching line. Stall and
@@ -87,11 +91,13 @@ function crashWhy(snap, reason) {
   if (!snap) return '';
   if (snap.stalled && snap.aglFt < 500)
     return 'The wing stalled with no height to recover — down low, lower the nose the instant the STALL light fires.';
-  if (snap.overspeed)
+  if (reason === 'overstress')
+    return `Over-g — you asked the wings for more than their ${snap.gLimit}g limit. Ease the pull; at speed the elevator can break the aircraft long before it stalls.`;
+  if (snap.overspeed || reason === 'overspeed')
     return `Structural failure at ${snap.speedKt} kt — past Vne the airframe can't carry the aerodynamic loads.`;
   switch (reason) {
     case 'hard impact':
-      return `Came down at ${snap.fpm} fpm — the gear gives out near 500 fpm, so flare to bleed the sink before touchdown.`;
+      return `Came down at ${snap.fpm} fpm — this gear gives out near ${snap.gearLimitFpm} fpm, so flare to bleed the sink before touchdown.`;
     case 'terrain impact':
       return 'Flew into solid ground or a building — watch AGL, not just the altitude tape, near high terrain and the city.';
     case 'prop strike':
@@ -635,10 +641,12 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
           // time the crash screen shows, the aircraft has stopped tumbling.
           crashSnap = {
             stalled: ac.stalled,
-            overspeed: ac.airspeed > ac.p.maxSpeed,
-            speedKt: Math.round(ac.airspeed * KT),
+            overspeed: ac.eas > (ac.p.limits?.vne ?? ac.p.maxSpeed),
+            speedKt: Math.round(ac.eas * KT),
             aglFt: ac.agl * FT,
             fpm: Math.round(-ac.vel.y * FT * 60),
+            gLimit: ac.p.limits?.gPos ?? 3.8,
+            gearLimitFpm: landingBands(ac.p).limitFpm,
           };
           fx?.crash(ac.pos, ac.vel); audio.thud();
         }
@@ -660,6 +668,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
           agl: ac.agl,
           vsFpm: ac.vel.y * FT * 60,          // positive up
           cross: runwayFrame(map.runway).cross(ac.pos),
+          groundSpeedKt: ac.groundSpeed * KT,
           touchdown: ac.touchdown && ac.touchdown !== lastTouchdown ? ac.touchdown : null,
         }, dt);
       }
@@ -677,7 +686,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
       if (Math.abs(cs.trim) > 0.001) hint('trim', 'You just trimmed — that holds the nose where you set it so you can ease off the stick. Re-trim whenever your speed settles.');
       if (cs.brakes && ac.groundSpeed * KT > 40) hint('brakes', 'Wheel brakes bite on the ground — squeeze them to slow your rollout after touchdown, and go easy at speed so the nose stays up.');
       if (ac.stalled) hint('stall', 'The wing quit flying — push the nose DOWN and add power to get airflow back over it.');
-      if (ac.airspeed > ac.p.maxSpeed) hint('overspeed', "You're past the airframe's limit — ease the throttle back and raise the nose gently before something bends.");
+      if (ac.eas > (ac.p.limits?.vne ?? ac.p.maxSpeed)) hint('overspeed', "You're past the airframe's limit — ease the throttle back and raise the nose gently before something bends.");
 
       // gated activities (race + gauntlet): shared clock/gate-pass machinery.
       let bearing = null;
@@ -761,12 +770,14 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
         }
         if (sel.mode === 'free') {
           const { fpm, speedKt, onRunway } = ac.touchdown;
-          const grade = fpm <= 130 ? 'GREASED IT' : fpm <= 300 ? 'SMOOTH' : fpm <= 500 ? 'FIRM' : 'HARD ARRIVAL';
+          const b = landingBands(ac.p);
+          const grade = fpm <= b.greased ? 'GREASED IT' : fpm <= b.smooth ? 'SMOOTH'
+            : fpm <= b.firm ? 'FIRM' : 'HARD ARRIVAL';
           const coach = !onRunway
             ? 'Off-field — down safe, but aim for the pavement next time.'
-            : fpm <= 130 ? 'Textbook — the mains barely chirped.'
-            : fpm <= 300 ? 'Nicely flared. Keep bleeding speed before you touch.'
-            : fpm <= 500 ? 'A touch firm — start the flare a beat earlier.'
+            : fpm <= b.greased ? 'Textbook — the mains barely chirped.'
+            : fpm <= b.smooth ? 'Nicely flared. Keep bleeding speed before you touch.'
+            : fpm <= b.firm ? 'A touch firm — start the flare a beat earlier.'
             : 'Heavy — carry a little power into the flare to ease the sink.';
           // centerline offset only makes sense on the runway (computed via the
           // shared runwayFrame — valid on both maps' runway definitions).

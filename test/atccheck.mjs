@@ -4,9 +4,8 @@
 // no screenshots and no waiting on rendered frames, so it runs through a stall.
 // The phrase/sequencing logic itself is covered headlessly in physics.test.js.
 // Run: node test/atccheck.mjs (server on :8123).
-import puppeteer from 'puppeteer';
-
-const browser = await puppeteer.launch({
+import { launch } from './browser.mjs';
+const browser = await launch({
   headless: true,
   protocolTimeout: 300000,
   args: ['--window-size=1440,900', '--enable-unsafe-swiftshader'],

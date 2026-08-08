@@ -47,12 +47,27 @@ export function createWind() {
     // world-frame wind velocity (m/s) at a position
     at(x, y, z) {
       const gust = gustKts * KT2MS * (0.5 + 0.5 * noise1(t * 0.25, 11)) * noise1(t * 0.7, 23) * 2;
-      const speed = kts * KT2MS + gust;
-      // mechanical turbulence: strongest near the surface, dies off by ~500 m
-      const tk = turb * Math.max(0, 1 - y / 500) * 1.8;
+      // Wind shear: the steady component grows with height instead of being
+      // uniform from the surface up. Power-law (1/7) boundary layer, capped —
+      // this is what makes an approach in wind feel like an approach in wind.
+      const shear = Math.min(1.8, Math.pow(Math.max(y, 10) / 10, 0.143));
+      const speed = (kts * KT2MS + gust) * shear;
+      // Mechanical turbulence is strongest near the surface but does NOT stop
+      // existing above it — the old profile hit exactly zero at 500 m, so the
+      // headline "gusty" preset was perfectly smooth at cruise.
+      const tk = turb * (0.15 + 1.65 * Math.max(0, 1 - y / 500)) * 1.8;
+      // Two spatial scales. The coarse channel is the ride; the second is a
+      // slow, ~200 m eddy whose gradient across the wingspan is what actually
+      // rolls the aircraft (see the two-point sampling in flightModel step()).
+      // It has to be SLOW: an early version varied at ~29 Hz as the aircraft
+      // flew through it and the roll mode — time constant under 0.1 s — simply
+      // filtered the whole thing out, so the bank response stayed at 1 deg
+      // however much amplitude was thrown at it.
+      const vert = tk * 0.7 * noise1(t * 2.3 + z * 0.01, 47)
+                 + tk * 0.5 * noise1(t * 0.6 + x * 0.03 + z * 0.03, 71);
       return {
         x: ux * speed + tk * noise1(t * 1.9 + x * 0.01, 31),
-        y: tk * 0.7 * noise1(t * 2.3 + z * 0.01, 47),
+        y: vert,
         z: uz * speed + tk * noise1(t * 1.7 + x * 0.013, 59),
       };
     },

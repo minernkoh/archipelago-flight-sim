@@ -3,9 +3,8 @@
 // Uses only page.evaluate (no screenshots / rendering), so it runs even when the
 // SwiftShader compositor is stalled. A focused probe for the new R4 code.
 // Run: node test/plancheck.mjs (server on :8123).
-import puppeteer from 'puppeteer';
-
-const browser = await puppeteer.launch({
+import { launch } from './browser.mjs';
+const browser = await launch({
   headless: true,
   protocolTimeout: 300000,
   args: ['--window-size=1440,900', '--enable-unsafe-swiftshader'],

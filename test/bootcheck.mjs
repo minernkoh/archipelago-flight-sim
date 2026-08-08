@@ -1,5 +1,5 @@
-import puppeteer from 'puppeteer';
-const browser = await puppeteer.launch({ headless: true, protocolTimeout: 60000, args: ['--enable-unsafe-swiftshader', '--window-size=1280,800'], defaultViewport: { width: 1280, height: 800 } });
+import { launch } from './browser.mjs';
+const browser = await launch({ headless: true, protocolTimeout: 60000, args: ['--enable-unsafe-swiftshader', '--window-size=1280,800'], defaultViewport: { width: 1280, height: 800 } });
 const page = await browser.newPage();
 const errors = [];
 page.on('console', m => { if (m.type() === 'error') errors.push(m.text().slice(0, 200)); });

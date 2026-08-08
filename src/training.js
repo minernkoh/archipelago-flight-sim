@@ -114,7 +114,15 @@ export function createTrainingSystem(deps) {
       let refAlt = null;
       return {
         text: 'Hold altitude within 100 ft and keep the wings level for 20 seconds — small pitch corrections, no bank.',
+        // The reference altitude latches on the first tick that finds the
+        // aircraft AIRBORNE. Without the !onGround guard it latched on the
+        // runway — every lesson spawns there (modes.js resetOnRunway) and the
+        // trainer ticks while parked — which made this step both trivially
+        // passable by sitting still for 20 s, and impossible to complete once
+        // you did take off, because the reference stayed at field elevation
+        // and holdFor resets the moment the predicate goes false.
         done: holdFor(() => {
+          if (ac.onGround) return false;
           if (refAlt === null) refAlt = ac.pos.y;
           return Math.abs(ac.pos.y - refAlt) * FT < 100 && Math.abs(attitude(ac).roll) < 0.09;
         }, 20),
@@ -145,7 +153,16 @@ export function createTrainingSystem(deps) {
         slip: true,
       };
     }
-    return [levelStep(), turnStep('left', 1), turnStep('right', -1)];
+    // The climb step has to come first: this lesson starts on the runway like
+    // every other one, and "hold altitude" means nothing until you have some.
+    return [
+      {
+        text: 'Take off and climb to at least 1,500 ft AGL, then level off.',
+        done: () => !ac.onGround && ac.agl * FT >= 1500,
+        hint: 'Full power, rotate around 60 kt, and climb straight ahead until the radio altimeter reads 1,500.',
+      },
+      levelStep(), turnStep('left', 1), turnStep('right', -1),
+    ];
   }
 
   function buildSlowFlightStallSteps() {
@@ -173,7 +190,12 @@ export function createTrainingSystem(deps) {
         done: () => !ac.stalled && ctrl.throttle > 0.9 && Math.abs(attitude(ac).roll) < 0.17,
         fail: () => {
           if (stallRefAlt === null) return null;
-          return (stallRefAlt - ac.pos.y) * FT > 300 ? 'Lost too much altitude recovering from the stall.' : null;
+          // 500 ft, re-measured against the v6 stall. The old 300 ft budget was
+          // set when a stalled wing kept flying — it mushed at 887 fpm and
+          // never dropped a wing. A prompt, correct recovery now costs ~200 ft
+          // and a slightly late one a good deal more, so 300 ft would fail
+          // students for handling the stall properly.
+          return (stallRefAlt - ac.pos.y) * FT > 500 ? 'Lost too much altitude recovering from the stall.' : null;
         },
         hint: "Push the nose down first — power alone won't fly you out of a stall.",
       },
@@ -247,7 +269,14 @@ export function createTrainingSystem(deps) {
   }
 
   function buildCrosswindSteps() {
-    let lastBeta = 0;
+    // Sampled on the last airborne tick. This used to be sideslip (ac.beta),
+    // which graded the OPPOSITE of what the lesson teaches: in its own 12 kt
+    // crosswind at a ~64 kt approach the drift angle is ~10.8 deg, so kicking
+    // the nose straight — the technique the step describes, and the one its
+    // failure message names — produced ~10.8 deg of sideslip and failed an
+    // 8 deg gate, while touching down still crabbed gave ~0 and passed.
+    // Heading against the runway is what "land aligned" actually means.
+    let lastAlignedDeg = 0;
     const established = finalLineup({ toleranceDeg: 15, maxDistM: 4000, maxAglFt: 800 });
     return [
       {
@@ -264,15 +293,18 @@ export function createTrainingSystem(deps) {
       {
         text: 'Ride the crab all the way down final. Right as the wheels are about to touch, kick the rudder to swing the nose straight and drop the upwind wingtip a touch. Land aligned, under 400 fpm, on the runway — then full stop.',
         done: () => {
-          if (!ac.onGround) lastBeta = ac.beta;
+          if (!ac.onGround) {
+            lastAlignedDeg = Math.abs(angDiffDeg(compassDeg(attitude(ac).heading),
+                                                 compassDeg(map.runway.headingRad)));
+          }
           return ac.onGround && ac.groundSpeed < 3 && !!ac.touchdown && ac.touchdown.onRunway
-            && ac.touchdown.fpm < 400 && Math.abs(lastBeta) * 180 / Math.PI < 8;
+            && ac.touchdown.fpm < 400 && lastAlignedDeg < 10;
         },
         fail: () => {
           if (!ac.touchdown) return null;
           if (!ac.touchdown.onRunway) return 'Drifted off the runway — the crosswind won that one.';
           if (ac.touchdown.fpm >= 400) return 'Touched down too hard — too much sink carried into the flare.';
-          if (Math.abs(lastBeta) * 180 / Math.PI >= 8) return "Touched down still crossed up — didn't straighten the nose in time.";
+          if (lastAlignedDeg >= 10) return "Touched down still crossed up — didn't straighten the nose in time.";
           return null;
         },
         hint: 'Hold the crab through most of final and only kick straight at the very last second — too early and the wind pushes you off line again.',

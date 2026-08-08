@@ -22,10 +22,18 @@ const wrap180 = (d) => { while (d > 180) d -= 360; while (d < -180) d += 360; re
 const compassHdg = (headingRad) => (90 - headingRad * RAD2DEG + 360) % 360;
 
 // Conservative gains: tuned to damp rather than PIO. Aileron/elevator are
-// normalized -1..1; Cmde/Clda give plenty of authority so gains stay small.
+// normalized -1..1; Cmde gives plenty of pitch authority so those gains stay small.
+//
+// The roll gains are NOT fixed: aileron authority varies ~9x across the fleet
+// (pb/2V 0.067 on the heavy to 0.38 on the Extra), so a single gain either
+// PIOs the aerobat or leaves the widebody unable to hold a bank. rollPRef /
+// rollDRef are divided by the airframe's own pb/2V at the use site, which
+// reproduces the loop gain these numbers were originally tuned at and adapts
+// automatically if the aerodynamic coefficients are ever retuned again.
 const G = {
   hdgToBank: 1.1, maxBank: 25,   // deg commanded bank per deg heading error
-  rollP: 0.028, rollD: 0.02,     // aileron per deg bank error / per (deg/s) roll rate
+  rollPRef: 0.00672,             // = 0.028 x 0.240, the gain tuned against the old c172
+  rollDRef: 0.0048,              // = 0.020 x 0.240
   altToVs: 0.06, maxVs: 6,       // m/s commanded climb per m altitude error
   vsToPitch: 1.2, maxPitch: 12,  // deg commanded pitch per (m/s) VS error
   pitchP: 0.035, pitchD: 0.02,   // elevator per deg pitch error / per (deg/s) pitch rate
@@ -144,7 +152,10 @@ export function createAutopilot() {
         const desiredBank = lateralNav
           ? clamp(wrap180(sel.hdg - curHdg) * G.hdgToBank, -G.maxBank, G.maxBank)
           : 0; // pure wing-leveler
-        const ail = clamp(G.rollP * (desiredBank - rollDeg) - G.rollD * rollRate, -1, 1);
+        // Normalize the roll loop by this airframe's aileron authority (pb/2V).
+        const rollAuth = Math.max(0.02, p.Clda / -p.Clp);
+        const rollP = G.rollPRef / rollAuth, rollD = G.rollDRef / rollAuth;
+        const ail = clamp(rollP * (desiredBank - rollDeg) - rollD * rollRate, -1, 1);
         drive(controls, 'aileron', ail, dt);
       }
 
@@ -178,7 +189,7 @@ export function createAutopilot() {
         const iasErr = sel.ias - (ac.iasIndicated || ac.airspeed);
         thrInt = clamp(thrInt + iasErr * G.iasGain * dt, 0, 1);
         let thr = thrInt;
-        if (ac.airspeed > p.maxSpeed * G.overspeedFrac) thr = Math.min(thr, 0.15);
+        if (ac.eas > (p.limits?.vne ?? p.maxSpeed) * G.overspeedFrac) thr = Math.min(thr, 0.15);
         drive(controls, 'throttle', thr, dt);
       }
     },
