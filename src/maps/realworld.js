@@ -72,9 +72,13 @@ export function createRealWorldMap(preset) {
       t.state = 'loading'; fetching++;
       const [tx, ty] = k.split(',').map(Number);
       loadTile(tx, ty)
-        .then((data) => { t.data = data; t.state = 'ready'; })
-        .catch(() => { t.data = null; t.state = 'error'; offline = true; })
-        .finally(() => { fetching--; pump(); });
+        .then((data) => { if (!t.abandoned) { t.data = data; t.state = 'ready'; } })
+        .catch(() => { if (!t.abandoned) { t.data = null; t.state = 'error'; offline = true; } })
+        // abandonPending() already released this tile's slot (and may have
+        // reused it for another fetch) — if the hung promise eventually
+        // settles here, skip the decrement so `fetching` cannot go negative
+        // or be double-released.
+        .finally(() => { if (!t.abandoned) fetching--; pump(); });
     }
   }
 
@@ -123,6 +127,35 @@ export function createRealWorldMap(preset) {
       if (!t || (t.state !== 'ready' && t.state !== 'error')) ok = false;
     });
     return ok;
+  }
+  // loadMap caps its wait at 12 s; stalled fetches (tracker blockers that never
+  // settle the request) would otherwise leave tiles in queued/loading forever,
+  // and the coarse-tier builder in terrain.js re-queues those cells forever.
+  // Mark them failed so ready() returns and the world boots flat.
+  //
+  // 'loading' tiles hold one of the MAX_PARALLEL `fetching` slots (incremented
+  // in pump(), only ever decremented in the .finally there). A hung fetch's
+  // .finally never runs, so without releasing it here `fetching` stays pinned
+  // and pump() can never start another tile — the very first stall would kill
+  // this map for the rest of the page session, even after the queue refills
+  // from the frame-loop prefetch. We release the slot by decrementing here and
+  // flag the tile `abandoned` so that IF the hung promise ever does settle
+  // later, its .finally sees the flag and skips its own decrement — one
+  // release per slot, never two, and `fetching` can't be driven negative.
+  function abandonPending() {
+    let n = 0;
+    for (const t of tiles.values()) {
+      if (t.state === 'queued') {
+        t.state = 'error'; t.data = null; n++;
+      } else if (t.state === 'loading') {
+        t.state = 'error'; t.data = null; t.abandoned = true;
+        fetching = Math.max(0, fetching - 1);
+        n++;
+      }
+    }
+    queue.length = 0;
+    if (n) offline = true;
+    return n;
   }
 
   // ---------------- FlightMap contract ----------------
@@ -232,7 +265,7 @@ export function createRealWorldMap(preset) {
     obstacleTop() { return -Infinity; },
     // real-world extras used by main.js / modes.js
     latLon: { lat: preset.lat, lon: preset.lon },
-    prefetch, ready,
+    prefetch, ready, abandonPending,
     get elevationOffline() { return offline; },
     _debug: { proj, headingRad, spawn, toRunway, rawHeight, tiles },
   };

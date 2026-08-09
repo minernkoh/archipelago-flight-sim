@@ -10,7 +10,10 @@ import * as THREE from 'three';
 
 /**
  * The map contract. Every world (archipelago, singapore, …) exports one object
- * matching this shape; the engine consumes only these fields.
+ * matching this shape; the engine consumes only these fields. The first nine
+ * are required — every map implements them. The rest are optional extras that
+ * only some maps implement; the engine always guards them (`map.prefetch?.()`,
+ * `map.fixes?.length`, …) except where noted.
  *
  * @typedef {Object} FlightMap
  * @property {string} id                Stable machine id, e.g. 'archipelago'.
@@ -35,6 +38,41 @@ import * as THREE from 'three';
  * @property {(x:number, z:number) => number} obstacleTop
  *           Top surface (MSL) of any solid obstacle at x/z (buildings, etc.),
  *           or -Infinity where nothing solid stands. Archipelago has none.
+ *
+ * --- optional: streamed-elevation maps only (currently realworld.js) ---
+ * @property {(x:number, z:number, radius?:number) => void} [prefetch]
+ *           Enqueue elevation tiles covering a radius around x/z. If a map
+ *           implements this, it MUST also implement `ready` — main.js calls
+ *           `map.ready(...)` unguarded right after checking `map.prefetch`
+ *           (see main.js ~109), so a `prefetch`-only map would throw.
+ * @property {(x:number, z:number, radius?:number) => boolean} [ready]
+ *           True once every tile covering that radius has settled (state
+ *           'ready' or 'error' — a failed fetch counts as settled so offline
+ *           play still resolves). See the `prefetch` note above: required
+ *           whenever `prefetch` is present.
+ * @property {() => number} [abandonPending]
+ *           Force-settle any tile still stuck in 'queued'/'loading' (marks it
+ *           'error' and releases its fetch slot) so a stalled/blocked request
+ *           that never resolves can't wedge `ready()` forever. Returns the
+ *           number of tiles abandoned. Only meaningful where `prefetch`/`ready`
+ *           exist; main.js calls it optionally (`map.abandonPending?.()`).
+ * @property {boolean} [elevationOffline]
+ *           True once any tile fetch has failed (or been abandoned) — signals
+ *           the menu preview and in-flight HUD that this map is showing a
+ *           flat/placeholder world rather than real elevation.
+ * @property {{lat:number, lon:number}} [latLon]
+ *           Real-world coordinates of the field, for live-weather lookups
+ *           (main.js falls back to a per-map nominal lat/lon table when this
+ *           is absent).
+ * @property {Array<{x:number, z:number, y:number}>} [fixes]
+ *           Named waypoints for the demo flight plan, in the runway frame.
+ *           When absent, main.js derives a generic plan from `raceCourse`.
+ *
+ * --- optional: any map may set this ---
+ * @property {{x:number, z:number}} [finalGateDir]
+ *           Unit vector the last race gate should face (e.g. down a runway
+ *           heading) instead of the rings module's default inferred facing.
+ *           Currently only singapore.js sets this.
  */
 
 const SEED = 20260703;
