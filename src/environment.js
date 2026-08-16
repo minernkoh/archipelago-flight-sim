@@ -248,10 +248,30 @@ export function createEnvironment(scene, renderer) {
     oceanMat.uniforms.fogFar.value = tod.fogFar;
     oceanMat.uniforms.glint.value = tod.night ? 0.3 : 1.0;
     cloudMat.color.copy(tod.cloud); cloudMat.opacity = tod.cloudOpacity;
+    applyWeather();
     applyNightContent();
   }
 
+  // Live-weather modifiers layered on top of the time-of-day palette: haze
+  // pulls the fog in with falling visibility, cloud cover scales the overcast.
+  let wx = { visF: 1, cloudF: 1 };
+  function applyWeather() {
+    scene.fog.near = tod.fogNear * Math.min(1, wx.visF);
+    scene.fog.far = tod.fogFar * wx.visF;
+    oceanMat.uniforms.fogNear.value = scene.fog.near;
+    oceanMat.uniforms.fogFar.value = scene.fog.far;
+    cloudMat.opacity = tod.cloudOpacity * wx.cloudF;
+    clouds.visible = wx.cloudF > 0.06;
+  }
+
   return {
+    // Weather visibility/cloud overlay (see liveweather.js). null-safe fields.
+    setWeather({ visibilityM, cloudCover } = {}) {
+      if (visibilityM != null) wx.visF = Math.max(0.35, Math.min(1.3, visibilityM / 15000));
+      if (cloudCover != null) wx.cloudF = Math.max(0, Math.min(1.15, cloudCover / 70));
+      applyWeather();
+    },
+    resetWeather() { wx = { visF: 1, cloudF: 1 }; applyWeather(); },
     // Swap the heightfield used for the blob shadow (called on map change).
     setGround(fn) { groundFn = fn; },
     // Called after a map's scenery is (re)built: rebuild runway lights and grab

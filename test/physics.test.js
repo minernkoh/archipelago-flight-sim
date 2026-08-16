@@ -496,5 +496,21 @@ import { makeProjection, worldPx, decodeTerrarium, bilerp, bearingToHeadingRad, 
   check('tilesampler: worldPx z13', worldPx(13) === 256 * 8192);
 }
 
+// ---- Live weather mapping (v5-R2): Open-Meteo current -> wind/vis ----
+import { mapWeather } from '../src/liveweather.js';
+{
+  const w = mapWeather({ wind_speed_10m: 6, wind_direction_10m: 210, wind_gusts_10m: 9, visibility: 8000, cloud_cover: 75 });
+  check('liveweather: m/s wind -> knots', w.wind.kts === 12, `${w.wind.kts}`);          // 6 m/s ~ 11.66 -> 12
+  check('liveweather: gust is delta above steady', w.wind.gustKts === 6, `${w.wind.gustKts}`); // (9-6) m/s ~ 5.83 -> 6
+  check('liveweather: direction passes through', w.wind.dirDeg === 210);
+  check('liveweather: gusty air adds turbulence', w.wind.turb > 0);
+  check('liveweather: visibility + cloud carried for the sky', w.vis.visibilityM === 8000 && w.vis.cloudCover === 75);
+
+  const gale = mapWeather({ wind_speed_10m: 30, wind_direction_10m: 40, wind_gusts_10m: 45 });
+  check('liveweather: extreme wind clamps to the flyable cap', gale.wind.kts <= 34 && gale.clamped === true, JSON.stringify(gale.wind));
+  const still = mapWeather({});
+  check('liveweather: empty response -> calm, no NaNs', still.wind.kts === 0 && still.wind.gustKts === 0 && Number.isFinite(still.wind.turb));
+}
+
 console.log(failures === 0 ? '\nAll physics checks passed.' : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

@@ -72,7 +72,10 @@ check('aircraft selector cycles', first !== second, `${first} -> ${second}`);
 await click('[data-sel="weather"]');
 const wx = await page.evaluate(() => document.querySelector('#sel-weather').textContent);
 check('weather selector cycles', wx === 'BREEZY', wx);
-await click('[data-sel="weather"]'); await click('[data-sel="weather"]'); // back to CALM for the flight tests
+// return to CALM for the flight tests (robust to the weather-list length)
+for (let i = 0; i < 6 && (await page.evaluate(() => document.querySelector('#sel-weather').textContent)) !== 'CALM'; i++) {
+  await click('[data-sel="weather"]');
+}
 
 // --- every aircraft spawns and sits on its gear ---
 for (const id of ['extra300', 'hornet', 'heavy', 'spirit']) {
@@ -544,6 +547,25 @@ await page.waitForFunction('!document.querySelector("#loading").classList.contai
 await settle(800);
 const rw = await sim('({ map: window.__sim.map.id, ground: window.__sim.ac.onGround, crashed: window.__sim.ac.crashed, rwy: window.__sim.map.runway.name })');
 check('real-world Changi loads and spawns on the runway', rw.map === 'changi' && rw.ground && !rw.crashed, JSON.stringify(rw));
+
+// --- v5 R2: LIVE weather fetches Open-Meteo and applies real wind ---
+console.log('live weather…');
+await page.evaluate(() => {
+  window.__origFetch = window.fetch;
+  window.fetch = (u, o) => String(u).includes('open-meteo')
+    ? Promise.resolve(new Response(
+        JSON.stringify({ current: { wind_speed_10m: 6, wind_direction_10m: 210, wind_gusts_10m: 9, visibility: 6000, cloud_cover: 80 } }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    : window.__origFetch(u, o);
+});
+await page.evaluate(() => { window.__sim.game.toMenu?.(); });
+await page.evaluate(() => window.__sim.game.select({ mode: 'free', map: 'archipelago', aircraft: 'c172', time: 'day', weather: 'live' }));
+await click('#btn-start');
+await page.waitForFunction('!document.querySelector("#loading").classList.contains("show") && window.__sim.game.state === "flying"', { timeout: 120000, polling: 1000 });
+await settle(1600); // let the (stubbed) fetch resolve and apply
+const liveWx = await sim('window.__sim.windField.get()');
+check('LIVE weather applies real wind (12 kt from 210)', liveWx.kts === 12 && liveWx.dirDeg === 210, JSON.stringify(liveWx));
+await page.evaluate(() => { if (window.__origFetch) window.fetch = window.__origFetch; });
 
 check('no console errors', errors.length === 0, errors.slice(0, 4).join(' | '));
 
