@@ -120,7 +120,9 @@ export function createTerrain(scene, map = archipelagoMap) {
 
   return {
     // Call each frame; builds a couple of chunks per call to avoid hitches.
-    update(px, pz, budget = 2) {
+    // `force` skips the coarse-tier tile wait — used by loadMap after its
+    // elevation timeout so a stalled network cannot spin pending forever.
+    update(px, pz, budget = 2, force = false) {
       want(px, pz);
       for (let n = 0; n < budget && pending.length; n++) {
         const key = pending.shift();
@@ -130,7 +132,7 @@ export function createTerrain(scene, map = archipelagoMap) {
         // Real-world maps return sea level for tiles that have not arrived, so
         // a coarse chunk built too early bakes a flat plate that never
         // corrects. Defer it (re-queued at the back) until its tiles land.
-        if (!fine && map.ready && !map.ready(cx * FAR_CHUNK, cz * FAR_CHUNK, FAR_CHUNK * 0.75)) {
+        if (!force && !fine && map.ready && !map.ready(cx * FAR_CHUNK, cz * FAR_CHUNK, FAR_CHUNK * 0.75)) {
           map.prefetch?.(cx * FAR_CHUNK, cz * FAR_CHUNK, FAR_CHUNK * 0.75);
           pending.push(key);
           continue;

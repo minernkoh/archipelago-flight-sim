@@ -46,6 +46,18 @@ export const PHRASES = {
   offField:  (c) => `${c.callsign}, we show you down off the field. Say your intentions.`,
 };
 
+// Is this descent steeper than twice a normal glideslope? Falls back to the
+// flat sink-rate floor when groundspeed is unknown or implausibly low.
+export function tooSteep(vsFpm, groundSpeedKt) {
+  if (!(groundSpeedKt > 20)) return vsFpm < LIMITS.unstableFpm;
+  // 1 kt = 101.27 ft/min, so a slope of D degrees at G knots descends
+  // G * 101.27 * tan(D) feet per minute.
+  const slopeFpm = groundSpeedKt * 101.27 * Math.tan(LIMITS.unstableSlopeDeg * Math.PI / 180);
+  // The floor keeps a very slow aircraft from being sent around for a gentle
+  // sink rate that happens to be a steep angle at 30 kt.
+  return vsFpm < Math.min(LIMITS.minGoAroundFpm, -slopeFpm);
+}
+
 export function buildPhrase(id, ctx) {
   const fn = PHRASES[id];
   return fn ? fn(ctx) : '';
@@ -60,7 +72,14 @@ export const LIMITS = {
   inboundAgl: 400,      // m — below this and descending = coming home
   inboundCross: 700,    // m — roughly lined up with the extended centerline
   finalAgl: 200,        // m — short final band where "cleared to land" lands
-  unstableFpm: -1000,   // sink rate that earns a go-around
+  // Descent ANGLE, not a fixed sink rate. A flat -1000 fpm is a 6.6 deg dive
+  // for a 70 kt trainer but a normal 3 deg approach for a 200 kt widebody —
+  // the Heavy averaged -1120 fpm on a correctly flown approach and would have
+  // been sent around every single time. Twice a 3 deg glideslope, scaled by
+  // the aircraft's own groundspeed, is the criterion that works for both.
+  unstableSlopeDeg: 6,
+  unstableFpm: -1000,   // fallback when groundspeed is unknown
+  minGoAroundFpm: -600, // never call a go-around for a gentler sink than this
   unstableCross: 150,   // m off centerline that earns a go-around
   minGapSec: 3.5,       // radio discipline — never step on the last call
 };
@@ -103,7 +122,7 @@ export function createAtc({ field, rwyName, callsign, say } = {}) {
       if (!armed || !snap) return null;
       if (sinceCall < LIMITS.minGapSec) return null;
 
-      const { onGround, agl = 0, vsFpm = 0, cross = 0, touchdown = null } = snap;
+      const { onGround, agl = 0, vsFpm = 0, cross = 0, touchdown = null, groundSpeedKt = 0 } = snap;
       const lined = Math.abs(cross) < LIMITS.inboundCross;
 
       switch (phase) {
@@ -134,7 +153,7 @@ export function createAtc({ field, rwyName, callsign, say } = {}) {
 
         case 'inbound': {
           if (touchdown) { phase = 'down'; return emit(touchdown.onRunway ? 'landed' : 'offField'); }
-          const unstable = vsFpm < LIMITS.unstableFpm || Math.abs(cross) > LIMITS.unstableCross;
+          const unstable = tooSteep(vsFpm, groundSpeedKt) || Math.abs(cross) > LIMITS.unstableCross;
           if (agl < LIMITS.finalAgl && unstable) { phase = 'cruise'; return emit('goAround'); }
           if (agl < LIMITS.finalAgl && !unstable) { phase = 'final'; return emit('clearLand'); }
           // Climbed away or wandered off the centerline — stop expecting them.
@@ -144,7 +163,7 @@ export function createAtc({ field, rwyName, callsign, say } = {}) {
 
         case 'final':
           if (touchdown) { phase = 'down'; return emit(touchdown.onRunway ? 'landed' : 'offField'); }
-          if (vsFpm < LIMITS.unstableFpm || Math.abs(cross) > LIMITS.unstableCross) {
+          if (tooSteep(vsFpm, groundSpeedKt) || Math.abs(cross) > LIMITS.unstableCross) {
             phase = 'cruise';
             return emit('goAround');
           }

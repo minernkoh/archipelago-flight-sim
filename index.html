@@ -94,6 +94,7 @@
   .ann { font-size: 1.1rem; font-weight: 700; letter-spacing: .3em; padding: .25rem 1.1rem .25rem 1.4rem;
           display: none; }
   .ann.show { display: block; }
+  #ann-warn { color: var(--amber); border: 2px solid var(--amber); }
   #ann-stall { color: var(--warn); border: 2px solid var(--warn); animation: blink .5s steps(1) infinite; }
   #ann-over  { color: var(--amber); border: 2px solid var(--amber); }
   #ann-gear  { color: var(--amber); border: 2px solid var(--amber); }
@@ -365,8 +366,9 @@
     #sel-rows .btn .valwrap { grid-column: 2; }
   }
 
-  /* Staged reveal — the menu is the first thing a visitor sees; let it arrive. */
-  @keyframes menu-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  /* Staged reveal — opacity only so .cur's translateX never fights the
+     animation (and so toggling .cur cannot restart a transform keyframe). */
+  @keyframes menu-rise { from { opacity: 0; } to { opacity: 1; } }
   /* #brief is vertically centred with translateY(-50%); a reveal ending in
      `transform: none` would cancel that centring and push it off the bottom of
      the viewport (it did). Centred elements need their own keyframes. */
@@ -394,8 +396,6 @@
   #menu.show .navhint { animation-delay: .45s; }
   #menu.show #brief { animation-delay: .24s; }
   #menu.show .foot { animation-delay: .5s; }
-  /* The cursor row's own transform must not fight the reveal animation. */
-  #menu.show #sel-rows .btn.cur { animation: none; }
   @media (prefers-reduced-motion: reduce) {
     #menu.show .kicker, #menu.show h1, #menu.show .sub, #menu.show #sel-rows .btn,
     #menu.show .navhint, #menu.show .seldesc, #menu.show .foot { animation: none; }
@@ -421,6 +421,7 @@
   <div class="datum" id="aoa">&alpha; <b>0.0&deg;</b></div>
   <div class="datum" id="gmeter">G <b>1.0</b></div>
   <div id="annunciator">
+    <div class="ann" id="ann-warn">STALL WARN</div>
     <div class="ann" id="ann-stall">STALL</div>
     <div class="ann" id="ann-over">OVERSPEED</div>
   </div>

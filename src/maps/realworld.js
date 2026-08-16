@@ -124,6 +124,21 @@ export function createRealWorldMap(preset) {
     });
     return ok;
   }
+  // loadMap caps its wait at 12 s; stalled fetches (tracker blockers that never
+  // settle the request) would otherwise leave tiles in queued/loading forever,
+  // and the coarse-tier builder in terrain.js re-queues those cells forever.
+  // Mark them failed so ready() returns and the world boots flat.
+  function abandonPending() {
+    let n = 0;
+    for (const t of tiles.values()) {
+      if (t.state === 'queued' || t.state === 'loading') {
+        t.state = 'error'; t.data = null; n++;
+      }
+    }
+    queue.length = 0;
+    if (n) offline = true;
+    return n;
+  }
 
   // ---------------- FlightMap contract ----------------
   function runwayDist(x, z) {
@@ -232,7 +247,7 @@ export function createRealWorldMap(preset) {
     obstacleTop() { return -Infinity; },
     // real-world extras used by main.js / modes.js
     latLon: { lat: preset.lat, lon: preset.lon },
-    prefetch, ready,
+    prefetch, ready, abandonPending,
     get elevationOffline() { return offline; },
     _debug: { proj, headingRad, spawn, toRunway, rawHeight, tiles },
   };

@@ -1,10 +1,11 @@
 // Headless sanity checks for the flight model. Run: node test/physics.test.js
 import { createAircraft, step, PARAMS, attitude, KT, RHO0, G,
-         airDensity, failSystem, resetSystems } from '../src/physics/flightModel.js';
+         airDensity, failSystem, resetSystems, liftCoeff } from '../src/physics/flightModel.js';
 import { v3, qAxisAngle } from '../src/physics/vecmath.js';
 import { comfortFromRates, createComfortMeter, createManeuverDetector,
          buildGauntletCourse, GAUNTLET } from '../src/activities.js';
 import { emptyLogbook, accumulate, computeBadges } from '../src/logbook.js';
+import { vSpeeds } from '../src/physics/envelope.js';
 
 const DT = 1 / 120;
 const flat = { groundHeight: () => 0, isRunway: () => true };
@@ -74,9 +75,24 @@ function fly(ac, controls, seconds, env = flat, each = null) {
 
 // ---- 5. Takeoff roll from standstill ----
 {
+  // Right rudder is now required. A single-engine prop at full power yaws left
+  // (slipstream swirl + P-factor), and the dihedral effect turns that standing
+  // sideslip into a slow left roll — measured 1.4 deg/s in the climb, so
+  // holding nothing but back pressure for a minute spirals it into the ground.
+  // That is the whole point of the v6 propeller work; the old model needed no
+  // rudder at all because its left-turning tendency was 0.09% of rudder
+  // authority. So this test now flies coordinated: step on the ball.
   const ac = createAircraft({ pos: v3(0, 1.27, 0), vel: v3(0, 0, 0) });
   let liftoffX = null;
-  fly(ac, (a) => ctl({ throttle: 1, elevator: a.airspeed > 32 ? 0.5 : 0 }), 60, flat, a => {
+  // ...and the wings have to be held level. The C172 is slightly spirally
+  // divergent (by design, and the model reproduces it), so any disturbance
+  // left alone for a minute becomes a spiral. Nothing disturbed it before.
+  fly(ac, (a) => ctl({
+    throttle: 1,
+    elevator: a.airspeed > 32 ? 0.5 : 0,
+    rudder: Math.max(0, Math.min(1, -a.beta * 12 - a.omega.y * 2)),
+    aileron: Math.max(-1, Math.min(1, -attitude(a).roll * 3 - a.omega.x * 0.6)),
+  }), 60, flat, a => {
     if (liftoffX === null && a.agl > 5) liftoffX = a.pos.x;
   });
   check('takes off from standstill', liftoffX !== null && !ac.crashed,
@@ -231,15 +247,28 @@ const flatRunway = { x: 0, z: 0, y: 0, headingRad: 0 };
 
 // ---- 14. Heavy flies a 140 kt full-flap approach ----
 {
+  // The original setup (throttle 0.6, elevator 0.15) never actually flew this
+  // approach: it started at 140 kt and accelerated to 200 kt in a 1100 fpm
+  // descent, so the test's own name was not true and nothing noticed, because
+  // the only assertions were "didn't stall" and "sink < 8 m/s". That mattered
+  // once Vfe arrived — 200 kt is past this airframe's 180 KIAS full-flap limit,
+  // so the flaps blew back and it ran away. Retrimmed to a real stabilised
+  // approach, and the speed is now asserted so it cannot drift again.
   const ac = createAircraft({ params: AIRCRAFT.heavy, pos: v3(0, 800, 0), vel: v3(72, 0, 0) });
-  ac.spool = 0.6;
+  ac.spool = 0.3;
   let sinkSum = 0, n = 0, stalledEver = false;
-  fly(ac, ctl({ throttle: 0.6, flaps: 1, elevator: 0.15 }), 30, flat, a => {
+  fly(ac, ctl({ throttle: 0.3, flaps: 1, elevator: 0.45 }), 30, flat, a => {
     sinkSum += a.vel.y; n++; stalledEver = stalledEver || a.stalled;
   });
   const avgSink = sinkSum / n;
+  const easKt = ac.eas * KT;
   check('heavy holds a 140 kt approach', !ac.crashed && !stalledEver && avgSink > -8,
-    `avg VS ${avgSink.toFixed(1)} m/s, V ${(ac.airspeed * KT).toFixed(0)} kt`);
+    `avg VS ${avgSink.toFixed(1)} m/s, V ${easKt.toFixed(0)} kt EAS`);
+  check('heavy approach is actually flown at ~140 kt, below Vfe',
+    easKt > 130 && easKt < 155 && easKt < AIRCRAFT.heavy.limits.vfe * KT,
+    `${easKt.toFixed(0)} kt EAS vs Vfe ${(AIRCRAFT.heavy.limits.vfe * KT).toFixed(0)} kt`);
+  check('flaps are not blown back on a correctly flown approach',
+    ac.flapsEff === 1, `flapsEff ${ac.flapsEff.toFixed(2)}`);
 }
 
 // ================= v3-B: wind, gusts, trim =================
@@ -314,9 +343,435 @@ import { createWind, WEATHER } from '../src/physics/wind.js';
   const roll250 = peakRoll(250), roll500 = peakRoll(500);
   check('hornet roll rate at 500 kt <= 1.5x its 250 kt roll rate', roll500 <= 1.5 * roll250,
     `${roll500.toFixed(2)} vs ${roll250.toFixed(2)} rad/s (ratio ${(roll500 / roll250).toFixed(2)})`);
+  // Guard: this check was vacuous for a whole release because both runs pinned
+  // the 6 rad/s numerical clamp and read 6.00, so the ratio was 1.00 by
+  // construction. If either sample saturates again the assertion above is
+  // measuring the clamp, not the control softener.
+  check('hornet roll ratio is measuring aerodynamics, not the 6 rad/s clamp',
+    roll250 < 5.9 && roll500 < 5.9, `${roll250.toFixed(2)} / ${roll500.toFixed(2)} rad/s`);
+}
+
+// ---- 18b. Roll authority is in the right class band for every airframe ----
+// pb/2V = Clda / -Clp is the dimensionless steady roll rate. Real aircraft sit
+// at 0.07-0.09 (light singles), ~0.09-0.13 (fighters) and ~0.06-0.07 (widebody
+// transports); competition aerobats reach ~0.4. The fleet used to be tuned at
+// 0.24-0.78, i.e. two to nine times over, which is what this table catches.
+{
+  const BANDS = {
+    c172:     [0.06, 0.11],
+    extra300: [0.30, 0.45],
+    hornet:   [0.09, 0.16],
+    heavy:    [0.05, 0.09],
+    spirit:   [0.06, 0.12],
+  };
+  for (const [id, [lo, hi]] of Object.entries(BANDS)) {
+    const p = AIRCRAFT[id];
+    const pb2V = p.Clda / -p.Clp;
+    check(`${id} roll authority pb/2V in ${lo}-${hi}`, pb2V >= lo && pb2V <= hi, pb2V.toFixed(3));
+  }
+
+  // And fly it: full aileron from level, steady-state roll rate at 100 kt.
+  const ac = createAircraft({ pos: v3(0, 3000, 0), vel: v3(100 / KT, 0, 0) });
+  ac.spool = 0.6;
+  let peak = 0;
+  fly(ac, ctl({ throttle: 0.6, aileron: 1 }), 4, flat, a => { peak = Math.max(peak, Math.abs(a.omega.x)); });
+  const degS = peak * 180 / Math.PI;
+  check('c172 full-aileron roll rate 40-65 deg/s at 100 kt', degS > 40 && degS < 65, `${degS.toFixed(0)} deg/s`);
+}
+
+// ---- 18c. Stall aerodynamics: the wing has to actually stop flying ----
+// The old model kept a clean drag polar past the break (CD ~0.10 at 24 deg
+// alpha) and damped roll linearly, so a stalled aircraft held a symmetric
+// 887 fpm mush indefinitely — measured roll 0.0 deg, yaw 0.0 deg/s — and a
+// spin was unreachable. These checks pin the three properties that fixed it.
+{
+  const p = PARAMS;
+
+  // (a) The hash firewall. Roll damping is now evaluated as two wing stations
+  // on the real lift curve; below the stall that must reduce EXACTLY to the
+  // old Clp * (pb/2V) term, or normal handling (and the cruise state hash)
+  // would have moved.
+  let worstRoll = 0;
+  for (const a of [-0.05, 0, 0.03, 0.06, 0.10]) {
+    for (const pr of [-1, -0.3, 0, 0.3, 1]) {
+      for (const V2 of [30, 50, 80]) {
+        const rEff = -2 * p.Clp * p.span / p.CLalpha;
+        const dA = pr * rEff / V2;
+        if (Math.abs(a) + Math.abs(dA) > p.alphaStall - 0.02) continue; // stay linear
+        const strip = (liftCoeff(a - dA, 0, p) - liftCoeff(a + dA, 0, p)) / 8;
+        worstRoll = Math.max(worstRoll, Math.abs(strip - p.Clp * (pr * p.span / (2 * V2))));
+      }
+    }
+  }
+  check('strip roll damping reduces exactly to Clp*(pb/2V) below the stall',
+    worstRoll < 1e-12, `max |diff| ${worstRoll.toExponential(2)}`);
+
+  // (b) The other half of the firewall: separation drag must be exactly zero
+  // — not merely small — anywhere at or below the break, for every airframe.
+  let anyDrag = 0;
+  for (const id of Object.keys(AIRCRAFT)) {
+    const q = AIRCRAFT[id];
+    for (let a = -q.alphaStall; a <= q.alphaStall; a += q.alphaStall / 40) {
+      const sep = Math.max(0, Math.abs(a) - q.alphaStall);
+      anyDrag = Math.max(anyDrag, Math.min(1, sep / 0.12) * (q.CDstall ?? 2.0) * Math.sin(a) ** 2);
+    }
+  }
+  check('separation drag is exactly zero at and below the stall break', anyDrag === 0, `${anyDrag}`);
+
+  // (c) A stalled wing must cost real energy: the mush is not holdable.
+  {
+    const ac = createAircraft({ pos: v3(0, 6000, 0), vel: v3(70 / KT, 0, 0) });
+    let brk = null, sink = 0;
+    fly(ac, ctl({ throttle: 0.2, elevator: 1 }), 30, flat, (a, t) => {
+      if (brk === null && a.stalled) brk = t;
+      if (brk !== null && t - brk > 4) sink = a.vel.y;
+    });
+    check('a held stall sinks faster than 8 m/s (no free mush)', sink < -8, `${sink.toFixed(1)} m/s`);
+  }
+
+  // (d) The break is asymmetric — a wing drops. This is the defect itself.
+  {
+    const ac = createAircraft({ pos: v3(0, 6000, 0), vel: v3(70 / KT, 0, 0) });
+    let brk = null, maxRoll = 0, maxYaw = 0;
+    fly(ac, ctl({ throttle: 0.2, elevator: 1 }), 30, flat, (a, t) => {
+      if (brk === null && a.stalled) brk = t;
+      if (brk !== null && t - brk < 6) {
+        maxRoll = Math.max(maxRoll, Math.abs(attitude(a).roll));
+        maxYaw = Math.max(maxYaw, Math.abs(a.omega.y));
+      }
+    });
+    check('the stall breaks asymmetrically (a wing drops)',
+      maxRoll > 0.26 && maxYaw > 0.15,
+      `${(maxRoll * 57.3).toFixed(0)} deg roll, ${(maxYaw * 57.3).toFixed(0)} deg/s yaw within 6 s`);
+  }
+
+  // (e) A spin is reachable AND recoverable by correct technique: neutral
+  // ailerons, opposite rudder, forward stick. (Using aileron instead makes it
+  // worse, which is the real-world lesson the old model could not teach.)
+  {
+    const ac = createAircraft({ pos: v3(0, 9000, 0), vel: v3(70 / KT, 0, 0) });
+    fly(ac, (a, t) => ctl({ throttle: 0.1, elevator: Math.min(1, t / 2.5) }), 8);
+    let peakYaw = 0;
+    fly(ac, ctl({ throttle: 0.1, elevator: 1, rudder: 1 }), 20, flat,
+      a => { peakYaw = Math.max(peakYaw, Math.abs(a.omega.y)); });
+    check('pro-spin controls autorotate', peakYaw > 1.5 && ac.alpha > PARAMS.alphaStall,
+      `${(peakYaw * 57.3).toFixed(0)} deg/s yaw, alpha ${(ac.alpha * 57.3).toFixed(0)} deg`);
+    let recovered = null;
+    fly(ac, (a) => ctl({ throttle: 0, elevator: -0.6, aileron: 0, rudder: Math.sign(a.omega.y) }),
+      15, flat, (a, t) => {
+        if (recovered === null && !a.stalled && Math.abs(a.omega.y) < 0.4) recovered = t;
+      });
+    check('a spin recovers with opposite rudder and forward stick',
+      recovered !== null, recovered === null ? 'never' : `${recovered.toFixed(1)} s`);
+  }
+}
+
+// ---- 18d. The flight envelope has an outside ----
+// Before v6 there were no limits at all: the Hornet accelerated to Mach 1.54 /
+// 996 KIAS in level flight at 500 m with no wave drag and nothing breaking,
+// then pulled 15.9 g with the airframe intact, and the C172 took full flaps at
+// 150 kt (Vfe 85) with no consequence.
+{
+  const hold = (ac, c, secs, extra) => {
+    let iE = 0;
+    fly(ac, (a) => {
+      const pe = -0.02 * a.vel.y - attitude(a).pitch;
+      iE = Math.max(-1, Math.min(1, iE + pe * DT * 1.5));
+      return ctl({ ...c, elevator: Math.max(-1, Math.min(1, 3 * pe + iE - 0.5 * a.omega.z)) });
+    }, secs, flat, extra);
+  };
+
+  // (a) Wave drag gives the fast jets a real ceiling in level flight.
+  {
+    const ac = createAircraft({ params: AIRCRAFT.hornet, pos: v3(0, 500, 0), vel: v3(200, 0, 0) });
+    ac.spool = 1;
+    hold(ac, { throttle: 1 }, 120);
+    check('hornet is Mach-limited at low level, not unbounded',
+      !ac.crashed && ac.mach < 1.15 && ac.eas < AIRCRAFT.hornet.limits.vne,
+      `Mach ${ac.mach.toFixed(2)}, ${(ac.eas * KT).toFixed(0)} kt EAS`);
+  }
+
+  // (b) Past Vne the airframe lets go.
+  {
+    const ac = createAircraft({ pos: v3(0, 4000, 0), vel: v3(60, 0, 0) });
+    fly(ac, ctl({ throttle: 1, elevator: -0.32 }), 120);
+    check('a sustained overspeed breaks the airframe', ac.crashed && ac.crashReason === 'overspeed',
+      `${(ac.eas * KT).toFixed(0)} kt EAS, ${ac.crashReason || 'survived'}`);
+  }
+
+  // (c) ...but a brief excursion is survivable. An instant trip would fire on a
+  // single gust-loaded frame, which is why damage accumulates instead.
+  {
+    const ac = createAircraft({ pos: v3(0, 3000, 0), vel: v3(100, 0, 0) });
+    let peakEas = 0;
+    fly(ac, ctl({ throttle: 0 }), 3, flat, a => { peakEas = Math.max(peakEas, a.eas); });
+    check('a brief overspeed excursion does not break the airframe',
+      peakEas > ac.p.limits.vne && !ac.crashed && ac.damage < 1,
+      `peaked ${(peakEas * KT).toFixed(0)} kt EAS vs Vne ${(ac.p.limits.vne * KT).toFixed(0)}, damage ${ac.damage.toFixed(2)}`);
+  }
+
+  // (d) g-limits are per airframe: the same pull that breaks a trainer is
+  // nothing to an aerobatic aircraft.
+  {
+    const pull = (id) => {
+      const ac = createAircraft({ params: AIRCRAFT[id], pos: v3(0, 4000, 0), vel: v3(75, 0, 0) });
+      ac.spool = 1;
+      let peak = 1;
+      fly(ac, ctl({ throttle: 1, elevator: 1 }), 6, flat, a => { peak = Math.max(peak, a.gLoad); });
+      return { peak, reason: ac.crashReason };
+    };
+    const trainer = pull('c172'), aerobat = pull('extra300');
+    check('over-g breaks the trainer', trainer.reason === 'overstress',
+      `${trainer.peak.toFixed(1)} g vs ${AIRCRAFT.c172.limits.gPos} limit`);
+    check('the same pull does not break the aerobat', aerobat.reason !== 'overstress',
+      `${aerobat.peak.toFixed(1)} g vs ${AIRCRAFT.extra300.limits.gPos} limit`);
+  }
+
+  // (e) Flaps trail back above Vfe, and are EXACTLY untouched below it.
+  {
+    const fast = createAircraft({ pos: v3(0, 2000, 0), vel: v3(70, 0, 0) });
+    fly(fast, ctl({ throttle: 0.5, flaps: 1 }), 2);
+    check('flaps blow back above Vfe', fast.flapsEff < 0.9 && fast.flapsEff > 0,
+      `flapsEff ${fast.flapsEff.toFixed(2)} at ${(fast.eas * KT).toFixed(0)} kt`);
+    const slow = createAircraft({ pos: v3(0, 2000, 0), vel: v3(35, 0, 0) });
+    fly(slow, ctl({ throttle: 0.5, flaps: 1 }), 2);
+    check('flaps are exactly untouched below Vfe', slow.flapsEff === 1, `flapsEff ${slow.flapsEff}`);
+  }
+
+  // (f) Limits are INDICATED speeds. The old OVERSPEED annunciator compared
+  // true airspeed against Vne, so it fired at altitude while the tape still
+  // read under the limit.
+  {
+    const low = createAircraft({ pos: v3(0, 0, 0), vel: v3(90, 0, 0) });
+    const high = createAircraft({ pos: v3(0, 8000, 0), vel: v3(90, 0, 0) });
+    fly(low, ctl(), 1 / 60); fly(high, ctl(), 1 / 60);
+    check('the same TAS is an overspeed low down but not at altitude',
+      low.eas > low.p.limits.vne && high.eas < high.p.limits.vne,
+      `EAS ${(low.eas * KT).toFixed(0)} kt at SL vs ${(high.eas * KT).toFixed(0)} kt at 8 km`);
+  }
+
+  // (g) V-speed ordering must stay sane for every airframe.
+  for (const id of Object.keys(AIRCRAFT)) {
+    const v = vSpeeds(AIRCRAFT[id]);
+    const ok = v.vs0Kt <= v.vs1Kt && v.vs1Kt < v.vneKt && v.gPos > 0 && v.gNeg < 0
+      && (v.vfeKt === null || (v.vfeKt > v.vs0Kt && v.vfeKt < v.vneKt))
+      && (v.vnoKt === null || v.vnoKt < v.vneKt);
+    check(`${id} V-speeds are ordered`, ok,
+      `Vs0 ${v.vs0Kt.toFixed(0)} Vs1 ${v.vs1Kt.toFixed(0)} Vfe ${v.vfeKt?.toFixed(0) ?? '-'} Vne ${v.vneKt.toFixed(0)}`);
+  }
+}
+
+// ---- 18e. Turbulence has to be able to roll you ----
+// The wind was sampled once at the CG, so both wings always saw identical air:
+// hands-off for two minutes in the 16G28 "gusty" preset the total bank
+// excursion was 5 degrees. Turbulence registered as speed and g noise but
+// never as the continuous roll corrections that define flying a light aircraft
+// in wind. Wind speed also did not vary with height at all.
+{
+  const windEnv = (w, dirDeg = 270) => {
+    const wind = createWind();
+    wind.set({ dirDeg, ...w });
+    return {
+      wind,
+      env: { groundHeight: () => 0, isRunway: () => false, terrainHeight: () => 0,
+             wind: (x, y, z) => wind.at(x, y, z) },
+    };
+  };
+  // Measured as roll-RATE activity, not peak bank: hands-off, the aircraft's
+  // own left-turning tendency winds it into a slow spiral whose peak bank
+  // swamps everything. Gusts show up as roll-rate noise on top of that.
+  const bankIn = (w) => {
+    const { wind, env } = windEnv(w);
+    const ac = createAircraft({ pos: v3(0, 300, 0), vel: v3(95 / KT, 0, 0) });
+    let t = 0, sum2 = 0, n = 0, maxG = 1, minG = 1;
+    for (let i = 0; i < 120 * 90; i++) {
+      t += DT; wind.setTime(t);
+      step(ac, ctl({ throttle: 0.6, elevator: 0.02 }), env, DT);
+      sum2 += ac.omega.x * ac.omega.x; n++;
+      maxG = Math.max(maxG, ac.gLoad); minG = Math.min(minG, ac.gLoad);
+      if (ac.crashed) break;
+    }
+    return { rms: Math.sqrt(sum2 / n) * 180 / Math.PI, maxG, minG, crashed: ac.crashed };
+  };
+
+  const gusty = bankIn(WEATHER.gusty), calm = bankIn(WEATHER.calm);
+  // Measured as the EXCESS over calm, not as an absolute. A hands-off single
+  // no longer flies straight — the slipstream swirl gives it a real
+  // left-turning tendency — so an absolute bank figure would be measuring the
+  // prop, not the weather. Two-sided on purpose: catches both "turbulence
+  // can't roll you" and "turbulence flips you onto your back".
+  check('turbulence rolls the aircraft, but does not flip it',
+    !gusty.crashed && gusty.rms > calm.rms * 2.5 && gusty.rms < 12,
+    `roll rate RMS ${gusty.rms.toFixed(2)} deg/s in gusty vs ${calm.rms.toFixed(2)} in calm`);
+  check('turbulence does not come with silly g-loading',
+    gusty.minG > 0 && gusty.maxG < 2.5, `${gusty.minG.toFixed(2)}-${gusty.maxG.toFixed(2)} g`);
+
+  // The invariant that keeps the headwind test structurally immune: a spatially
+  // uniform wind must produce ZERO differential, however strong it is.
+  {
+    // The invariant is that a uniform wind adds NOTHING in roll — so compare
+    // against a no-wind run rather than against zero, which would only be
+    // measuring the aircraft's own left-turning tendency.
+    // Galilean check: flying at 50 m/s airspeed into a uniform 14 m/s headwind
+    // must roll EXACTLY like flying at 50 m/s airspeed in still air. If the
+    // spanwise sampling ever leaked into the translational solution, or a
+    // uniform field produced a differential, this is what would catch it.
+    const still = { groundHeight: () => -9000, isRunway: () => false, terrainHeight: () => -9000 };
+    const uniform = { ...still, wind: () => v3(-14, 0, 0) };
+    const a = createAircraft({ pos: v3(0, 1000, 0), vel: v3(36, 0, 0) });   // 50 airspeed
+    const b = createAircraft({ pos: v3(0, 1000, 0), vel: v3(50, 0, 0) });
+    fly(a, ctl({ throttle: 0.5 }), 20, uniform);
+    fly(b, ctl({ throttle: 0.5 }), 20, still);
+    check('a spatially uniform wind produces no differential roll',
+      Math.abs(a.omega.x - b.omega.x) < 1e-9 && Math.abs(attitude(a).roll - attitude(b).roll) < 1e-9,
+      `roll delta ${((attitude(a).roll - attitude(b).roll) * 57.3).toExponential(2)} deg`);
+  }
+
+  // Wind gradient: the steady component used to be identical at 20 m and 2 km.
+  {
+    const { wind } = windEnv(WEATHER.breezy);
+    wind.setTime(3);
+    const low = wind.at(0, 20, 0), high = wind.at(0, 1500, 0);
+    const mag = (w) => Math.hypot(w.x, w.z);
+    check('wind strengthens with height', mag(high) > mag(low) * 1.3,
+      `${mag(low).toFixed(1)} m/s at 20 m -> ${mag(high).toFixed(1)} m/s at 1500 m`);
+  }
+
+  // Turbulence used to hit exactly zero at 500 m, so the headline gusty preset
+  // was glass-smooth at every cruise altitude.
+  {
+    const { wind } = windEnv(WEATHER.gusty);
+    let spread = 0;
+    for (let i = 0; i < 400; i++) { wind.setTime(i * 0.1); spread = Math.max(spread, Math.abs(wind.at(i * 40, 1500, 0).y)); }
+    check('turbulence still exists above 500 m', spread > 0.1, `${spread.toFixed(2)} m/s vertical at 1500 m`);
+  }
+}
+
+// ---- 18f. Power is coupled to pitch and yaw ----
+// Thrust used to be added to the FORCE vector only — the moment vector had no
+// thrust term and there was no propwash over the tail, so a power change did
+// not move the nose and elevator authority was identical at idle and full
+// throttle. The left-turning tendency existed on paper but was 0.09% of rudder
+// authority: measured heading drift across an entire takeoff roll was 0.75 deg.
+{
+  const level = (thr, secs) => {
+    const ac = createAircraft({ pos: v3(0, 2000, 0), vel: v3(50, 0, 0) });
+    ac.spool = thr;
+    fly(ac, ctl({ throttle: thr, elevator: 0.06 }), secs);
+    return ac;
+  };
+  // (a) Power makes a pitching moment. Same elevator, different throttle.
+  const lo = level(0.25, 6), hi = level(0.95, 6);
+  check('adding power pitches the nose up',
+    attitude(hi).pitch > attitude(lo).pitch + 0.02,
+    `${(attitude(lo).pitch * 57.3).toFixed(1)} deg at idle vs ${(attitude(hi).pitch * 57.3).toFixed(1)} deg at full power`);
+
+  // (b) Elevator authority rises with power (the tail sits in the slipstream).
+  // Sampled slow, because that is where slipstream matters: the wash ratio
+  // goes as thrust/V^2, so at cruise it is worth only a few percent while on
+  // the roll and in slow flight it is the difference between having an
+  // elevator and not.
+  const pitchRate = (thr) => {
+    const ac = createAircraft({ pos: v3(0, 2000, 0), vel: v3(30, 0, 0) });
+    ac.spool = thr;
+    let peak = 0;
+    fly(ac, ctl({ throttle: thr, elevator: 0.5 }), 1.2, flat, a => { peak = Math.max(peak, a.omega.z); });
+    return peak;
+  };
+  const qLo = pitchRate(0.15), qHi = pitchRate(1);
+  check('elevator authority increases with power', qHi > qLo * 1.05,
+    `${(qLo * 57.3).toFixed(1)} vs ${(qHi * 57.3).toFixed(1)} deg/s in slow flight`);
+
+  // (c) The takeoff roll pulls left and needs right rudder to hold centreline.
+  const roll = (rudder) => {
+    const ac = createAircraft({ pos: v3(0, 1.27, 0), vel: v3(0, 0, 0) });
+    let off = 0;
+    fly(ac, (a) => ctl({ throttle: 1, rudder: typeof rudder === 'function' ? rudder(a) : rudder }),
+      22, flat, a => { if (a.agl < 3) off = a.pos.z; });
+    return off;
+  };
+  const free = roll(0);
+  const flown = roll(a => Math.max(-1, Math.min(1, -0.12 * a.pos.z - 0.9 * a.vel.z)));
+  check('the takeoff roll pulls LEFT without rudder', free < -3,
+    `${free.toFixed(1)} m off centreline (-z = left)`);
+  check('...and right rudder holds the centreline', Math.abs(flown) < 3,
+    `${flown.toFixed(1)} m with the pedals`);
+}
+
+// ---- 18f2. The fin is strong enough relative to the rudder ----
+// Cndr/Cnbeta used to let full rudder settle at 39 deg of steady sideslip on
+// the Skyhawk (57 on the Extra). A real forward slip in a light single is
+// 15-20 deg; the yaw axis felt loose and slips were cartoonish. Solved
+// analytically, like the stall speeds — it is a static balance, and flying it
+// open-loop for 30 s just measures whatever departure happens first.
+{
+  const steadySlip = (p) => {
+    // Cnbeta*b == Cndr*fade(b), fade = 1/(1+(b/bf)^2)
+    const bf = p.betaRudFade ?? 0.30;
+    let lo = 0, hi = 1.5;
+    for (let i = 0; i < 80; i++) {
+      const b = (lo + hi) / 2;
+      if (Math.abs(p.Cnbeta) * b < p.Cndr / (1 + (b / bf) ** 2)) lo = b; else hi = b;
+    }
+    return (lo + hi) / 2 * 180 / Math.PI;
+  };
+  for (const id of ['c172', 'extra300', 'hornet', 'heavy']) {
+    const deg = steadySlip(AIRCRAFT[id]);
+    check(`${id} full rudder settles at a realistic sideslip`, deg > 12 && deg < 24, `${deg.toFixed(0)} deg`);
+  }
+  // Fade must not eat the authority the crosswind lesson needs to de-crab.
+  const p = PARAMS, bf = p.betaRudFade ?? 0.30;
+  const retained = 1 / (1 + (0.21 / bf) ** 2);
+  check('rudder keeps most of its authority at a 12 deg de-crab', retained > 0.6,
+    `${(retained * 100).toFixed(0)}% of full rudder`);
+
+  // And flown: a slip must increase the descent rate. That is what it is for.
+  const glideSink = (rudder) => {
+    const ac = createAircraft({ pos: v3(0, 4000, 0), vel: v3(36, 0, 0) });
+    let iE = 0;
+    fly(ac, (a) => {
+      const pe = 0.03 * (a.airspeed - 36) - attitude(a).pitch;
+      iE = Math.max(-1, Math.min(1, iE + pe * DT * 1.5));
+      return ctl({ throttle: 0.15, rudder,
+        elevator: Math.max(-1, Math.min(1, 3 * pe + iE - 0.5 * a.omega.z)),
+        aileron: Math.max(-1, Math.min(1, -attitude(a).roll * 3 - a.omega.x * 0.6)) });
+    }, 14);
+    return { vs: ac.vel.y, beta: Math.abs(ac.beta) * 180 / Math.PI };
+  };
+  const straight = glideSink(0), slipped = glideSink(1);
+  check('a forward slip steepens the descent',
+    slipped.beta > 8 && slipped.vs < straight.vs - 0.5,
+    `${straight.vs.toFixed(1)} -> ${slipped.vs.toFixed(1)} m/s at ${slipped.beta.toFixed(0)} deg of slip`);
+}
+
+// ---- 18g. Drag polar matches the published glide ----
+// The old 0.030/0.054 gave L/Dmax 12.4 at 74 kt, so engine-out glides went
+// about 35% further than a real Skyhawk's.
+{
+  const p = PARAMS;
+  const ld = (cd0) => 1 / (2 * Math.sqrt(cd0 * p.kInduced));
+  const vbg = (cd0) => Math.sqrt(2 * p.mass * G / (RHO0 * p.wingArea) * Math.sqrt(p.kInduced / cd0)) * KT;
+  const clean = ld(p.CD0), off = ld(p.CD0 + p.engine.windmillCD);
+  check('clean best L/D is 10-11.5', clean > 10 && clean < 11.5, `${clean.toFixed(1)}:1 at ${vbg(p.CD0).toFixed(0)} kt`);
+  check('power-off best glide matches the POH 9.0 at 68 kt',
+    off > 8.5 && off < 9.5 && vbg(p.CD0 + p.engine.windmillCD) > 64 && vbg(p.CD0 + p.engine.windmillCD) < 72,
+    `${off.toFixed(1)}:1 at ${vbg(p.CD0 + p.engine.windmillCD).toFixed(0)} kt`);
 }
 
 // ---- 19. C172 trimmed cruise is byte-identical (softening must not touch it) ----
+// RE-BASELINED ONCE for v6. Everything that necessarily moves the cruise state
+// was landed together so this happens exactly once, and here is the whole list:
+//   CD0        0.030  -> 0.034   ) clean L/Dmax 10.8; with the windmill term
+//   kInduced   0.054  -> 0.0626  ) below, power-off lands on the POH 9.0 at 68 kt
+//   engine.windmillCD  new 0.0153  stopped/windmilling propeller drag
+//   thrustArmY         new 0.05    thrust line above the CG -> pitching couple
+//   washFrac/CmThrust  new         propwash over the tail: power now pitches the
+//                                  nose and scales elevator authority
+//   propfx             replaces propYaw: slipstream swirl, P-factor, gyroscopic
+//                                  precession (torque roll deliberately omitted)
+// Nothing else in v6 touches this state: the roll, stall, envelope and gust
+// work is all gated to be provably zero at this operating point, and the
+// guards in section 18c assert that directly.
 {
   const ac = createAircraft({ pos: v3(0, 2000, 0), vel: v3(55, 0, 0) });
   fly(ac, ctl({ throttle: 0.55, trim: 0.05 }), 20);
@@ -324,7 +779,7 @@ import { createWind, WEATHER } from '../src/physics/wind.js';
     ac.pos.x, ac.pos.y, ac.pos.z, ac.vel.x, ac.vel.y, ac.vel.z,
     ac.q.w, ac.q.x, ac.q.y, ac.q.z, ac.omega.x, ac.omega.y, ac.omega.z,
   ].map(v => v.toFixed(6)).join('|');
-  const EXPECTED = '882.940147|2039.258833|-1.113957|48.143129|-7.669935|-0.202756|0.998710|-0.001058|0.002202|-0.050718|-0.000069|0.000381|0.020425';
+  const EXPECTED = '870.735257|2030.375558|-37.931550|47.112229|-8.205009|-8.226805|0.993377|-0.048120|0.090512|-0.051912|-0.001774|0.017179|0.022559';
   check('c172 trimmed-cruise state hash unchanged', hash === EXPECTED, hash);
 }
 

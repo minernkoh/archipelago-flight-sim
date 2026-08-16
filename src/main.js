@@ -101,12 +101,15 @@ async function loadMap(map) {
   // before building terrain so chunks/minimap sample real ground, not sea. Caps
   // at 12 s so a slow network degrades to a flat world rather than hanging;
   // ready() also returns once fetches have failed, so offline resolves fast.
+  // Tracker blockers that leave fetches pending (never fail) are forced settled
+  // via abandonPending so the coarse-tier builder cannot spin forever.
   if (map.prefetch) {
-    map.prefetch(map.runway.spawn.x, map.runway.spawn.z, 3600);
+    map.prefetch(map.runway.spawn.x, map.runway.spawn.z, 9000);
     const t0 = Date.now();
-    while (!map.ready(map.runway.spawn.x, map.runway.spawn.z, 3600) && Date.now() - t0 < 12000) {
+    while (!map.ready(map.runway.spawn.x, map.runway.spawn.z, 9000) && Date.now() - t0 < 12000) {
       await new Promise(r => setTimeout(r, 60));
     }
+    if (!map.ready(map.runway.spawn.x, map.runway.spawn.z, 9000)) map.abandonPending?.();
     if (map.elevationOffline) hud.message('Elevation tiles offline — flying a flat world.', 5000);
   }
   terrain = createTerrain(scene, map);
@@ -117,9 +120,14 @@ async function loadMap(map) {
   env.setGround(collisionHeight);
   env.onMapLoaded(currentMap, scenery);
   terrain.prime(map.runway.spawn.x, map.runway.spawn.z);
-  while (terrain.pendingCount() > 0) {
-    terrain.update(map.runway.spawn.x, map.runway.spawn.z, 8);
-    await new Promise(r => setTimeout(r));
+  {
+    const tBuild = Date.now();
+    while (terrain.pendingCount() > 0 && Date.now() - tBuild < 8000) {
+      terrain.update(map.runway.spawn.x, map.runway.spawn.z, 8);
+      await new Promise(r => setTimeout(r));
+    }
+    // Force-flush anything still deferred (stalled elevation tiles).
+    if (terrain.pendingCount() > 0) terrain.update(map.runway.spawn.x, map.runway.spawn.z, 999, true);
   }
   minimap.bake(map); // coarse height sampling — stays in this pre-gen path, never rAF
   refreshPlan();     // rebuild the demo flight plan for the new map's fixes/course
@@ -287,15 +295,24 @@ window.__sim = { ac, controls, game, world, autopilot, env, windField, minimap,
 // (setTimeout, not rAF: headless/hidden pages stop delivering animation frames
 // when nothing renders, and we want boot to run at full speed anyway)
 async function boot() {
-  terrain.prime(currentMap.runway.spawn.x, currentMap.runway.spawn.z);
-  while (terrain.pendingCount() > 0) {
-    terrain.update(currentMap.runway.spawn.x, currentMap.runway.spawn.z, 8);
-    await new Promise(r => setTimeout(r));
+  try {
+    terrain.prime(currentMap.runway.spawn.x, currentMap.runway.spawn.z);
+    const tBuild = Date.now();
+    while (terrain.pendingCount() > 0 && Date.now() - tBuild < 8000) {
+      terrain.update(currentMap.runway.spawn.x, currentMap.runway.spawn.z, 8);
+      await new Promise(r => setTimeout(r));
+    }
+    if (terrain.pendingCount() > 0) {
+      terrain.update(currentMap.runway.spawn.x, currentMap.runway.spawn.z, 999, true);
+    }
+    minimap.bake(currentMap); // initial-map bake, still in the setTimeout pre-gen path
+  } catch (err) {
+    console.error('boot failed', err);
+  } finally {
+    document.querySelector('#loading').classList.remove('show');
+    game.toMenu();
+    schedule();
   }
-  minimap.bake(currentMap); // initial-map bake, still in the setTimeout pre-gen path
-  document.querySelector('#loading').classList.remove('show');
-  game.toMenu();
-  schedule();
 }
 boot();
 
