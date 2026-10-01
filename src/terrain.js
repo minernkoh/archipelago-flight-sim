@@ -57,6 +57,60 @@ export const VIEW_EXTENTS = {
 // through terrain.js's own per-chunk prefetch/re-queue loop instead.
 export const COARSE_TILE_RADIUS = FAR_R * FAR_CHUNK + FAR_CHUNK * 0.75; // 9900
 
+// ---------- Vegetation ----------
+// Instanced low-poly trees on the fine chunks nearest the aircraft. The ring
+// (TREE_R) is smaller than the fine tier: beyond ~1.5 km a tree is a few pixels and
+// the map's colour function already darkens woodland, so forests still read
+// from altitude. Placement is a jittered grid hashed on WORLD cell coords, so
+// a chunk regrows the identical forest every time it streams back in.
+const TREE_R = 2;                 // chunks either side -> +/-1500 m
+const TREE_STEP = 19;             // metres between candidate sites
+export const TREE_RING_M = TREE_R * CHUNK + CHUNK / 2;
+
+function treeHash(ix, iz, k) {
+  let n = Math.imul(ix, 0x2c1b3c6d) ^ Math.imul(iz, 0x297a2d39) ^ Math.imul(k, 0x9e3779b1);
+  n = Math.imul(n ^ (n >>> 15), 0x85ebca6b);
+  n ^= n >>> 13;
+  return (n >>> 0) / 4294967296;
+}
+
+// Merge a few primitives into one non-indexed geometry with vertex colours.
+function mergeColored(parts) {
+  const pos = [], nor = [], col = [];
+  for (const [geo, hex] of parts) {
+    const g = geo.index ? geo.toNonIndexed() : geo;
+    g.computeVertexNormals();
+    const c = new THREE.Color(hex);
+    const p = g.attributes.position, n = g.attributes.normal;
+    for (let i = 0; i < p.count; i++) {
+      pos.push(p.getX(i), p.getY(i), p.getZ(i));
+      nor.push(n.getX(i), n.getY(i), n.getZ(i));
+      col.push(c.r, c.g, c.b);
+    }
+    geo.dispose(); if (g !== geo) g.dispose();
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  out.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  out.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  return out;
+}
+
+// Unit-height trees (base at y=0, top at y=1); instances scale them. Kept to
+// ~20 triangles each (open-ended, no caps you could ever see from the air):
+// thousands are instanced, and software-rendered test runs feel every one.
+function coniferGeometry() {
+  const trunk = new THREE.CylinderGeometry(0.04, 0.05, 0.3, 4, 1, true); trunk.translate(0, 0.15, 0);
+  const lo = new THREE.ConeGeometry(0.3, 0.6, 6, 1, true); lo.translate(0, 0.45, 0);
+  const hi = new THREE.ConeGeometry(0.2, 0.45, 5, 1, true); hi.translate(0, 0.77, 0);
+  return mergeColored([[trunk, 0x7a5a40], [lo, 0x3f8a45], [hi, 0x4f9d52]]);
+}
+function broadleafGeometry() {
+  const trunk = new THREE.CylinderGeometry(0.04, 0.06, 0.45, 4, 1, true); trunk.translate(0, 0.225, 0);
+  const crown = new THREE.OctahedronGeometry(0.36, 0); crown.scale(1, 0.95, 1); crown.translate(0, 0.68, 0);
+  return mergeColored([[trunk, 0x7d5c40], [crown, 0x72b04a]]);
+}
+
 export function createTerrain(scene, map = archipelagoMap) {
   const heightFn = map.height;
   const colorFn = map.color;
@@ -66,31 +120,172 @@ export function createTerrain(scene, map = archipelagoMap) {
   let curCx = null, curCz = null;
   let farOn = true;
 
+  // Trees: their own keyed set + pending queue, independent of chunk meshes.
+  const trees = new Map();         // "cx,cz" -> THREE.Group (0-2 InstancedMesh)
+  const treePending = [];
+  let treesOn = !!map.forest;
+  let treeCx = null, treeCz = null;
+  const treeMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+  const coniferGeo = map.forest ? coniferGeometry() : null;
+  const broadGeo = map.forest ? broadleafGeometry() : null;
+  const coniferP = map.conifer || (() => 0.3);
+  const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(),
+    _p = new THREE.Vector3(), _c = new THREE.Color(), _up = new THREE.Vector3(0, 1, 0);
+
+  function buildTrees(cx, cz) {
+    const group = new THREE.Group();
+    const half = CHUNK / 2, x0 = cx * CHUNK - half, z0 = cz * CHUNK - half;
+    const gx0 = Math.ceil(x0 / TREE_STEP), gz0 = Math.ceil(z0 / TREE_STEP);
+    const gx1 = Math.ceil((x0 + CHUNK) / TREE_STEP), gz1 = Math.ceil((z0 + CHUNK) / TREE_STEP);
+    const con = [], brd = [];
+    for (let gx = gx0; gx < gx1; gx++) for (let gz = gz0; gz < gz1; gz++) {
+      const x = (gx + treeHash(gx, gz, 1) * 0.9) * TREE_STEP;
+      const z = (gz + treeHash(gx, gz, 2) * 0.9) * TREE_STEP;
+      const h = heightFn(x, z);
+      if (h < 1.5) continue;
+      const hx = heightFn(x + 6, z), hz = heightFn(x, z + 6);
+      const slope = Math.min(1, Math.hypot(h - hx, h - hz) / 6);
+      const dens = map.forest(x, z, h, slope);
+      if (dens <= 0 || treeHash(gx, gz, 3) > dens * 0.95) continue;
+      if (map.obstacleTop(x, z) > h - 1) continue;          // never inside a building
+      const r = treeHash(gx, gz, 4);
+      (treeHash(gx, gz, 5) < coniferP(h) ? con : brd).push([x, h, z, r]);
+    }
+    for (const [list, geo, tall] of [[con, coniferGeo, 17], [brd, broadGeo, 13]]) {
+      if (!list.length) continue;
+      const im = new THREE.InstancedMesh(geo, treeMat, list.length);
+      list.forEach(([x, h, z, r], i) => {
+        const sc = tall * (0.65 + r * 0.7);
+        _q.setFromAxisAngle(_up, r * 40);
+        _s.set(sc * (0.85 + ((r * 7) % 1) * 0.35), sc, sc * (0.85 + ((r * 13) % 1) * 0.35));
+        _p.set(x, h - 0.4, z);
+        im.setMatrixAt(i, _m.compose(_p, _q, _s));
+        // per-tree tint around 1.0: a little lighter/darker, a little warmer/cooler
+        const lt = 0.88 + ((r * 29) % 1) * 0.3, warm = (((r * 17) % 1) - 0.5) * 0.16;
+        _c.setRGB(lt * (1 + warm), lt, lt * (1 - warm * 0.5));
+        im.setColorAt(i, _c);
+      });
+      // No shadow-map casting: the shadow box is only ~280 m across, and the
+      // extra pass over every instance cost more than it showed.
+      im.castShadow = false;
+      im.computeBoundingSphere();
+      group.add(im);
+    }
+    return group;
+  }
+
+  function wantTrees(px, pz) {
+    if (!treesOn) {
+      if (trees.size) { for (const g of trees.values()) disposeTrees(g); trees.clear(); }
+      treePending.length = 0; treeCx = treeCz = null;
+      return;
+    }
+    const cx = Math.round(px / CHUNK), cz = Math.round(pz / CHUNK);
+    if (cx === treeCx && cz === treeCz) return;
+    treeCx = cx; treeCz = cz;
+    const need = new Set();
+    for (let i = -TREE_R; i <= TREE_R; i++)
+      for (let j = -TREE_R; j <= TREE_R; j++) need.add(`${cx + i},${cz + j}`);
+    for (const [k, g] of trees) if (!need.has(k)) { disposeTrees(g); trees.delete(k); }
+    treePending.length = 0;
+    for (const k of need) if (!trees.has(k)) treePending.push(k);
+    const d = (k) => { const [a, b] = k.split(',').map(Number); return Math.abs(a - cx) + Math.abs(b - cz); };
+    treePending.sort((a, b) => d(a) - d(b));
+  }
+  function disposeTrees(g) {
+    scene.remove(g);
+    for (const im of g.children) im.dispose?.();   // geometry + material are shared
+  }
+
   // One material per tier instead of one per chunk — every chunk used its own
   // identical MeshLambertMaterial, so a full view was 121 redundant materials.
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
   const farMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+  // The coarse tier interpolates over 200 m, so on rugged ground it can rise
+  // ABOVE the fine surface in valleys and poke through it (FAR_DROP alone is
+  // only 2 m). Inside the fine tier's reach, sink it well out of the way; the
+  // fine tier always covers at least ~3000 m from the aircraft.
+  farMat.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+      vec4 fw = modelMatrix * vec4(transformed, 1.0);
+      transformed.y -= (1.0 - smoothstep(2500.0, 2950.0, distance(fw.xz, cameraPosition.xz))) * 250.0;`);
+  };
 
-  function buildChunk(cx, cz, size = CHUNK, res = RES, drop = 0) {
-    const geo = new THREE.PlaneGeometry(size, size, res, res);
-    geo.rotateX(-Math.PI / 2);
-    const pos = geo.attributes.position;
-    const colors = new Float32Array(pos.count * 3);
-    const c = new THREE.Color();
-    const x0 = cx * size, z0 = cz * size;
-    // Slope is sampled over the chunk's own vertex spacing, so the coarse tier
-    // reads its own relief rather than 8 m detail it cannot resolve.
-    const step = Math.max(8, size / res / 2);
-    for (let i = 0; i < pos.count; i++) {
-      const wx = x0 + pos.getX(i), wz = z0 + pos.getZ(i);
-      const h = heightFn(wx, wz);
-      pos.setY(i, h);
-      const hx = heightFn(wx + step, wz), hz = heightFn(wx, wz + step);
-      const slope = Math.min(1, Math.hypot(h - hx, h - hz) / step);
-      colorFn(h, slope, wx, wz, c);
-      colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+  // The coarse tier (200 m cells, 1.8-9 km out) keeps smooth per-vertex
+  // colour: facets that big read as crude slabs, and at that range fog and
+  // distance want soft gradients anyway.
+  function buildSmooth(hgt, n, cell, half, x0, z0, drop) {
+    const pos = new Float32Array(n * n * 3), col = new Float32Array(n * n * 3);
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      const k = j * n + i, h = hgt[k];
+      const hx = hgt[j * n + Math.min(n - 1, i + 1)], hz = hgt[Math.min(n - 1, j + 1) * n + i];
+      const slope = Math.min(1, Math.hypot(h - hx, h - hz) / cell);
+      const lx = -half + i * cell, lz = -half + j * cell;
+      colorFn(h, slope, x0 + lx, z0 + lz, _fc);
+      pos[k * 3] = lx; pos[k * 3 + 1] = h; pos[k * 3 + 2] = lz;
+      col[k * 3] = _fc.r; col[k * 3 + 1] = _fc.g; col[k * 3 + 2] = _fc.b;
     }
-    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    const idx = [];
+    for (let j = 0; j < n - 1; j++) for (let i = 0; i < n - 1; i++) {
+      const a = j * n + i, b = a + 1, c = a + n, d = c + 1;
+      idx.push(a, c, b, b, c, d);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    const mesh = new THREE.Mesh(geo, farMat);
+    mesh.position.set(x0, -drop, z0);
+    return mesh;
+  }
+
+  // FACETED: one colour per triangle, sampled at the triangle's centroid with
+  // the slope of the face itself. Per-vertex colours used to smear across
+  // every face, which made the ground read as a blurry low-res texture rather
+  // than low-poly; a flat colour per facet is what gives the style its crisp
+  // cut-paper look. Costs a non-indexed geometry (6 verts per quad).
+  const _fc = new THREE.Color();
+  function buildChunk(cx, cz, size = CHUNK, res = RES, drop = 0) {
+    const x0 = cx * size, z0 = cz * size;
+    const n = res + 1, cell = size / res, half = size / 2;
+    const hgt = new Float32Array(n * n);
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      hgt[j * n + i] = heightFn(x0 - half + i * cell, z0 - half + j * cell);
+    }
+    if (drop) return buildSmooth(hgt, n, cell, half, x0, z0, drop);
+    const tris = res * res * 2;
+    const pos = new Float32Array(tris * 9);
+    const col = new Float32Array(tris * 9);
+    let p = 0;
+    const tri = (ax, az, ah, bx, bz, bh, qx, qz, qh) => {
+      // face normal (y-up) -> slope as rise/run, same scale the maps expect
+      const ux = bx - ax, uy = bh - ah, uz = bz - az, vx = qx - ax, vy = qh - ah, vz = qz - az;
+      const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      const slope = Math.min(1, Math.hypot(nx, nz) / Math.max(1e-6, Math.abs(ny)));
+      const mx = (ax + bx + qx) / 3, mz = (az + bz + qz) / 3, mh = (ah + bh + qh) / 3;
+      colorFn(mh, slope, x0 + mx, z0 + mz, _fc);
+      pos[p] = ax; pos[p + 1] = ah; pos[p + 2] = az;
+      pos[p + 3] = bx; pos[p + 4] = bh; pos[p + 5] = bz;
+      pos[p + 6] = qx; pos[p + 7] = qh; pos[p + 8] = qz;
+      for (let k = 0; k < 9; k += 3) { col[p + k] = _fc.r; col[p + k + 1] = _fc.g; col[p + k + 2] = _fc.b; }
+      p += 9;
+    };
+    for (let j = 0; j < res; j++) for (let i = 0; i < res; i++) {
+      const xa = -half + i * cell, xb = xa + cell, za = -half + j * cell, zb = za + cell;
+      const h00 = hgt[j * n + i], h10 = hgt[j * n + i + 1], h01 = hgt[(j + 1) * n + i], h11 = hgt[(j + 1) * n + i + 1];
+      // alternate the diagonal so facets don't all lean the same way
+      if ((i + j) & 1) {
+        tri(xa, za, h00, xa, zb, h01, xb, za, h10);
+        tri(xb, za, h10, xa, zb, h01, xb, zb, h11);
+      } else {
+        tri(xa, za, h00, xa, zb, h01, xb, zb, h11);
+        tri(xa, za, h00, xb, zb, h11, xb, za, h10);
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
     geo.computeVertexNormals();
     const mesh = new THREE.Mesh(geo, drop ? farMat : mat);
     mesh.position.set(x0, -drop, z0);
@@ -153,16 +348,33 @@ export function createTerrain(scene, map = archipelagoMap) {
         chunks.set(key, mesh);
         scene.add(mesh);
       }
+      // Trees ride the same per-call budget, but only after the ground under
+      // the aircraft exists (a forest floating over a missing chunk is worse
+      // than a bare one for a few frames).
+      wantTrees(px, pz);
+      if (pending.length === 0 || force) {
+        for (let n = 0; n < Math.max(1, budget >> 1) && treePending.length; n++) {
+          const k = treePending.shift();
+          if (trees.has(k)) continue;
+          const [cx, cz] = k.split(',').map(Number);
+          const g = buildTrees(cx, cz);
+          trees.set(k, g);
+          scene.add(g);
+        }
+      }
     },
     /** Coarse tier off = the old single-tier behaviour (quality: LOW). */
     setFarTier(on) { farOn = !!on; curCx = null; curCz = null; },
+    /** Vegetation on/off (quality knob). A map with no `forest` never grows any. */
+    setTrees(on) { treesOn = !!on && !!map.forest; treeCx = treeCz = null; },
     counts() {
-      let fine = 0, coarse = 0;
+      let fine = 0, coarse = 0, treeInstances = 0;
       for (const k of chunks.keys()) k.startsWith('n:') ? fine++ : coarse++;
-      return { fine, coarse };
+      for (const g of trees.values()) for (const im of g.children) treeInstances += im.count;
+      return { fine, coarse, treeChunks: trees.size, treeInstances };
     },
-    pendingCount: () => pending.length,
-    prime(px, pz) { want(px, pz); }, // fill pending list without building
+    pendingCount: () => pending.length + treePending.length,
+    prime(px, pz) { want(px, pz); wantTrees(px, pz); }, // fill pending lists without building
     // Tear down every chunk and reset streaming state so the next update()
     // rebuilds from scratch (used when swapping maps).
     disposeAll() {
@@ -171,6 +383,9 @@ export function createTerrain(scene, map = archipelagoMap) {
       chunks.clear();
       pending.length = 0;
       curCx = null; curCz = null;
+      for (const g of trees.values()) disposeTrees(g);
+      trees.clear(); treePending.length = 0; treeCx = treeCz = null;
+      treeMat.dispose(); coniferGeo?.dispose(); broadGeo?.dispose();
     },
   };
 }

@@ -239,6 +239,17 @@
   /* The menu's rows are wider than a prose column — 34rem clipped the START
      value. Scoped to #menu so the other screens keep their measure. */
   #menu .inner { max-width: 40rem; }
+  /* The menu floats over the live scene (main.js orbits the parked aircraft
+     behind it): a left-weighted scrim keeps the type legible, the right half
+     stays open so the aircraft and sky read through. */
+  #menu { background:
+          linear-gradient(90deg, rgba(8,11,15,.92) 0%, rgba(8,11,15,.78) 34%, rgba(8,11,15,.18) 62%, rgba(8,11,15,.05) 100%),
+          linear-gradient(0deg, rgba(8,11,15,.55) 0%, rgba(8,11,15,0) 22%); }
+  /* In-flight overlays keep the frozen scene visible behind them. */
+  #pause, #crash, #results { background:
+          linear-gradient(90deg, rgba(8,11,15,.9) 0%, rgba(8,11,15,.7) 40%, rgba(8,11,15,.25) 75%, rgba(8,11,15,.15) 100%); }
+  #menu #brief > * { backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+          background-color: rgba(11,15,19,.72); }
   .kicker { font-family: "B612 Mono", monospace; font-size: .72rem; letter-spacing: .38em;
           color: var(--amber); margin-bottom: 1.1rem; }
   .screen h1 { font-size: clamp(2.6rem, 6vw, 4.2rem); font-weight: 700; letter-spacing: .01em;
@@ -477,7 +488,8 @@
   <div id="help">
     <b>&uarr;&darr;</b> pitch &nbsp;<b>&larr;&rarr;</b> roll &nbsp;<b>A D</b> rudder<br>
     <b>W S</b> throttle &nbsp;<b>F</b>/<b>shift F</b> flaps &nbsp;<b>B</b> brakes &nbsp;<b>[ ]</b> trim<br>
-    <b>C</b> camera &nbsp;<b>M</b> minimap &nbsp;<b>I</b> instruments &nbsp;<b>R</b> reset &nbsp;<b>ESC</b> pause &nbsp;<b>?</b> hide
+    <b>C</b> camera &nbsp;<b>V</b> fly-by cam &nbsp;<b>WHEEL</b> zoom &nbsp;<b>DRAG</b> look around &nbsp;<b>K</b> smoke<br>
+    <b>M</b> minimap &nbsp;<b>I</b> instruments &nbsp;<b>R</b> reset &nbsp;<b>ESC</b> pause &nbsp;<b>?</b> hide
   </div>
 </div>
 
@@ -528,7 +540,7 @@
 
   <div class="foot" id="menu-foot">
     ARROWS pitch/roll &nbsp;&middot;&nbsp; <b>A/D</b> rudder &nbsp;&middot;&nbsp; <b>W/S</b> throttle &nbsp;&middot;&nbsp;
-    <b>F</b> flaps &nbsp;&middot;&nbsp; <b>B</b> brakes &nbsp;&middot;&nbsp; <b>C</b> camera &nbsp;&middot;&nbsp; <b>ESC</b> pause
+    <b>F</b> flaps &nbsp;&middot;&nbsp; <b>B</b> brakes &nbsp;&middot;&nbsp; <b>C</b> camera &nbsp;&middot;&nbsp; <b>V</b> fly-by &nbsp;&middot;&nbsp; <b>ESC</b> pause
     <br><button class="btn footlink" data-act="groundschool">GROUND SCHOOL &rarr;</button>
     &nbsp;&middot;&nbsp;<button class="btn footlink" data-act="logbook">LOGBOOK &rarr;</button>
     &nbsp;&middot;&nbsp;<button class="btn footlink" data-act="plan">FLIGHT PLAN &rarr;</button>

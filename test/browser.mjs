@@ -16,6 +16,7 @@ const CANDIDATES = [
   '/usr/bin/google-chrome-stable',
   '/usr/bin/chromium',
   '/usr/bin/chromium-browser',
+  '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',   // Playwright-provisioned containers
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
 ];
 
@@ -33,7 +34,10 @@ export function chromePath() {
 // the audio device or the WebAudio renderer." Every suite that asserts "no
 // console errors" then fails on a machine-shaped problem rather than a code
 // one. Silence the audio stack rather than special-casing the message.
-const BASE_ARGS = ['--mute-audio', '--disable-audio-output'];
+const BASE_ARGS = ['--mute-audio', '--disable-audio-output',
+  // Chrome refuses to start its sandbox as root (CI containers, cloud dev
+  // boxes); without this every browser suite dies before its first check.
+  ...(process.getuid?.() === 0 ? ['--no-sandbox'] : [])];
 
 // Same options object as puppeteer.launch, with executablePath and the
 // audio-silencing args filled in.

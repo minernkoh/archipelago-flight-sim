@@ -162,6 +162,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
     audio.setMuted?.(settings.muted);
     controls.applySettings(settings);
     world.setPixelRatioCap?.(settings.pixelRatioCap);
+    world.setAutoRes?.(settings.autoRes);
     world.setQuality?.(settings.quality);   // v6: draw distance + shadows
     atcVoice.setEnabled(settings.atc);
     atc?.setArmed(settings.atc);
@@ -302,6 +303,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
     // into the description line, so an earlier call would show a stale one.
     paintMenuCursor();
     localStorage.setItem(SEL_KEY, JSON.stringify(sel));
+    if (state === 'menu') world.preview?.(sel);
   }
 
   // dir +1 / -1 so the keyboard can step backwards; clicking still means "next".
@@ -617,6 +619,10 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
   });
   controls.on('reset', () => { if (state === 'flying' || state === 'crash') actions.restart(); });
   controls.on('camera', () => { camRig.cycle(); hud.setCamera(camRig.modeName); });
+  controls.on('flyby', () => {
+    if (state !== 'flying') return;
+    camRig.toggleFlyby(); hud.setCamera(camRig.modeName);
+  });
   controls.on('help', () => { if (tour.isOpen()) tour.close(); else tour.open(); });
 
   let lastTouchdown = null;

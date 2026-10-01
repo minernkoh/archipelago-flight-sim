@@ -1227,6 +1227,76 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
     coarseTris < 121 * 36 * 36 * 2 * 0.06, `${coarseTris} tris`);
 }
 
+// ---- v7 vegetation: cosmetic forest layer ----
+// Trees are scattered from map.forest(); it must never plant one on a runway,
+// in the sea, or (by construction) move the terrain. The shared noise must be
+// deterministic so a chunk regrows the identical forest when it streams back.
+{
+  const { makeNoise, woodland } = await import('../src/maps/noise.js');
+  const a = makeNoise(42), b = makeNoise(42), c = makeNoise(43);
+  check('forest: shared noise is deterministic per seed',
+    a.fbm(12.3, -4.5) === b.fbm(12.3, -4.5) && a.fbm(12.3, -4.5) !== c.fbm(12.3, -4.5));
+  let lo = 1, hi = 0;
+  for (let i = 0; i < 400; i++) { const w = woodland(a, i * 37.1, i * -21.7); lo = Math.min(lo, w); hi = Math.max(hi, w); }
+  check('forest: woodland mask stays in 0..1 and actually varies', lo >= 0 && hi <= 1 && hi - lo > 0.5, `${lo.toFixed(2)}..${hi.toFixed(2)}`);
+
+  const { archipelagoMap } = await import('../src/maps/archipelago.js');
+  const { alpineMap } = await import('../src/maps/alpine.js');
+  const { singaporeMap } = await import('../src/maps/singapore.js');
+  const slopeAt = (m, x, z) => {
+    const h = m.height(x, z);
+    return Math.min(1, Math.hypot(h - m.height(x + 6, z), h - m.height(x, z + 6)) / 6);
+  };
+  for (const m of [archipelagoMap, alpineMap, singaporeMap]) {
+    const r = m.runway, f = { x: Math.cos(r.headingRad), z: -Math.sin(r.headingRad) };
+    let onRunway = 0;
+    for (let u = r.x0; u <= r.x1; u += 25) {
+      for (const v of [-r.halfWidth, 0, r.halfWidth]) {
+        const x = f.x * u - f.z * v, z = f.z * u + f.x * v;
+        if (m.forest(x, z, m.height(x, z), slopeAt(m, x, z)) > 0) onRunway++;
+      }
+    }
+    check(`forest: no trees on the ${m.name} runway`, onRunway === 0, `${onRunway} runway samples wooded`);
+    let wooded = 0, wet = 0, n = 0;
+    for (let x = -6000; x <= 6000; x += 97) for (let z = -6000; z <= 6000; z += 97) {
+      const h = m.height(x, z), d = m.forest(x, z, h, slopeAt(m, x, z));
+      n++;
+      if (d > 0.3) wooded++;
+      if (h < 1.5 && d > 0) wet++;
+    }
+    check(`forest: ${m.name} grows real woodland somewhere`, wooded / n > 0.03, `${(100 * wooded / n).toFixed(1)}% wooded`);
+    check(`forest: ${m.name} plants nothing in the sea`, wet === 0, `${wet} wet samples`);
+  }
+}
+
+// ---- v7 trails: wingtip vortices + smoke ----
+// The trail logic is THREE-side but needs no WebGL to build buffers, so the
+// trigger rules are checked headlessly with a fake aircraft.
+{
+  const THREE = await import('three');
+  const { createTrails } = await import('../src/trails.js');
+  const scene = new THREE.Scene();
+  const t = createTrails(scene);
+  const mk = (gLoad) => ({
+    p: { span: 11, chord: 1.5, alphaStall: 0.28, gear: [{ r: { x: -3.9, y: -0.4, z: 0 } }] },
+    pos: { x: 0, y: 500, z: 0 }, q: { x: 0, y: 0, z: 0, w: 1 },
+    airspeed: 60, alpha: 0.05, gLoad, onGround: false, crashed: false,
+  });
+  const cam = new THREE.Vector3(-30, 505, 0);
+  const fly = (ac, secs) => { for (let i = 0; i < secs * 60; i++) { ac.pos.x += 1; t.update(ac, 1 / 60, cam, true); } };
+  fly(mk(1.0), 1);
+  check('trails: no wingtip vortices in 1 g cruise', t.debug().tip.vis === 0, JSON.stringify(t.debug().tip));
+  fly(mk(4.5), 1);
+  check('trails: a 4.5 g pull condenses wingtip vortices', t.debug().tip.vis > 10, JSON.stringify(t.debug().tip));
+  check('trails: smoke stays off until toggled', t.debug().smoke.vis === 0);
+  t.toggleSmoke();
+  fly(mk(1.0), 2);
+  check('trails: smoke on lays a visible trail', t.smokeOn && t.debug().smoke.vis > 10, JSON.stringify(t.debug().smoke));
+  t.reset();
+  check('trails: reset clears smoke and switches it off', !t.smokeOn && t.debug().smoke.count === 0);
+  t.dispose();
+}
+
 // ---- Audio buses: master / sfx / music + mute ----
 // createAudio() only touches WebAudio inside init(), so the level bookkeeping
 // is testable headlessly — no AudioContext, no browser.
