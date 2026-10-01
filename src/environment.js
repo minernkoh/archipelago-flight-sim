@@ -1,5 +1,5 @@
 // Sky dome (scattering-style gradient, halo, stars), sun light, procedural ocean,
-// instanced billboard cumulus, blob shadow.
+// low-poly faceted cumulus, blob shadow.
 // Time-of-day aware: DAWN / DAY / DUSK / NIGHT swap the whole lighting rig at
 // once (never per-frame). Night adds lit runway edge lights, a PAPI bar, a
 // landing-light cone from the aircraft, and toggles city window glow/beacons.
@@ -31,12 +31,12 @@ export const TIMES = {
   },
   day: {
     label: 'DAY', night: false, exposure: 1.05,
-    sunDir: sunDir(126, 31), sunColor: C(0xfff1d6), sunI: 1.9,
-    hemiSky: C(0xbcd3e8), hemiGround: C(0x6b7a5c), hemiI: 0.85,
-    ambient: C(0xffffff), ambientI: 0.12,
+    sunDir: sunDir(126, 38), sunColor: C(0xfff0d2), sunI: 2.5,
+    hemiSky: C(0xb4cdf0), hemiGround: C(0x6f7d55), hemiI: 0.62,
+    ambient: C(0xffffff), ambientI: 0.04,
     fog: C(0xcfdde6), fogNear: 1400, fogFar: 5200,
     skyHorizon: C(0xd7e3ea), skyZenith: C(0x5e8fc4),
-    oceanDeep: C(0x1a4a5e), oceanShallow: C(0x2e7a80),
+    oceanDeep: C(0x15507a), oceanShallow: C(0x2f8fa8),
     cloud: C(0xffffff), cloudOpacity: 0.92,
   },
   dusk: {
@@ -51,8 +51,8 @@ export const TIMES = {
   },
   night: {
     label: 'NIGHT', night: true, exposure: 1.15,
-    sunDir: sunDir(40, 34), sunColor: C(0x7d92bd), sunI: 0.42,
-    hemiSky: C(0x2c3d5e), hemiGround: C(0x0b1018), hemiI: 0.42,
+    sunDir: sunDir(40, 34), sunColor: C(0x8fa6d6), sunI: 0.75,
+    hemiSky: C(0x3a5078), hemiGround: C(0x121a26), hemiI: 0.55,
     ambient: C(0x2a3856), ambientI: 0.14,
     fog: C(0x16202f), fogNear: 900, fogFar: 4200,
     skyHorizon: C(0x22324b), skyZenith: C(0x070d1a),
@@ -67,154 +67,96 @@ export const FOG_COLOR = TIMES.day.fog.clone();
 
 const lum = (c) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
 
-// Soft cloud puff: a radial falloff broken up by value noise, built per pixel
-// so there are no gradient rings for overlapping puffs to stack into visible
-// "bubbles". Alpha only; colour comes from the shader.
-function puffTexture() {
-  const S = 128;
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = S;
-  const ctx = cv.getContext('2d');
-  const img = ctx.createImageData(S, S);
-  const G = 9, grid = [];
-  let s = 7;
-  for (let i = 0; i < G * G; i++) grid.push((s = (s * 16807) % 2147483647) / 2147483647);
-  const vn = (x, y) => {               // bilinear value noise on a GxG lattice
-    const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
-    const g = (a, b) => grid[((b % G) + G) % G * G + ((a % G) + G) % G];
-    const u = fx * fx * (3 - 2 * fx), v = fy * fy * (3 - 2 * fy);
-    return (g(ix, iy) * (1 - u) + g(ix + 1, iy) * u) * (1 - v) + (g(ix, iy + 1) * (1 - u) + g(ix + 1, iy + 1) * u) * v;
-  };
-  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
-    const nx = x / S * 2 - 1, ny = y / S * 2 - 1;
-    const d = Math.hypot(nx, ny);
-    const n = 0.55 * vn(x / S * 4, y / S * 4) + 0.3 * vn(x / S * 8 + 3, y / S * 8 + 5) + 0.15 * vn(x / S * 16, y / S * 16);
-    const edge = d + (n - 0.5) * 0.55;            // noisy silhouette
-    let a = 1 - Math.min(1, Math.max(0, (edge - 0.25) / 0.7));
-    a = a * a * (3 - 2 * a) * (0.8 + 0.2 * n);
-    const k = (y * S + x) * 4;
-    img.data[k] = img.data[k + 1] = img.data[k + 2] = 255;
-    img.data[k + 3] = Math.round(a * 255);
-  }
-  ctx.putImageData(img, 0, 0);
-  const tex = new THREE.CanvasTexture(cv);
-  tex.colorSpace = THREE.NoColorSpace;
-  return tex;
-}
-
 const CLOUD_WRAP = 5000;     // clusters live in a 10 km box that follows the aircraft
 
+// Low-poly cumulus, matching the faceted terrain: each cloud is a handful of
+// subdivided icosahedra merged into one flat-shaded mesh, with the underside
+// sheared flat at a common base (that flat bottom is what makes it read as
+// cumulus rather than a pile of rocks). Shading is stylised rather than lit by
+// the scene: bright sunlit tops, cool blue-grey undersides, a warm rim toward
+// the sun. Opaque, so there is nothing to sort and no overdraw to pay for.
 function buildClouds(scene, tod) {
   let seed = 99;
   const rng = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-  const clusters = [];       // { x, y, z } centres (drift + wrap in JS)
-  const puffs = [];          // { c: clusterIndex, ox, oy, oz, size, shade, rot }
-  for (let i = 0; i < 36; i++) {
-    const W = 200 + rng() * 400, H = W * (0.28 + rng() * 0.2);
-    clusters.push({
-      x: (rng() - 0.5) * CLOUD_WRAP * 2, y: 420 + rng() * 700, z: (rng() - 0.5) * CLOUD_WRAP * 2,
-    });
-    const n = 9 + Math.floor(rng() * 9);
-    for (let b = 0; b < n; b++) {
-      const u = (rng() - 0.5) * 2;                 // -1..1 across the cloud
-      const dome = 1 - u * u;                      // taller in the middle
-      const oy = rng() * H * dome;
-      puffs.push({
-        c: i, ox: u * W * 0.5, oy, oz: (rng() - 0.5) * W * 0.55,
-        size: (0.32 + rng() * 0.3) * W * (0.6 + 0.6 * dome),
-        shade: Math.min(1, oy / Math.max(1, H) * 0.9 + rng() * 0.2),
-        rot: rng() * Math.PI * 2,
-      });
-    }
-  }
-  const N = puffs.length;
-
-  const base = new THREE.PlaneGeometry(1, 1);
-  const geo = new THREE.InstancedBufferGeometry();
-  geo.index = base.index;
-  geo.setAttribute('position', base.attributes.position);
-  geo.setAttribute('uv', base.attributes.uv);
-  const iPos = new THREE.InstancedBufferAttribute(new Float32Array(N * 3), 3);
-  const iData = new THREE.InstancedBufferAttribute(new Float32Array(N * 3), 3); // size, shade, rot
-  iPos.setUsage(THREE.DynamicDrawUsage); iData.setUsage(THREE.DynamicDrawUsage);
-  geo.setAttribute('iPos', iPos);
-  geo.setAttribute('iData', iData);
-  geo.instanceCount = N;
-
-  const cloudMat = new THREE.ShaderMaterial({
-    transparent: true, depthWrite: false, fog: false,
+  const mat = new THREE.ShaderMaterial({
     uniforms: {
-      map: { value: puffTexture() },
       lit: { value: tod.cloud.clone() }, sunDir: { value: tod.sunDir.clone() },
       sunColor: { value: tod.sunColor.clone() },
       fogColor: { value: tod.fog.clone() }, fogNear: { value: tod.fogNear }, fogFar: { value: tod.fogFar },
-      opacity: { value: tod.cloudOpacity }, night: { value: 0 },
+      opacity: { value: 1 }, night: { value: 0 },
     },
-    vertexShader: `attribute vec3 iPos; attribute vec3 iData;
-      varying vec2 vUv; varying float vShade; varying vec3 vWorld;
+    vertexShader: `varying vec3 vN; varying vec3 vWorld;
+      void main(){ vN=normal; vec4 w=modelMatrix*vec4(position,1.0); vWorld=w.xyz;
+        gl_Position=projectionMatrix*viewMatrix*w; }`,
+    fragmentShader: `uniform vec3 lit,sunDir,sunColor,fogColor; uniform float fogNear,fogFar,night;
+      varying vec3 vN; varying vec3 vWorld;
       void main(){
-        float sz=iData.x, rot=iData.z;
-        vec2 p=position.xy; float cr=cos(rot), sr=sin(rot);
-        p=vec2(p.x*cr-p.y*sr, p.x*sr+p.y*cr)*sz;
-        vec4 mv=viewMatrix*vec4(iPos,1.0);
-        mv.xy+=p;
-        vUv=uv; vShade=iData.y; vWorld=iPos;
-        gl_Position=projectionMatrix*mv;
-      }`,
-    fragmentShader: `uniform sampler2D map; uniform vec3 lit,sunDir,sunColor,fogColor;
-      uniform float fogNear,fogFar,opacity,night;
-      varying vec2 vUv; varying float vShade; varying vec3 vWorld;
-      void main(){
-        float a=texture2D(map,vUv).a;
-        // vertical shading inside the puff + across the cluster
-        float sh=clamp(vShade*0.75+vUv.y*0.35,0.0,1.0);
-        vec3 under=lit*vec3(0.58,0.62,0.70);
-        vec3 c=mix(under,lit,sh);
+        vec3 n=normalize(vN);
+        vec3 under=lit*vec3(0.66,0.72,0.84);
+        vec3 c=mix(under,lit,smoothstep(-0.55,0.75,n.y));
+        float sun=max(dot(n,sunDir),0.0);
+        c*=0.86+0.22*sun;
         vec3 toCam=normalize(cameraPosition-vWorld);
-        float back=pow(max(dot(-toCam,sunDir),0.0),6.0);       // looking into the sun
-        c+=sunColor*back*0.35*(1.0-night);                      // glow when looking toward the sun
+        float rim=pow(1.0-max(dot(n,toCam),0.0),3.0)*max(dot(-toCam,sunDir),0.0);
+        c+=sunColor*rim*0.35*(1.0-night);
         float d=distance(cameraPosition,vWorld);
-        c=mix(c,fogColor,smoothstep(fogNear,fogFar*1.15,d));
-        a*=opacity*smoothstep(25.0,140.0,d);                    // never a screen-filling wall
-        if(a<0.01) discard;
-        gl_FragColor=vec4(c,a);
+        c=mix(c,fogColor,smoothstep(fogNear,fogFar*1.2,d));
+        gl_FragColor=vec4(c,1.0);
       }`,
   });
-  const mesh = new THREE.Mesh(geo, cloudMat);
-  mesh.frustumCulled = false;
-  mesh.renderOrder = 2;
-  scene.add(mesh);
 
-  const order = Array.from({ length: N }, (_, i) => i);
-  const dist = new Float32Array(N);
-  let sortT = 1e9;
-  function updateClouds(ac, dt, camPos) {
-    for (const c of clusters) {
-      c.x += dt * 2.2;
-      if (c.x - ac.pos.x > CLOUD_WRAP) c.x -= CLOUD_WRAP * 2;
-      if (ac.pos.x - c.x > CLOUD_WRAP) c.x += CLOUD_WRAP * 2;
-      if (c.z - ac.pos.z > CLOUD_WRAP) c.z -= CLOUD_WRAP * 2;
-      if (ac.pos.z - c.z > CLOUD_WRAP) c.z += CLOUD_WRAP * 2;
+  const group = new THREE.Group();
+  const clusters = [];
+  for (let i = 0; i < 34; i++) {
+    const W = 220 + rng() * 420, H = W * (0.32 + rng() * 0.18);
+    const parts = [];
+    const n = 5 + Math.floor(rng() * 5);
+    for (let b = 0; b < n; b++) {
+      const u = (rng() - 0.5) * 2, dome = 1 - u * u;
+      const r = W * (0.16 + rng() * 0.12) * (0.65 + 0.5 * dome);
+      const g = new THREE.IcosahedronGeometry(r, 1);
+      g.translate(u * W * 0.42, r * 0.55 + H * dome * rng() * 0.5, (rng() - 0.5) * W * 0.4);
+      parts.push(g.toNonIndexed());
+      g.dispose();
     }
-    sortT += dt;
-    if (sortT > 0.4 && camPos) {          // back-to-front, a few times a second
-      sortT = 0;
-      for (let i = 0; i < N; i++) {
-        const p = puffs[i], c = clusters[p.c];
-        const dx = c.x + p.ox - camPos.x, dy = c.y + p.oy - camPos.y, dz = c.z + p.oz - camPos.z;
-        dist[i] = dx * dx + dy * dy + dz * dz;
+    // merge + shear the bottom flat at y = 0
+    let count = 0;
+    for (const g of parts) count += g.attributes.position.count;
+    const pos = new Float32Array(count * 3);
+    let o = 0;
+    for (const g of parts) {
+      const a = g.attributes.position.array;
+      for (let k = 0; k < a.length; k += 3) {
+        pos[o++] = a[k]; pos[o++] = Math.max(a[k + 1], 0) * 0.85; pos[o++] = a[k + 2];
       }
-      order.sort((a, b) => dist[b] - dist[a]);
+      g.dispose();
     }
-    const P = iPos.array, D = iData.array;
-    for (let k = 0; k < N; k++) {
-      const p = puffs[order[k]], c = clusters[p.c];
-      P[k * 3] = c.x + p.ox; P[k * 3 + 1] = c.y + p.oy; P[k * 3 + 2] = c.z + p.oz;
-      D[k * 3] = p.size; D[k * 3 + 1] = p.shade; D[k * 3 + 2] = p.rot;
-    }
-    iPos.needsUpdate = true; iData.needsUpdate = true;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.computeVertexNormals();                   // non-indexed -> flat facets
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set((rng() - 0.5) * CLOUD_WRAP * 2, 520 + rng() * 650, (rng() - 0.5) * CLOUD_WRAP * 2);
+    m.rotation.y = rng() * Math.PI * 2;
+    group.add(m);
+    clusters.push(m);
   }
-  return { clouds: mesh, cloudMat, updateClouds };
+  scene.add(group);
+
+  function updateClouds(ac, dt) {
+    for (const c of clusters) {
+      c.position.x += dt * 2.2;
+      if (c.position.x - ac.pos.x > CLOUD_WRAP) c.position.x -= CLOUD_WRAP * 2;
+      if (ac.pos.x - c.position.x > CLOUD_WRAP) c.position.x += CLOUD_WRAP * 2;
+      if (c.position.z - ac.pos.z > CLOUD_WRAP) c.position.z -= CLOUD_WRAP * 2;
+      if (ac.pos.z - c.position.z > CLOUD_WRAP) c.position.z += CLOUD_WRAP * 2;
+    }
+  }
+  // Cloud cover (live weather): show a fraction of the clusters.
+  function setCover(f) {
+    const k = Math.round(clusters.length * Math.max(0, Math.min(1, f)));
+    clusters.forEach((c, i) => { c.visible = i < k; });
+  }
+  return { clouds: group, cloudMat: mat, updateClouds, setCover };
 }
 
 export function createEnvironment(scene, renderer) {
@@ -306,11 +248,18 @@ export function createEnvironment(scene, renderer) {
   scene.add(sky);
 
   // --- Ocean ---
+  // Semi-transparent: the faceted seabed (maps/palette.js seabed()) shows
+  // through as turquoise shallows near shore and deep blue offshore, so the
+  // coastline grades naturally instead of meeting a hard sand stripe. Grazing
+  // angles turn opaque and reflect the sky (fresnel). The sun path is one
+  // smooth highlight on long, slow swells — high-frequency normals used to
+  // break it into noisy white blotches.
   const oceanMat = new THREE.ShaderMaterial({
-    fog: false,
+    fog: false, transparent: true,
     uniforms: {
       time: { value: 0 }, sunDir: { value: tod.sunDir.clone() },
       deep: { value: tod.oceanDeep.clone() }, shallow: { value: tod.oceanShallow.clone() },
+      skyCol: { value: tod.skyHorizon.clone() }, sunColor: { value: tod.sunColor.clone() },
       fogColor: { value: tod.fog.clone() }, fogNear: { value: tod.fogNear }, fogFar: { value: tod.fogFar },
       glint: { value: 1.0 },
     },
@@ -318,22 +267,27 @@ export function createEnvironment(scene, renderer) {
       void main(){ vec4 w=modelMatrix*vec4(position,1.0); vWorld=w.xyz;
         gl_Position=projectionMatrix*viewMatrix*w; }`,
     fragmentShader: `varying vec3 vWorld;
-      uniform float time,fogNear,fogFar,glint; uniform vec3 sunDir,deep,shallow,fogColor;
+      uniform float time,fogNear,fogFar,glint; uniform vec3 sunDir,deep,shallow,skyCol,sunColor,fogColor;
       void main(){
         vec2 p=vWorld.xz;
         vec3 n=normalize(vec3(
-          sin(p.x*0.11+time*1.1)*0.05+sin(p.x*0.021-time*0.4)*0.09+sin((p.x+p.y)*0.05+time*0.7)*0.04,
+          sin(p.x*0.018-time*0.35)*0.035+sin((p.x+p.y)*0.011+time*0.27)*0.03,
           1.0,
-          sin(p.y*0.13+time*0.9)*0.05+sin(p.y*0.017+time*0.5)*0.09));
+          sin(p.y*0.015+time*0.3)*0.035+sin((p.y-p.x)*0.009-time*0.22)*0.03));
         vec3 view=normalize(cameraPosition-vWorld);
-        float fres=pow(1.0-max(dot(view,n),0.0),2.2);
-        vec3 c=mix(deep,shallow,fres*0.9+0.1);
+        float fres=pow(1.0-max(dot(view,n),0.0),3.0);
+        vec3 c=mix(deep,shallow,0.25);
+        c=mix(c,skyCol,fres*0.75);                                      // sky reflection
         vec3 r=reflect(-sunDir,n);
-        c+=vec3(1.0,0.93,0.75)*pow(max(dot(r,view),0.0),120.0)*1.1*glint; // glint
-        c=mix(c,fogColor*0.98,fres*0.35);
+        float sp=max(dot(r,view),0.0);
+        c+=sunColor*(pow(sp,400.0)*2.2+pow(sp,24.0)*0.12)*glint;        // sun path + sheen
         float d=distance(cameraPosition,vWorld);
-        c=mix(c,fogColor,smoothstep(fogNear,fogFar,d));
-        gl_FragColor=vec4(c,1.0);
+        // shallows only near the aircraft: far off the seabed is coarse and
+        // smooth-shaded, and showing it through would paint glowing bands
+        float a=mix(mix(0.5,0.96,fres),1.0,smoothstep(900.0,2400.0,d));
+        float fg=smoothstep(fogNear,fogFar,d);
+        c=mix(c,fogColor,fg);
+        gl_FragColor=vec4(c,max(a,fg));
       }`,
   });
   const ocean = new THREE.Mesh(new THREE.PlaneGeometry(24000, 24000, 1, 1), oceanMat);
@@ -341,12 +295,8 @@ export function createEnvironment(scene, renderer) {
   ocean.position.y = 0;
   scene.add(ocean);
 
-  // --- Clouds: soft billboard cumulus ---
-  // Each cumulus is a cluster of camera-facing puffs: a flat base, a domed top,
-  // shaded dark underneath and bright on top, with a silver lining when you
-  // look toward the sun. All puffs are ONE instanced mesh (one draw call),
-  // re-sorted back-to-front a few times a second so the alpha blends right.
-  const { clouds, cloudMat, updateClouds } = buildClouds(scene, tod);
+  // --- Clouds: low-poly cumulus (see buildClouds) ---
+  const { clouds, cloudMat, updateClouds, setCover } = buildClouds(scene, tod);
 
   // --- Blob shadow under the aircraft (no shadow maps needed) ---
   const shadow = new THREE.Mesh(
@@ -427,6 +377,8 @@ export function createEnvironment(scene, renderer) {
     oceanMat.uniforms.sunDir.value.copy(tod.sunDir);
     oceanMat.uniforms.deep.value.copy(tod.oceanDeep);
     oceanMat.uniforms.shallow.value.copy(tod.oceanShallow);
+    oceanMat.uniforms.skyCol.value.copy(tod.skyHorizon);
+    oceanMat.uniforms.sunColor.value.copy(tod.sunColor);
     oceanMat.uniforms.fogColor.value.copy(tod.fog);
     oceanMat.uniforms.fogNear.value = tod.fogNear;
     oceanMat.uniforms.fogFar.value = tod.fogFar;
@@ -446,7 +398,7 @@ export function createEnvironment(scene, renderer) {
     scene.fog.far = tod.fogFar * wx.visF;
     oceanMat.uniforms.fogNear.value = scene.fog.near;
     oceanMat.uniforms.fogFar.value = scene.fog.far;
-    cloudMat.uniforms.opacity.value = tod.cloudOpacity * Math.min(1, wx.cloudF);
+    setCover(wx.cloudF);
     cloudMat.uniforms.fogNear.value = scene.fog.near;
     cloudMat.uniforms.fogFar.value = scene.fog.far;
     clouds.visible = wx.cloudF > 0.06;

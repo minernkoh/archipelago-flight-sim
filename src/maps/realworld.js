@@ -11,6 +11,7 @@
 
 import * as THREE from 'three';
 import { makeNoise, woodland } from './noise.js';
+import { PAL, seabed, beach, facetJitter, decalMaterial } from './palette.js';
 import { makeProjection, tileOfPixel, decodeTerrarium, bilerp, bearingToHeadingRad } from './tilesampler.js';
 
 const TILE_BASE = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium';
@@ -20,14 +21,6 @@ const MAX_PARALLEL = 6;
 const smoothstep = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 
 // ---- global stylised colour banding (works from sea level to alpine snow) ----
-const COL = {
-  sea: new THREE.Color(0x27536b), shallow: new THREE.Color(0x3a7d8c),
-  sand: new THREE.Color(0xc9b98c), grass: new THREE.Color(0x5f8f4e),
-  grass2: new THREE.Color(0x47703a), brush: new THREE.Color(0x7c8552),
-  scree: new THREE.Color(0x8d8578), rock: new THREE.Color(0x746b60),
-  snow: new THREE.Color(0xf4f6f5),
-  forest: new THREE.Color(0x335530),
-};
 
 export function createRealWorldMap(preset) {
   const Z = preset.zoom;
@@ -194,19 +187,16 @@ export function createRealWorldMap(preset) {
   }
 
   function color(h, slope, x, z, out) {
-    if (h < 0.5) { out.copy(COL.sea); return out; }
-    if (h < 2) { out.lerpColors(COL.shallow, COL.sand, smoothstep(0.5, 2, h)); return out; }
-    if (h < 120) out.lerpColors(COL.sand, COL.grass, smoothstep(2, 40, h));
-    else if (h < 700) out.lerpColors(COL.grass, COL.grass2, smoothstep(120, 700, h));
-    else if (h < 1300) out.lerpColors(COL.grass2, COL.brush, smoothstep(700, 1300, h));
-    else if (h < 2000) out.lerpColors(COL.brush, COL.scree, smoothstep(1300, 2000, h));
-    else if (h < 2600) out.lerpColors(COL.scree, COL.rock, smoothstep(2000, 2600, h));
-    else out.lerpColors(COL.rock, COL.snow, smoothstep(2600, 3200, h));
+    if (h < -0.6) return facetJitter(x, z, seabed(h, out), 0.02);
+    if (h < 2) return facetJitter(x, z, beach(h, out), 0.03);
+    out.lerpColors(PAL.grass, PAL.grassDark, smoothstep(40, 600, h));
+    out.lerp(PAL.scrub, smoothstep(900, 1500, h));
+    out.lerp(PAL.rock, smoothstep(1700, 2400, h));
     const f = forestDensity(x, z, h, slope);
-    if (f > 0.08) out.lerp(COL.forest, f * 0.75);
-    if (slope > 0.5 && h > 40) out.lerp(COL.rock, smoothstep(0.5, 0.85, slope));
-    if (h > 2900 && slope < 0.4) out.lerp(COL.snow, smoothstep(2900, 3400, h));
-    return out;
+    if (f > 0.08) out.lerp(PAL.forest, Math.min(1, f));
+    if (h > 40) out.lerp(PAL.rock, smoothstep(0.5, 0.85, slope));
+    if (h > 2700) out.lerp(PAL.snow, smoothstep(2700, 3200, h) * (1 - smoothstep(0.7, 1.0, slope)));
+    return facetJitter(x, z, out);
   }
 
   // Race gates + demo-plan fixes generated in the runway frame around the field.
@@ -249,7 +239,7 @@ export function createRealWorldMap(preset) {
     const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
     const geo = new THREE.PlaneGeometry(preset.lengthM, halfWidth * 2);
     geo.rotateX(-Math.PI / 2); geo.rotateY(headingRad); // long axis -> runway forward
-    const strip = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ map: tex }));
+    const strip = new THREE.Mesh(geo, decalMaterial(tex));
     strip.position.set(0, elev + 0.08, 0);
     g.add(strip);
 

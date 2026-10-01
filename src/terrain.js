@@ -103,12 +103,12 @@ function coniferGeometry() {
   const trunk = new THREE.CylinderGeometry(0.04, 0.05, 0.3, 4, 1, true); trunk.translate(0, 0.15, 0);
   const lo = new THREE.ConeGeometry(0.3, 0.6, 6, 1, true); lo.translate(0, 0.45, 0);
   const hi = new THREE.ConeGeometry(0.2, 0.45, 5, 1, true); hi.translate(0, 0.77, 0);
-  return mergeColored([[trunk, 0x5b4331], [lo, 0x2c5530], [hi, 0x336136]]);
+  return mergeColored([[trunk, 0x7a5a40], [lo, 0x3f8a45], [hi, 0x4f9d52]]);
 }
 function broadleafGeometry() {
   const trunk = new THREE.CylinderGeometry(0.04, 0.06, 0.45, 4, 1, true); trunk.translate(0, 0.225, 0);
   const crown = new THREE.OctahedronGeometry(0.36, 0); crown.scale(1, 0.95, 1); crown.translate(0, 0.68, 0);
-  return mergeColored([[trunk, 0x5e4632], [crown, 0x4c7d36]]);
+  return mergeColored([[trunk, 0x7d5c40], [crown, 0x72b04a]]);
 }
 
 export function createTerrain(scene, map = archipelagoMap) {
@@ -151,7 +151,7 @@ export function createTerrain(scene, map = archipelagoMap) {
       const r = treeHash(gx, gz, 4);
       (treeHash(gx, gz, 5) < coniferP(h) ? con : brd).push([x, h, z, r]);
     }
-    for (const [list, geo, tall] of [[con, coniferGeo, 13], [brd, broadGeo, 10]]) {
+    for (const [list, geo, tall] of [[con, coniferGeo, 17], [brd, broadGeo, 13]]) {
       if (!list.length) continue;
       const im = new THREE.InstancedMesh(geo, treeMat, list.length);
       list.forEach(([x, h, z, r], i) => {
@@ -160,8 +160,10 @@ export function createTerrain(scene, map = archipelagoMap) {
         _s.set(sc * (0.85 + ((r * 7) % 1) * 0.35), sc, sc * (0.85 + ((r * 13) % 1) * 0.35));
         _p.set(x, h - 0.4, z);
         im.setMatrixAt(i, _m.compose(_p, _q, _s));
-        _c.setHSL(0.27 + (((r * 17) % 1) - 0.5) * 0.06, 0.25, 0.42 + (((r * 29) % 1) - 0.5) * 0.18);
-        im.setColorAt(i, _c.multiplyScalar(2.2));
+        // per-tree tint around 1.0: a little lighter/darker, a little warmer/cooler
+        const lt = 0.88 + ((r * 29) % 1) * 0.3, warm = (((r * 17) % 1) - 0.5) * 0.16;
+        _c.setRGB(lt * (1 + warm), lt, lt * (1 - warm * 0.5));
+        im.setColorAt(i, _c);
       });
       // No shadow-map casting: the shadow box is only ~280 m across, and the
       // extra pass over every instance cost more than it showed.
@@ -199,27 +201,91 @@ export function createTerrain(scene, map = archipelagoMap) {
   // identical MeshLambertMaterial, so a full view was 121 redundant materials.
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
   const farMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+  // The coarse tier interpolates over 200 m, so on rugged ground it can rise
+  // ABOVE the fine surface in valleys and poke through it (FAR_DROP alone is
+  // only 2 m). Inside the fine tier's reach, sink it well out of the way; the
+  // fine tier always covers at least ~3000 m from the aircraft.
+  farMat.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+      vec4 fw = modelMatrix * vec4(transformed, 1.0);
+      transformed.y -= (1.0 - smoothstep(2500.0, 2950.0, distance(fw.xz, cameraPosition.xz))) * 250.0;`);
+  };
 
-  function buildChunk(cx, cz, size = CHUNK, res = RES, drop = 0) {
-    const geo = new THREE.PlaneGeometry(size, size, res, res);
-    geo.rotateX(-Math.PI / 2);
-    const pos = geo.attributes.position;
-    const colors = new Float32Array(pos.count * 3);
-    const c = new THREE.Color();
-    const x0 = cx * size, z0 = cz * size;
-    // Slope is sampled over the chunk's own vertex spacing, so the coarse tier
-    // reads its own relief rather than 8 m detail it cannot resolve.
-    const step = Math.max(8, size / res / 2);
-    for (let i = 0; i < pos.count; i++) {
-      const wx = x0 + pos.getX(i), wz = z0 + pos.getZ(i);
-      const h = heightFn(wx, wz);
-      pos.setY(i, h);
-      const hx = heightFn(wx + step, wz), hz = heightFn(wx, wz + step);
-      const slope = Math.min(1, Math.hypot(h - hx, h - hz) / step);
-      colorFn(h, slope, wx, wz, c);
-      colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+  // The coarse tier (200 m cells, 1.8-9 km out) keeps smooth per-vertex
+  // colour: facets that big read as crude slabs, and at that range fog and
+  // distance want soft gradients anyway.
+  function buildSmooth(hgt, n, cell, half, x0, z0, drop) {
+    const pos = new Float32Array(n * n * 3), col = new Float32Array(n * n * 3);
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      const k = j * n + i, h = hgt[k];
+      const hx = hgt[j * n + Math.min(n - 1, i + 1)], hz = hgt[Math.min(n - 1, j + 1) * n + i];
+      const slope = Math.min(1, Math.hypot(h - hx, h - hz) / cell);
+      const lx = -half + i * cell, lz = -half + j * cell;
+      colorFn(h, slope, x0 + lx, z0 + lz, _fc);
+      pos[k * 3] = lx; pos[k * 3 + 1] = h; pos[k * 3 + 2] = lz;
+      col[k * 3] = _fc.r; col[k * 3 + 1] = _fc.g; col[k * 3 + 2] = _fc.b;
     }
-    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    const idx = [];
+    for (let j = 0; j < n - 1; j++) for (let i = 0; i < n - 1; i++) {
+      const a = j * n + i, b = a + 1, c = a + n, d = c + 1;
+      idx.push(a, c, b, b, c, d);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    const mesh = new THREE.Mesh(geo, farMat);
+    mesh.position.set(x0, -drop, z0);
+    return mesh;
+  }
+
+  // FACETED: one colour per triangle, sampled at the triangle's centroid with
+  // the slope of the face itself. Per-vertex colours used to smear across
+  // every face, which made the ground read as a blurry low-res texture rather
+  // than low-poly; a flat colour per facet is what gives the style its crisp
+  // cut-paper look. Costs a non-indexed geometry (6 verts per quad).
+  const _fc = new THREE.Color();
+  function buildChunk(cx, cz, size = CHUNK, res = RES, drop = 0) {
+    const x0 = cx * size, z0 = cz * size;
+    const n = res + 1, cell = size / res, half = size / 2;
+    const hgt = new Float32Array(n * n);
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      hgt[j * n + i] = heightFn(x0 - half + i * cell, z0 - half + j * cell);
+    }
+    if (drop) return buildSmooth(hgt, n, cell, half, x0, z0, drop);
+    const tris = res * res * 2;
+    const pos = new Float32Array(tris * 9);
+    const col = new Float32Array(tris * 9);
+    let p = 0;
+    const tri = (ax, az, ah, bx, bz, bh, qx, qz, qh) => {
+      // face normal (y-up) -> slope as rise/run, same scale the maps expect
+      const ux = bx - ax, uy = bh - ah, uz = bz - az, vx = qx - ax, vy = qh - ah, vz = qz - az;
+      const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      const slope = Math.min(1, Math.hypot(nx, nz) / Math.max(1e-6, Math.abs(ny)));
+      const mx = (ax + bx + qx) / 3, mz = (az + bz + qz) / 3, mh = (ah + bh + qh) / 3;
+      colorFn(mh, slope, x0 + mx, z0 + mz, _fc);
+      pos[p] = ax; pos[p + 1] = ah; pos[p + 2] = az;
+      pos[p + 3] = bx; pos[p + 4] = bh; pos[p + 5] = bz;
+      pos[p + 6] = qx; pos[p + 7] = qh; pos[p + 8] = qz;
+      for (let k = 0; k < 9; k += 3) { col[p + k] = _fc.r; col[p + k + 1] = _fc.g; col[p + k + 2] = _fc.b; }
+      p += 9;
+    };
+    for (let j = 0; j < res; j++) for (let i = 0; i < res; i++) {
+      const xa = -half + i * cell, xb = xa + cell, za = -half + j * cell, zb = za + cell;
+      const h00 = hgt[j * n + i], h10 = hgt[j * n + i + 1], h01 = hgt[(j + 1) * n + i], h11 = hgt[(j + 1) * n + i + 1];
+      // alternate the diagonal so facets don't all lean the same way
+      if ((i + j) & 1) {
+        tri(xa, za, h00, xa, zb, h01, xb, za, h10);
+        tri(xb, za, h10, xa, zb, h01, xb, zb, h11);
+      } else {
+        tri(xa, za, h00, xa, zb, h01, xb, zb, h11);
+        tri(xa, za, h00, xb, zb, h11, xb, za, h10);
+      }
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
     geo.computeVertexNormals();
     const mesh = new THREE.Mesh(geo, drop ? farMat : mat);
     mesh.position.set(x0, -drop, z0);

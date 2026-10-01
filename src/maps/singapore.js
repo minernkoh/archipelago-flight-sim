@@ -5,6 +5,7 @@
 
 import * as THREE from 'three';
 import { makeNoise, woodland } from './noise.js';
+import { PAL, seabed, beach, facetJitter, decalMaterial } from './palette.js';
 import {
   addMBS, addFlyer, addEsplanade, addCBD, addHDBEstate, addPort, addShips, addChangi,
   setNightGlow, addBeacon,
@@ -132,12 +133,6 @@ export function height(x, z) {
 }
 
 // ---------- Vertex colours: tropical + urban ----------
-const COL = {
-  sand: new THREE.Color(0xd9cba0), green: new THREE.Color(0x5d9455),
-  green2: new THREE.Color(0x467a44), mangrove: new THREE.Color(0x3d6647),
-  urban: new THREE.Color(0x9aa0a3), rock: new THREE.Color(0x8d8578),
-  sea: new THREE.Color(0x2e7a80), shore: new THREE.Color(0x53a3a0),
-};
 // Urban districts double as HDB estate anchors (x, z, radius)
 const DISTRICTS = [
   [-2600, 600, 1500], [-4100, 1900, 1400], [-7400, 2300, 1500], [-13000, -2100, 1600],
@@ -165,20 +160,16 @@ function forestDensity(x, z, h, slope) {
   return Math.max(woodland(NZ, x, z, 380, 0.7), hills * 0.9) * (1 - urban / 0.35);
 }
 function color(h, slope, x, z, out) {
-  const jitter = (hash2(Math.round(x * 7), Math.round(z * 7)) - 0.5) * 0.05;
-  if (h < -1) { out.copy(COL.sea); if (h > -7) out.lerp(COL.shore, (h + 7) / 6 * 0.7); }
-  else if (h < 1.5) out.copy(COL.sand);
-  else {
-    out.lerpColors(COL.green, COL.green2, smoothstep(6, 120, h));
-    if (z < -2400 && h < 9) out.lerp(COL.mangrove, 0.6);        // north-coast mangrove
-    const urban = urbanAt(x, z);
-    const f = forestDensity(x, z, h, slope);
-    if (f > 0.08) out.lerp(COL.mangrove, f * 0.6);
-    if (urban > 0) out.lerp(COL.urban, urban * 0.65);
-    if (slope > 0.6) out.lerp(COL.rock, smoothstep(0.6, 0.95, slope));
-  }
-  out.offsetHSL(0, 0, jitter);
-  return out;
+  if (h < -0.6) return facetJitter(x, z, seabed(h, out), 0.02);
+  if (h < 1.5) return facetJitter(x, z, beach(h, out), 0.03);
+  out.lerpColors(PAL.grass, PAL.grassDark, smoothstep(6, 120, h));
+  if (z < -2400 && h < 9) out.lerp(PAL.mangrove, 0.6);        // north-coast mangrove
+  const urban = urbanAt(x, z);
+  const f = forestDensity(x, z, h, slope);
+  if (f > 0.08) out.lerp(PAL.forest, Math.min(1, f * 0.9));
+  if (urban > 0) out.lerp(PAL.urban, urban * 0.7);
+  if (slope > 0.6) out.lerp(PAL.rock, smoothstep(0.6, 0.95, slope));
+  return facetJitter(x, z, out);
 }
 
 // ---------- Runway / spawn ----------
@@ -253,7 +244,7 @@ function runwayStrip(g, vOffset, label1, label2) {
   tex.anisotropy = 8;
   const strip = new THREE.Mesh(
     new THREE.PlaneGeometry(RWY_LEN, RWY_HALFW * 2),
-    new THREE.MeshLambertMaterial({ map: tex }),
+    decalMaterial(tex),
   );
   strip.rotation.x = -Math.PI / 2;
   // Euler XYZ applies Z (in-plane) before X (lay flat): local +x -> world (cos h, 0, -sin h)

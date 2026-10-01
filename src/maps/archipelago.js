@@ -8,6 +8,7 @@
 
 import * as THREE from 'three';
 import { makeNoise, woodland } from './noise.js';
+import { PAL, seabed, beach, facetJitter, decalMaterial } from './palette.js';
 
 /**
  * The map contract. Every world (archipelago, singapore, …) exports one object
@@ -163,19 +164,7 @@ export function getTerrainHeight(x, z) {
   return h;
 }
 
-// ---------- Vertex colours ----------
-const COL = {
-  sand:  new THREE.Color(0xd9c79a),
-  grass: new THREE.Color(0x6f9e5a),
-  grass2:new THREE.Color(0x557f46),
-  rock:  new THREE.Color(0x8d8578),
-  snow:  new THREE.Color(0xf2f4f0),
-  sea:   new THREE.Color(0x3d6b58),
-  meadow:new THREE.Color(0x9fb466),
-  forest:new THREE.Color(0x35592c),
-  wetsand:new THREE.Color(0xb3a37c),
-};
-
+// ---------- Terrain colours (faceted: called once per triangle) ----------
 // Cosmetic layers (forest + meadow) use their own noise so heights stay put.
 const NZ = makeNoise(SEED ^ 0x5eed);
 function forestDensity(x, z, h, slope) {
@@ -187,22 +176,22 @@ function forestDensity(x, z, h, slope) {
 }
 
 function vertexColor(h, slope, x, z, out) {
-  const jitter = (hash2(Math.round(x * 7), Math.round(z * 7)) - 0.5) * 0.06;
-  if (h < 1.4) out.copy(COL.sand);
-  else if (h < 60) out.lerpColors(COL.grass, COL.grass2, smoothstep(4, 60, h));
-  else if (h < 130) out.lerpColors(COL.grass2, COL.rock, smoothstep(60, 130, h));
-  else if (h < 190) out.copy(COL.rock);
-  else out.lerpColors(COL.rock, COL.snow, smoothstep(190, 240, h));
-  if (h >= 1.4 && h < 95) {
+  if (h < -0.6) return facetJitter(x, z, seabed(h, out), 0.02);
+  if (h < 1.6) return facetJitter(x, z, beach(h, out), 0.03);
+  // lowland grass -> scrubby highland -> rock -> snow
+  out.lerpColors(PAL.grass, PAL.grassDark, smoothstep(10, 70, h));
+  out.lerp(PAL.scrub, smoothstep(70, 120, h));
+  out.lerp(PAL.rock, smoothstep(110, 165, h));
+  if (h < 95) {
     // sun-dried meadow patches break up the uniform green
-    out.lerp(COL.meadow, smoothstep(0.47, 0.72, NZ.fbm(x / 380 + 40, z / 380 - 12, 3)) * 0.55);
+    out.lerp(PAL.meadow, smoothstep(0.5, 0.72, NZ.fbm(x / 380 + 40, z / 380 - 12, 3)) * 0.7);
     const f = forestDensity(x, z, h, slope);
-    if (f > 0.08) out.lerp(COL.forest, f * 0.8);   // reads as woodland beyond tree range
-  } else if (h < 1.4 && h > -0.6) out.lerp(COL.wetsand, smoothstep(1.4, -0.6, h));
-  if (slope > 0.55 && h > 2) out.lerp(COL.rock, smoothstep(0.55, 0.9, slope));
-  if (h < -1) out.copy(COL.sea);
-  out.offsetHSL(0, 0, jitter);
-  return out;
+    if (f > 0.08) out.lerp(PAL.forest, Math.min(1, f * 1.1));   // woodland reads beyond tree range
+  }
+  // steep faces are bare rock; snow only holds on the gentler high faces
+  if (h > 2) out.lerp(slope > 0.9 ? PAL.rockDark : PAL.rock, smoothstep(0.5, 0.85, slope));
+  if (h > 185) out.lerp(PAL.snow, smoothstep(185, 235, h) * (1 - smoothstep(0.75, 1.0, slope)));
+  return facetJitter(x, z, out);
 }
 
 // ---------- Airfield dressing: runway slab, markings, hangar, tower, windsock ----------
@@ -228,7 +217,7 @@ export function createAirfield(scene) {
 
   const strip = new THREE.Mesh(
     new THREE.PlaneGeometry(RUNWAY.x1 - RUNWAY.x0, RUNWAY.halfWidth * 2),
-    new THREE.MeshLambertMaterial({ map: tex }),
+    decalMaterial(tex),
   );
   strip.rotation.x = -Math.PI / 2;
   strip.position.set((RUNWAY.x0 + RUNWAY.x1) / 2, RUNWAY.y + 0.06, 0);

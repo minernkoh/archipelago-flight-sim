@@ -2,8 +2,8 @@
 
 Three.js flight sim, plain ES modules via import map (no bundler, no build step).
 v2: 5 aircraft, 2 maps (procedural archipelago + stylized Singapore), free flight,
-ring race, and a 7-lesson flight school. v7: scattering-style sky + stars,
-instanced billboard cumulus, instanced forests, cockpit frames, fly-by camera,
+ring race, and a 7-lesson flight school. v7: faceted low-poly terrain, scattering-style sky + stars,
+low-poly cumulus, instanced forests, clear-water shallows, cockpit frames, fly-by camera,
 wingtip vortices / airshow smoke, live 3D menu backdrop, dynamic resolution.
 
 ## Run / test
@@ -21,7 +21,8 @@ wingtip vortices / airshow smoke, live 3D menu backdrop, dynamic resolution.
 - `src/aircraft/params.js` — per-aircraft physics presets, also THREE-free. catalog.js joins params + mesh builder + HUD/camera meta. meshes.js = the 5 low-poly builders.
 - `src/maps/` — map modules implementing the FlightMap contract (typedef in archipelago.js). Render height (`map.height`) is separate from collision height (`max(height, obstacleTop)`); ground effect/AGL use terrain only.
 - `src/terrain.js` — generic chunk streamer, plus instanced trees on a ±1.5 km ring of fine chunks (optional `map.forest(x,z,h,slope)` → 0..1 and `map.conifer(h)`; a map without `forest` grows none; LOW quality turns them off). `src/maps/noise.js` is shared noise for COSMETIC layers only (forest, meadow) — never feed it into `map.height`, the state hashes depend on heights.
-- `src/environment.js` — sky dome shader, instanced cloud puffs (one draw call, re-sorted back-to-front ~2.5×/s), ocean, time-of-day palettes. `src/trails.js` — ribbon trails (wingtip vortices on G/alpha, `K` smoke); pooled, no per-frame allocation.
+- **Art direction: crisp faceted low-poly.** terrain.js builds the fine tier non-indexed with ONE colour per triangle (map `color()` is called per face at its centroid with the face's own slope); the coarse tier stays smooth and is sunk ~250 m wherever the fine tier covers it (vertex shader), or its 200 m interpolation pokes through valleys. All maps paint from `src/maps/palette.js` (`PAL`, `seabed()`, `beach()`, `facetJitter()`, `decalMaterial()` — runway slabs need its polygon offset or they z-fight with the flat apron at range).
+- `src/environment.js` — sky dome shader, low-poly faceted cumulus (opaque, stylised top/underside shading), semi-transparent ocean (the turquoise seabed shows through as shallows near the aircraft; opaque beyond ~2 km), time-of-day palettes. `src/trails.js` — ribbon trails (wingtip vortices on G/alpha, `K` smoke); pooled, no per-frame allocation.
 - `src/camera.js` — `C` cycles CHASE/COCKPIT/ORBIT (tests rely on exactly that cycle), `V` toggles FLYBY, wheel zoom, left-drag free-look, per-aircraft cockpit frame (`catalog camera.cockpit.frame`: cabin/canopy/airliner), `updateMenu()` = the slow showcase orbit behind the menu. The menu backdrop is fed by `world.preview(sel)` (aircraft + time of day only; maps still load on START).
 - `src/rings.js` — parameterized gates (race + training themes); `src/modes.js` — menu/state machine; `src/main.js` — swap lifecycle + frame loop.
 - Body frame: +x forward, +y up, +z right. Body rate r about +y: **positive = nose LEFT** (sign mistakes here are the #1 physics bug source).

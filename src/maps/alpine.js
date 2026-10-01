@@ -5,6 +5,7 @@
 
 import * as THREE from 'three';
 import { makeNoise, woodland } from './noise.js';
+import { PAL, facetJitter, decalMaterial } from './palette.js';
 
 const SEED = 20260709;
 
@@ -138,15 +139,6 @@ export function getTerrainHeight(x, z) {
 }
 
 // ---------- Vertex colours ----------
-const COL = {
-  grass: new THREE.Color(0x5f8f4e),
-  grass2: new THREE.Color(0x4a7a3c),
-  scree: new THREE.Color(0x8d8578),
-  rock: new THREE.Color(0x746b60),
-  snow: new THREE.Color(0xf4f6f5),
-  forest: new THREE.Color(0x2f4f2c),
-  meadow: new THREE.Color(0x8fa85c),
-};
 
 // Cosmetic conifer forest below the treeline (~2300 m); own noise, so the
 // heightfield is untouched.
@@ -160,20 +152,18 @@ function forestDensity(x, z, h, slope) {
 }
 
 function vertexColor(h, slope, x, z, out) {
-  const jitter = (hash2(Math.round(x * 7), Math.round(z * 7)) - 0.5) * 0.05;
-  if (h < 1550) out.lerpColors(COL.grass, COL.grass2, smoothstep(1350, 1550, h));
-  else if (h < 2100) out.lerpColors(COL.grass2, COL.scree, smoothstep(1550, 2100, h));
-  else if (h < 2800) out.lerpColors(COL.scree, COL.rock, smoothstep(2100, 2800, h));
-  else out.lerpColors(COL.rock, COL.snow, smoothstep(2800, 3400, h));
+  // valley meadow -> scrub -> scree/rock -> snow (faceted: once per triangle)
+  out.lerpColors(PAL.grass, PAL.grassDark, smoothstep(1350, 1700, h));
+  out.lerp(PAL.scrub, smoothstep(1800, 2150, h));
+  out.lerp(PAL.rock, smoothstep(2100, 2600, h));
   if (h < 2350) {
-    out.lerp(COL.meadow, smoothstep(0.5, 0.74, NZ.fbm(x / 340 + 9, z / 340 - 4, 3)) * 0.45);
+    out.lerp(PAL.meadow, smoothstep(0.5, 0.74, NZ.fbm(x / 340 + 9, z / 340 - 4, 3)) * 0.55);
     const f = forestDensity(x, z, h, slope);
-    if (f > 0.08) out.lerp(COL.forest, f * 0.85);
+    if (f > 0.08) out.lerp(PAL.forest, Math.min(1, f * 1.1));
   }
-  if (slope > 0.5 && h > 1600) out.lerp(COL.rock, smoothstep(0.5, 0.85, slope));
-  if (h > 3200 && slope < 0.4) out.lerp(COL.snow, smoothstep(3200, 3600, h)); // snow caps even on gentle summits
-  out.offsetHSL(0, 0, jitter);
-  return out;
+  if (h > 1600) out.lerp(slope > 1 ? PAL.rockDark : PAL.rock, smoothstep(0.55, 0.9, slope));
+  if (h > 2750) out.lerp(PAL.snow, smoothstep(2750, 3150, h) * (1 - smoothstep(0.8, 1.1, slope)));
+  return facetJitter(x, z, out);
 }
 
 // ---------- Airfield dressing: runway slab, markings, hut, windsock ----------
@@ -199,7 +189,7 @@ export function createAirfield(scene) {
 
   const strip = new THREE.Mesh(
     new THREE.PlaneGeometry(RUNWAY.x1 - RUNWAY.x0, RUNWAY.halfWidth * 2),
-    new THREE.MeshLambertMaterial({ map: tex }),
+    decalMaterial(tex),
   );
   strip.rotation.x = -Math.PI / 2;
   strip.position.set((RUNWAY.x0 + RUNWAY.x1) / 2, RUNWAY.y + 0.06, 0);
