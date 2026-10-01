@@ -8,6 +8,12 @@ A browser flight simulator built with **Three.js**
 - **Procedural archipelago** terrain plus a stylized Singapore.
 - **Ring races** — timed courses through floating gates.
 - **Flight school** — PPL-style guided lessons.
+- **Living world** — scattering-style sky with stars at night, soft cumulus,
+  streamed forests, time-of-day lighting, and a live 3D scene behind the menu.
+- **Cameras** — chase (wheel zoom, drag to look around), cockpit with a framed
+  canopy, orbit, and a cinematic fly-by (`V`).
+- **Airshow touches** — wingtip vortices when you pull G, smoke trail on `K`.
+- **Dynamic resolution** — keeps the frame rate up on weaker GPUs.
 
 ## Getting started
 

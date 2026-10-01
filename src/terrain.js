@@ -57,6 +57,60 @@ export const VIEW_EXTENTS = {
 // through terrain.js's own per-chunk prefetch/re-queue loop instead.
 export const COARSE_TILE_RADIUS = FAR_R * FAR_CHUNK + FAR_CHUNK * 0.75; // 9900
 
+// ---------- Vegetation ----------
+// Instanced low-poly trees on the fine chunks nearest the aircraft. The ring
+// (TREE_R) is smaller than the fine tier: beyond ~1.5 km a tree is a few pixels and
+// the map's colour function already darkens woodland, so forests still read
+// from altitude. Placement is a jittered grid hashed on WORLD cell coords, so
+// a chunk regrows the identical forest every time it streams back in.
+const TREE_R = 2;                 // chunks either side -> +/-1500 m
+const TREE_STEP = 19;             // metres between candidate sites
+export const TREE_RING_M = TREE_R * CHUNK + CHUNK / 2;
+
+function treeHash(ix, iz, k) {
+  let n = Math.imul(ix, 0x2c1b3c6d) ^ Math.imul(iz, 0x297a2d39) ^ Math.imul(k, 0x9e3779b1);
+  n = Math.imul(n ^ (n >>> 15), 0x85ebca6b);
+  n ^= n >>> 13;
+  return (n >>> 0) / 4294967296;
+}
+
+// Merge a few primitives into one non-indexed geometry with vertex colours.
+function mergeColored(parts) {
+  const pos = [], nor = [], col = [];
+  for (const [geo, hex] of parts) {
+    const g = geo.index ? geo.toNonIndexed() : geo;
+    g.computeVertexNormals();
+    const c = new THREE.Color(hex);
+    const p = g.attributes.position, n = g.attributes.normal;
+    for (let i = 0; i < p.count; i++) {
+      pos.push(p.getX(i), p.getY(i), p.getZ(i));
+      nor.push(n.getX(i), n.getY(i), n.getZ(i));
+      col.push(c.r, c.g, c.b);
+    }
+    geo.dispose(); if (g !== geo) g.dispose();
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  out.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  out.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  return out;
+}
+
+// Unit-height trees (base at y=0, top at y=1); instances scale them. Kept to
+// ~20 triangles each (open-ended, no caps you could ever see from the air):
+// thousands are instanced, and software-rendered test runs feel every one.
+function coniferGeometry() {
+  const trunk = new THREE.CylinderGeometry(0.04, 0.05, 0.3, 4, 1, true); trunk.translate(0, 0.15, 0);
+  const lo = new THREE.ConeGeometry(0.3, 0.6, 6, 1, true); lo.translate(0, 0.45, 0);
+  const hi = new THREE.ConeGeometry(0.2, 0.45, 5, 1, true); hi.translate(0, 0.77, 0);
+  return mergeColored([[trunk, 0x5b4331], [lo, 0x2c5530], [hi, 0x336136]]);
+}
+function broadleafGeometry() {
+  const trunk = new THREE.CylinderGeometry(0.04, 0.06, 0.45, 4, 1, true); trunk.translate(0, 0.225, 0);
+  const crown = new THREE.OctahedronGeometry(0.36, 0); crown.scale(1, 0.95, 1); crown.translate(0, 0.68, 0);
+  return mergeColored([[trunk, 0x5e4632], [crown, 0x4c7d36]]);
+}
+
 export function createTerrain(scene, map = archipelagoMap) {
   const heightFn = map.height;
   const colorFn = map.color;
@@ -65,6 +119,81 @@ export function createTerrain(scene, map = archipelagoMap) {
   const pending = [];
   let curCx = null, curCz = null;
   let farOn = true;
+
+  // Trees: their own keyed set + pending queue, independent of chunk meshes.
+  const trees = new Map();         // "cx,cz" -> THREE.Group (0-2 InstancedMesh)
+  const treePending = [];
+  let treesOn = !!map.forest;
+  let treeCx = null, treeCz = null;
+  const treeMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+  const coniferGeo = map.forest ? coniferGeometry() : null;
+  const broadGeo = map.forest ? broadleafGeometry() : null;
+  const coniferP = map.conifer || (() => 0.3);
+  const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(),
+    _p = new THREE.Vector3(), _c = new THREE.Color(), _up = new THREE.Vector3(0, 1, 0);
+
+  function buildTrees(cx, cz) {
+    const group = new THREE.Group();
+    const half = CHUNK / 2, x0 = cx * CHUNK - half, z0 = cz * CHUNK - half;
+    const gx0 = Math.ceil(x0 / TREE_STEP), gz0 = Math.ceil(z0 / TREE_STEP);
+    const gx1 = Math.ceil((x0 + CHUNK) / TREE_STEP), gz1 = Math.ceil((z0 + CHUNK) / TREE_STEP);
+    const con = [], brd = [];
+    for (let gx = gx0; gx < gx1; gx++) for (let gz = gz0; gz < gz1; gz++) {
+      const x = (gx + treeHash(gx, gz, 1) * 0.9) * TREE_STEP;
+      const z = (gz + treeHash(gx, gz, 2) * 0.9) * TREE_STEP;
+      const h = heightFn(x, z);
+      if (h < 1.5) continue;
+      const hx = heightFn(x + 6, z), hz = heightFn(x, z + 6);
+      const slope = Math.min(1, Math.hypot(h - hx, h - hz) / 6);
+      const dens = map.forest(x, z, h, slope);
+      if (dens <= 0 || treeHash(gx, gz, 3) > dens * 0.95) continue;
+      if (map.obstacleTop(x, z) > h - 1) continue;          // never inside a building
+      const r = treeHash(gx, gz, 4);
+      (treeHash(gx, gz, 5) < coniferP(h) ? con : brd).push([x, h, z, r]);
+    }
+    for (const [list, geo, tall] of [[con, coniferGeo, 13], [brd, broadGeo, 10]]) {
+      if (!list.length) continue;
+      const im = new THREE.InstancedMesh(geo, treeMat, list.length);
+      list.forEach(([x, h, z, r], i) => {
+        const sc = tall * (0.65 + r * 0.7);
+        _q.setFromAxisAngle(_up, r * 40);
+        _s.set(sc * (0.85 + ((r * 7) % 1) * 0.35), sc, sc * (0.85 + ((r * 13) % 1) * 0.35));
+        _p.set(x, h - 0.4, z);
+        im.setMatrixAt(i, _m.compose(_p, _q, _s));
+        _c.setHSL(0.27 + (((r * 17) % 1) - 0.5) * 0.06, 0.25, 0.42 + (((r * 29) % 1) - 0.5) * 0.18);
+        im.setColorAt(i, _c.multiplyScalar(2.2));
+      });
+      // No shadow-map casting: the shadow box is only ~280 m across, and the
+      // extra pass over every instance cost more than it showed.
+      im.castShadow = false;
+      im.computeBoundingSphere();
+      group.add(im);
+    }
+    return group;
+  }
+
+  function wantTrees(px, pz) {
+    if (!treesOn) {
+      if (trees.size) { for (const g of trees.values()) disposeTrees(g); trees.clear(); }
+      treePending.length = 0; treeCx = treeCz = null;
+      return;
+    }
+    const cx = Math.round(px / CHUNK), cz = Math.round(pz / CHUNK);
+    if (cx === treeCx && cz === treeCz) return;
+    treeCx = cx; treeCz = cz;
+    const need = new Set();
+    for (let i = -TREE_R; i <= TREE_R; i++)
+      for (let j = -TREE_R; j <= TREE_R; j++) need.add(`${cx + i},${cz + j}`);
+    for (const [k, g] of trees) if (!need.has(k)) { disposeTrees(g); trees.delete(k); }
+    treePending.length = 0;
+    for (const k of need) if (!trees.has(k)) treePending.push(k);
+    const d = (k) => { const [a, b] = k.split(',').map(Number); return Math.abs(a - cx) + Math.abs(b - cz); };
+    treePending.sort((a, b) => d(a) - d(b));
+  }
+  function disposeTrees(g) {
+    scene.remove(g);
+    for (const im of g.children) im.dispose?.();   // geometry + material are shared
+  }
 
   // One material per tier instead of one per chunk — every chunk used its own
   // identical MeshLambertMaterial, so a full view was 121 redundant materials.
@@ -153,16 +282,33 @@ export function createTerrain(scene, map = archipelagoMap) {
         chunks.set(key, mesh);
         scene.add(mesh);
       }
+      // Trees ride the same per-call budget, but only after the ground under
+      // the aircraft exists (a forest floating over a missing chunk is worse
+      // than a bare one for a few frames).
+      wantTrees(px, pz);
+      if (pending.length === 0 || force) {
+        for (let n = 0; n < Math.max(1, budget >> 1) && treePending.length; n++) {
+          const k = treePending.shift();
+          if (trees.has(k)) continue;
+          const [cx, cz] = k.split(',').map(Number);
+          const g = buildTrees(cx, cz);
+          trees.set(k, g);
+          scene.add(g);
+        }
+      }
     },
     /** Coarse tier off = the old single-tier behaviour (quality: LOW). */
     setFarTier(on) { farOn = !!on; curCx = null; curCz = null; },
+    /** Vegetation on/off (quality knob). A map with no `forest` never grows any. */
+    setTrees(on) { treesOn = !!on && !!map.forest; treeCx = treeCz = null; },
     counts() {
-      let fine = 0, coarse = 0;
+      let fine = 0, coarse = 0, treeInstances = 0;
       for (const k of chunks.keys()) k.startsWith('n:') ? fine++ : coarse++;
-      return { fine, coarse };
+      for (const g of trees.values()) for (const im of g.children) treeInstances += im.count;
+      return { fine, coarse, treeChunks: trees.size, treeInstances };
     },
-    pendingCount: () => pending.length,
-    prime(px, pz) { want(px, pz); }, // fill pending list without building
+    pendingCount: () => pending.length + treePending.length,
+    prime(px, pz) { want(px, pz); wantTrees(px, pz); }, // fill pending lists without building
     // Tear down every chunk and reset streaming state so the next update()
     // rebuilds from scratch (used when swapping maps).
     disposeAll() {
@@ -171,6 +317,9 @@ export function createTerrain(scene, map = archipelagoMap) {
       chunks.clear();
       pending.length = 0;
       curCx = null; curCz = null;
+      for (const g of trees.values()) disposeTrees(g);
+      trees.clear(); treePending.length = 0; treeCx = treeCz = null;
+      treeMat.dispose(); coniferGeo?.dispose(); broadGeo?.dispose();
     },
   };
 }

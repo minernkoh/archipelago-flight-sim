@@ -737,6 +737,52 @@ check('tower stays quiet during a lesson', atcLesson.shown === false, JSON.strin
 await page.evaluate(() => window.__sim.game.toMenu());
 await settle(300);
 
+// --- v7: living menu, vegetation, fly-by camera, smoke, dynamic resolution ---
+console.log('v7 world & camera…');
+await page.evaluate(() => window.__sim.game.select({ mode: 'free', map: 'archipelago', aircraft: 'extra300', time: 'dusk', weather: 'calm' }));
+await settle(400);
+const menuPrev = await sim(`({
+  name: __sim.ac.p.name, want: __sim.world.aircraft.find(a => a.id === 'extra300').params.name,
+  tod: __sim.env.state().timeOfDay, ground: __sim.ac.pos.y - __sim.map.height(__sim.ac.pos.x, __sim.ac.pos.z) < 3 })`);
+check('menu backdrop previews the selected aircraft + time, parked on the runway',
+  menuPrev.name === menuPrev.want && menuPrev.tod === 'dusk' && menuPrev.ground, JSON.stringify(menuPrev));
+await click('#btn-start');
+await page.waitForFunction('window.__sim.game.state === "flying"', { timeout: 120000, polling: 500 });
+await settle(1500);
+const trees = await sim('__sim.terrainCounts()');
+check('forests: instanced trees stream in around the field', trees.treeInstances > 200 && trees.treeChunks > 0, JSON.stringify(trees));
+await page.evaluate(() => window.__sim.world.setQuality('low'));
+await settle(1200);
+const treesLow = await sim('__sim.terrainCounts()');
+check('forests: LOW quality drops every tree', treesLow.treeChunks === 0 && treesLow.treeInstances === 0, JSON.stringify(treesLow));
+await page.evaluate(() => window.__sim.world.setQuality('high'));
+
+await press('v');
+await settle(500);
+const camFly = await sim('__sim.camName');
+await press('v');
+await settle(300);
+const camBack = await sim('__sim.camName');
+check('V toggles the fly-by camera and back to chase', camFly === 'FLYBY' && camBack === 'CHASE', `${camFly} -> ${camBack}`);
+
+// Smoke needs to be airborne: lift the aircraft into level flight first.
+await page.evaluate(() => {
+  const ac = window.__sim.ac;
+  ac.pos.y += 250; ac.vel.x = 55; ac.vel.y = 0; ac.vel.z = 0;
+  ac.q = { x: 0, y: 0, z: 0, w: 1 }; ac.omega = { x: 0, y: 0, z: 0 };
+  window.__sim.controls.state.throttle = 0.8;
+});
+await settle(300);
+await press('k');
+await settle(2500);
+const smoke = await sim('__sim.trails.debug()');
+await press('k');
+check('K lays an airshow smoke trail behind the aircraft', smoke.smokeOn && smoke.smoke.vis > 4, JSON.stringify(smoke));
+const res = await sim('__sim.world.resScale');
+check('dynamic resolution keeps the render scale in 0.6..1', res >= 0.6 && res <= 1, String(res));
+await page.evaluate(() => window.__sim.game.toMenu());
+await settle(300);
+
 check('no console errors', errors.length === 0, errors.slice(0, 4).join(' | '));
 
 await browser.close();

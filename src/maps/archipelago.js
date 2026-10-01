@@ -7,6 +7,7 @@
 // physics ground contact and the rendered chunks both call it (via map.height).
 
 import * as THREE from 'three';
+import { makeNoise, woodland } from './noise.js';
 
 /**
  * The map contract. Every world (archipelago, singapore, …) exports one object
@@ -69,6 +70,13 @@ import * as THREE from 'three';
  *           When absent, main.js derives a generic plan from `raceCourse`.
  *
  * --- optional: any map may set this ---
+ * @property {(x:number, z:number, h:number, slope:number) => number} [forest]
+ *           Cosmetic tree density 0..1 at a point (terrain.js scatters instanced
+ *           trees from it on the near chunks). Must return 0 on runways, aprons
+ *           and water. Maps without it simply grow no trees.
+ * @property {(h:number) => number} [conifer]
+ *           Probability 0..1 that a tree at elevation h is a conifer rather
+ *           than a broadleaf. Defaults to 0.3.
  * @property {{x:number, z:number}} [finalGateDir]
  *           Unit vector the last race gate should face (e.g. down a runway
  *           heading) instead of the rings module's default inferred facing.
@@ -163,7 +171,20 @@ const COL = {
   rock:  new THREE.Color(0x8d8578),
   snow:  new THREE.Color(0xf2f4f0),
   sea:   new THREE.Color(0x3d6b58),
+  meadow:new THREE.Color(0x9fb466),
+  forest:new THREE.Color(0x35592c),
+  wetsand:new THREE.Color(0xb3a37c),
 };
+
+// Cosmetic layers (forest + meadow) use their own noise so heights stay put.
+const NZ = makeNoise(SEED ^ 0x5eed);
+function forestDensity(x, z, h, slope) {
+  if (h < 3 || h > 125 || slope > 0.55) return 0;
+  const d = runwayDist(x, z);
+  if (d < 220) return 0;
+  const fade = smoothstep(220, 420, d) * (1 - smoothstep(95, 125, h)) * (1 - smoothstep(0.4, 0.55, slope));
+  return woodland(NZ, x, z, 520, 0.85) * fade;
+}
 
 function vertexColor(h, slope, x, z, out) {
   const jitter = (hash2(Math.round(x * 7), Math.round(z * 7)) - 0.5) * 0.06;
@@ -172,6 +193,12 @@ function vertexColor(h, slope, x, z, out) {
   else if (h < 130) out.lerpColors(COL.grass2, COL.rock, smoothstep(60, 130, h));
   else if (h < 190) out.copy(COL.rock);
   else out.lerpColors(COL.rock, COL.snow, smoothstep(190, 240, h));
+  if (h >= 1.4 && h < 95) {
+    // sun-dried meadow patches break up the uniform green
+    out.lerp(COL.meadow, smoothstep(0.47, 0.72, NZ.fbm(x / 380 + 40, z / 380 - 12, 3)) * 0.55);
+    const f = forestDensity(x, z, h, slope);
+    if (f > 0.08) out.lerp(COL.forest, f * 0.8);   // reads as woodland beyond tree range
+  } else if (h < 1.4 && h > -0.6) out.lerp(COL.wetsand, smoothstep(1.4, -0.6, h));
   if (slope > 0.55 && h > 2) out.lerp(COL.rock, smoothstep(0.55, 0.9, slope));
   if (h < -1) out.copy(COL.sea);
   out.offsetHSL(0, 0, jitter);
@@ -260,4 +287,6 @@ export const archipelagoMap = {
   createScenery: createAirfield,
   raceCourse,
   obstacleTop() { return -Infinity; },  // no solid obstacles on this map
+  forest: forestDensity,
+  conifer: (h) => smoothstep(40, 100, h) * 0.8 + 0.1,
 };

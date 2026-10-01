@@ -66,6 +66,8 @@ export function createControls() {
       flapIdx = e.shiftKey ? Math.max(0, flapIdx - 1) : Math.min(FLAP_DETENTS.length - 1, flapIdx + 1);
     }
     if (k === 'c') emit('camera');
+    if (k === 'v') emit('flyby');      // cinematic fly-past camera
+    if (k === 'k') emit('smoke');      // airshow smoke trail
     if (k === 'm') emit('minimap');
     if (k === 'i') emit('panel');
     if (k === 'r') emit('reset');

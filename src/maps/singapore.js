@@ -4,6 +4,7 @@
 // Implements the FlightMap contract documented in archipelago.js.
 
 import * as THREE from 'three';
+import { makeNoise, woodland } from './noise.js';
 import {
   addMBS, addFlyer, addEsplanade, addCBD, addHDBEstate, addPort, addShips, addChangi,
   setNightGlow, addBeacon,
@@ -143,6 +144,26 @@ const DISTRICTS = [
   [-15800, 1900, 1700], [-3400, -600, 1200], [-9000, 1500, 1200],
   [-6000, 4300, 1600] /* CBD/Marina */,
 ];
+function urbanAt(x, z) {
+  let urban = 0;
+  for (const [dx, dz, r] of DISTRICTS) {
+    const g = 1 - smoothstep(r * 0.45, r, Math.hypot(x - dx, z - dz));
+    if (g > urban) urban = g;
+  }
+  return urban;
+}
+// Cosmetic tropical canopy: dense in the central hills, thinning toward the
+// estates, nothing on the airfield. Own noise, so heights are untouched.
+const NZ = makeNoise(SEED ^ 0x7a11);
+function forestDensity(x, z, h, slope) {
+  if (h < 2.5 || slope > 0.7) return 0;
+  const { u, v } = toRunwayFrame(x, z);
+  if (u > -500 && u < RWY_LEN + 500 && v > RWY2_V - 350 && v < 350) return 0;
+  const urban = urbanAt(x, z);
+  if (urban > 0.35) return 0;
+  const hills = smoothstep(15, 60, h);                 // catchment hills read as jungle
+  return Math.max(woodland(NZ, x, z, 380, 0.7), hills * 0.9) * (1 - urban / 0.35);
+}
 function color(h, slope, x, z, out) {
   const jitter = (hash2(Math.round(x * 7), Math.round(z * 7)) - 0.5) * 0.05;
   if (h < -1) { out.copy(COL.sea); if (h > -7) out.lerp(COL.shore, (h + 7) / 6 * 0.7); }
@@ -150,11 +171,9 @@ function color(h, slope, x, z, out) {
   else {
     out.lerpColors(COL.green, COL.green2, smoothstep(6, 120, h));
     if (z < -2400 && h < 9) out.lerp(COL.mangrove, 0.6);        // north-coast mangrove
-    let urban = 0;
-    for (const [dx, dz, r] of DISTRICTS) {
-      const g = 1 - smoothstep(r * 0.45, r, Math.hypot(x - dx, z - dz));
-      if (g > urban) urban = g;
-    }
+    const urban = urbanAt(x, z);
+    const f = forestDensity(x, z, h, slope);
+    if (f > 0.08) out.lerp(COL.mangrove, f * 0.6);
     if (urban > 0) out.lerp(COL.urban, urban * 0.65);
     if (slope > 0.6) out.lerp(COL.rock, smoothstep(0.6, 0.95, slope));
   }
@@ -296,4 +315,6 @@ export const singaporeMap = {
   raceCourse,
   finalGateDir: { x: FWD.x, z: FWD.z },  // last gate faces down 02L
   obstacleTop,
+  forest: forestDensity,
+  conifer: () => 0,
 };

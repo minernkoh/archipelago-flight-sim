@@ -10,6 +10,7 @@
 // flat ocean with the runway plateau (see `elevationOffline`).
 
 import * as THREE from 'three';
+import { makeNoise, woodland } from './noise.js';
 import { makeProjection, tileOfPixel, decodeTerrarium, bilerp, bearingToHeadingRad } from './tilesampler.js';
 
 const TILE_BASE = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium';
@@ -25,6 +26,7 @@ const COL = {
   grass2: new THREE.Color(0x47703a), brush: new THREE.Color(0x7c8552),
   scree: new THREE.Color(0x8d8578), rock: new THREE.Color(0x746b60),
   snow: new THREE.Color(0xf4f6f5),
+  forest: new THREE.Color(0x335530),
 };
 
 export function createRealWorldMap(preset) {
@@ -180,6 +182,17 @@ export function createRealWorldMap(preset) {
     return Math.abs(u) < halfLen + 20 && Math.abs(v) < halfWidth + 6;
   }
 
+  // Cosmetic woodland (no land-cover data, so a plausible noise mask) below a
+  // ~1800 m treeline, clear of the field.
+  const NZ = makeNoise(Math.round(preset.lat * 1000) ^ Math.round(preset.lon * 1000) << 8);
+  function forestDensity(x, z, h, slope) {
+    if (h < 3 || h > 1850 || slope > 0.6) return 0;
+    const d = runwayDist(x, z);
+    if (d < 240) return 0;
+    const fade = smoothstep(240, 450, d) * (1 - smoothstep(1650, 1850, h)) * (1 - smoothstep(0.45, 0.6, slope));
+    return woodland(NZ, x, z, 480, 0.75) * fade;
+  }
+
   function color(h, slope, x, z, out) {
     if (h < 0.5) { out.copy(COL.sea); return out; }
     if (h < 2) { out.lerpColors(COL.shallow, COL.sand, smoothstep(0.5, 2, h)); return out; }
@@ -189,6 +202,8 @@ export function createRealWorldMap(preset) {
     else if (h < 2000) out.lerpColors(COL.brush, COL.scree, smoothstep(1300, 2000, h));
     else if (h < 2600) out.lerpColors(COL.scree, COL.rock, smoothstep(2000, 2600, h));
     else out.lerpColors(COL.rock, COL.snow, smoothstep(2600, 3200, h));
+    const f = forestDensity(x, z, h, slope);
+    if (f > 0.08) out.lerp(COL.forest, f * 0.75);
     if (slope > 0.5 && h > 40) out.lerp(COL.rock, smoothstep(0.5, 0.85, slope));
     if (h > 2900 && slope < 0.4) out.lerp(COL.snow, smoothstep(2900, 3400, h));
     return out;
@@ -262,6 +277,7 @@ export function createRealWorldMap(preset) {
   return {
     id: preset.id, name: preset.name,
     height, color, isRunway, runway, createScenery, raceCourse, fixes,
+    forest: forestDensity, conifer: (h) => smoothstep(250, 900, h) * 0.85 + 0.1,
     obstacleTop() { return -Infinity; },
     // real-world extras used by main.js / modes.js
     latLon: { lat: preset.lat, lon: preset.lon },

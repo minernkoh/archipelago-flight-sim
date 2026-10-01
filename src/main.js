@@ -1,7 +1,7 @@
 // ARCHIPELAGO — boot, world/aircraft swap lifecycle, fixed-timestep loop.
 
 import * as THREE from 'three';
-import { createAircraft, step } from './physics/flightModel.js';
+import { createAircraft, step, resetOnRunway } from './physics/flightModel.js';
 import { createTerrain, COARSE_TILE_RADIUS } from './terrain.js';
 import { archipelagoMap } from './maps/archipelago.js';
 import { singaporeMap } from './maps/singapore.js';
@@ -18,6 +18,7 @@ import { createAudio } from './audio.js';
 import { createGameFlow } from './modes.js';
 import { createTrainingSystem } from './training.js';
 import { createEffects } from './effects.js';
+import { createTrails } from './trails.js';
 import { createWind, WEATHER } from './physics/wind.js';
 import { fetchLiveWeather } from './liveweather.js';
 import { loadPlan } from './planner.js';
@@ -44,6 +45,27 @@ document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.3, 20000);
+scene.add(camera);   // hosts the cockpit frame (camera.js)
+
+// Dynamic resolution. The scene is fill-rate bound (sky, ocean, clouds and
+// terrain all cover the screen), so render scale is the one knob that moves
+// frame rate on a weak GPU. Every ~1.5 s: below ~40 fps step the scale down,
+// above ~56 fps creep it back up. Asymmetric steps + the dead band between
+// them keep it from hunting.
+let pixelRatioCap = 2, autoRes = true, resScale = 1;
+let resAccT = 0, resFrames = 0;
+const applyPixelRatio = () => renderer.setPixelRatio(Math.min(window.devicePixelRatio, pixelRatioCap) * resScale);
+function adaptResolution(rawDt) {
+  if (!autoRes) return;
+  resAccT += rawDt; resFrames++;
+  if (resAccT < 1.5) return;
+  const fps = resFrames / resAccT;
+  resAccT = 0; resFrames = 0;
+  const prev = resScale;
+  if (fps < 40) resScale = Math.max(0.6, resScale - 0.1);
+  else if (fps > 56) resScale = Math.min(1, resScale + 0.05);
+  if (resScale !== prev) applyPixelRatio();
+}
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -117,6 +139,7 @@ async function loadMap(map) {
   }
   terrain = createTerrain(scene, map);
   terrain.setFarTier(qualityHigh);   // a fresh streamer defaults to on — re-apply the setting
+  terrain.setTrees(qualityHigh);
   scenery = map.createScenery(scene);
   rings = createRings(scene, { course: map.raceCourse, heightFn: map.height, finalDir: map.finalGateDir });
   rings.show(false);
@@ -159,6 +182,7 @@ function setAircraft(craft) {
 const controls = createControls();
 const hud = createHUD();
 const camRig = createCameraRig(camera);
+camRig.setGround((x, z) => collisionHeight(x, z));
 const audio = createAudio();
 const minimap = createMinimap();
 const panel = createPanel();
@@ -217,12 +241,15 @@ const world = {
   maps: MAPS,
   aircraft: CATALOG,
   // Settings hook: cap the render pixel ratio (high-DPI perf knob).
-  setPixelRatioCap(cap) { renderer.setPixelRatio(Math.min(window.devicePixelRatio, cap)); },
+  setPixelRatioCap(cap) { pixelRatioCap = cap; applyPixelRatio(); },
+  setAutoRes(on) { autoRes = on !== false; if (!autoRes) { resScale = 1; applyPixelRatio(); } },
+  get resScale() { return resScale; },
   // v6 quality knob: HIGH = coarse terrain tier out to 9 km + real shadows.
   // LOW is the pre-v6 view for weaker GPUs.
   setQuality(q) {
     qualityHigh = q !== 'low';
     terrain.setFarTier(qualityHigh);
+    terrain.setTrees(qualityHigh);
     env.setShadows(qualityHigh);
     renderer.shadowMap.enabled = qualityHigh;
   },
@@ -253,6 +280,16 @@ const world = {
     gauntletRings?.dispose(); gauntletRings = null;
     return { map: currentMap, rings };
   },
+  // Menu showcase: the live scene behind the menu reflects the cheap parts of
+  // the selection (aircraft + time of day) immediately. The map itself still
+  // loads on START — a multi-second terrain rebuild per click would make the
+  // map row unbrowsable.
+  preview(sel) {
+    setAircraft(byId(sel.aircraft));
+    env.setTimeOfDay(sel.time || 'day');
+    const r = currentMap.runway;
+    resetOnRunway(ac, { x: r.spawn.x, z: r.spawn.z, y: r.y, headingRad: r.headingRad });
+  },
   // Fresh trainer per lesson start so it binds the active map's runway.
   createTrainer(ui) {
     return createTrainingSystem({ ac, controls, map: currentMap, gates: gatesAdapter, ui, wind: windField });
@@ -260,6 +297,11 @@ const world = {
 };
 
 const fx = createEffects(scene);
+const trails = createTrails(scene);
+controls.on('smoke', () => {
+  if (game.state !== 'flying') return;
+  hud.message(trails.toggleSmoke() ? 'Smoke on.' : 'Smoke off.', 1200);
+});
 const game = createGameFlow({ ac, hud, audio, controls, camRig, world, fx, autopilot, panel });
 setAircraft(byId('c172'));
 hud.setCamera(camRig.modeName);
@@ -292,7 +334,8 @@ controls.on('ap-wing', () => { if (flying()) autopilot.toggleWing(ac); });
 
 window.__sim = { ac, controls, game, world, autopilot, env, windField, minimap,
   terrainCounts: () => terrain.counts(),
-  get rings() { return gauntletRings || rings; }, get map() { return currentMap; } };
+  get rings() { return gauntletRings || rings; }, get map() { return currentMap; },
+  get camName() { return camRig.modeName; }, get trails() { return trails; }, scene, renderer };
 
 // --- boot: pre-build terrain around the spawn, then reveal the menu ---
 // (setTimeout, not rAF: headless/hidden pages stop delivering animation frames
@@ -343,11 +386,14 @@ document.addEventListener('visibilitychange', () => {
 let last = performance.now();
 let acc = 0, elapsed = 0;
 let lastCamMode = camRig.modeName;
+const lastPos = { x: ac.pos.x, y: ac.pos.y, z: ac.pos.z };
 
 function frame(now) {
   schedule(); // bumps gen: invalidates this generation's sibling callback
-  const dt = Math.min((now - last) / 1000, 0.25);
+  const rawDt = (now - last) / 1000;
+  const dt = Math.min(rawDt, 0.25);
   last = now;
+  adaptResolution(rawDt);
   elapsed += dt;
 
   const isFlying = game.state === 'flying';
@@ -386,6 +432,12 @@ function frame(now) {
   });
   panel.update(ac);
   fx.update(dt);
+  // A jump of hundreds of metres in one frame is a restart/teleport: drop the
+  // trails, or they would draw a streak across the sky to the new position.
+  if (Math.hypot(ac.pos.x - lastPos.x, ac.pos.y - lastPos.y, ac.pos.z - lastPos.z) > 150) trails.clear();
+  lastPos.x = ac.pos.x; lastPos.y = ac.pos.y; lastPos.z = ac.pos.z;
+  if (game.state === 'menu' && trails.smokeOn) trails.reset();
+  trails.update(ac, isFlying ? dt : 0, camera.position, isFlying);
   windField.setTime(elapsed);
   const sock = scenery.userData?.windsock;
   if (sock) {
@@ -402,8 +454,10 @@ function frame(now) {
   // terrain bakes as flat sea. Cheap: at z12 a tile spans ~7-10 km, so this is
   // single digits of tiles (TILE_CAP is 220).
   if (!mapLoading && currentMap.prefetch) currentMap.prefetch(ac.pos.x, ac.pos.z, COARSE_TILE_RADIUS);
-  env.update(ac, dt, elapsed);
-  camRig.update(ac, dt);
+  env.update(ac, dt, elapsed, camera.position);
+  camRig.setInput(isFlying);
+  if (game.state === 'menu') camRig.updateMenu(ac, dt);
+  else camRig.update(ac, dt);
   if (isFlying) {
     hud.update(ac, c, dt, ringBearing ?? null);
     hud.setAP(autopilot.status(ac));

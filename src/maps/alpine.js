@@ -4,6 +4,7 @@
 // documented in archipelago.js (see the @typedef there).
 
 import * as THREE from 'three';
+import { makeNoise, woodland } from './noise.js';
 
 const SEED = 20260709;
 
@@ -143,7 +144,20 @@ const COL = {
   scree: new THREE.Color(0x8d8578),
   rock: new THREE.Color(0x746b60),
   snow: new THREE.Color(0xf4f6f5),
+  forest: new THREE.Color(0x2f4f2c),
+  meadow: new THREE.Color(0x8fa85c),
 };
+
+// Cosmetic conifer forest below the treeline (~2300 m); own noise, so the
+// heightfield is untouched.
+const NZ = makeNoise(SEED ^ 0x7ee5);
+function forestDensity(x, z, h, slope) {
+  if (h > 2350 || slope > 0.9) return 0;
+  const d = runwayDist(x, z);
+  if (d < 200) return 0;
+  const fade = smoothstep(200, 380, d) * (1 - smoothstep(2100, 2350, h)) * (1 - smoothstep(0.7, 0.9, slope));
+  return woodland(NZ, x, z, 420, 1.0) * fade;
+}
 
 function vertexColor(h, slope, x, z, out) {
   const jitter = (hash2(Math.round(x * 7), Math.round(z * 7)) - 0.5) * 0.05;
@@ -151,6 +165,11 @@ function vertexColor(h, slope, x, z, out) {
   else if (h < 2100) out.lerpColors(COL.grass2, COL.scree, smoothstep(1550, 2100, h));
   else if (h < 2800) out.lerpColors(COL.scree, COL.rock, smoothstep(2100, 2800, h));
   else out.lerpColors(COL.rock, COL.snow, smoothstep(2800, 3400, h));
+  if (h < 2350) {
+    out.lerp(COL.meadow, smoothstep(0.5, 0.74, NZ.fbm(x / 340 + 9, z / 340 - 4, 3)) * 0.45);
+    const f = forestDensity(x, z, h, slope);
+    if (f > 0.08) out.lerp(COL.forest, f * 0.85);
+  }
   if (slope > 0.5 && h > 1600) out.lerp(COL.rock, smoothstep(0.5, 0.85, slope));
   if (h > 3200 && slope < 0.4) out.lerp(COL.snow, smoothstep(3200, 3600, h)); // snow caps even on gentle summits
   out.offsetHSL(0, 0, jitter);
@@ -227,6 +246,8 @@ export const alpineMap = {
   name: 'ALPINE',
   height: getTerrainHeight,
   color: vertexColor,
+  forest: forestDensity,
+  conifer: () => 0.92,
   isRunway,
   runway: RUNWAY,
   createScenery: createAirfield,
