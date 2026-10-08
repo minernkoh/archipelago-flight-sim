@@ -19,6 +19,7 @@ export const DEFAULTS = {
   coldDark: false,     // v5-R3: C172 spawns shut down; run the start checklist
   atc: true,           // v5-R5: spoken tower calls + transcript (off during lessons)
   quality: 'high',     // v6: 'low' = near terrain only, no shadows | 'high' = both
+  post: true,          // bloom + colour grade + sun flare (HIGH quality only; self-disables on slow GPUs)
   autoRes: true,       // dynamic resolution: drop render scale when fps sags
 };
 
@@ -54,6 +55,8 @@ const ROWS = [
   { id: 'atc', label: 'ATC', hint: 'tower talks you round the circuit — stays quiet during lessons',
     values: [true, false], fmt: v => v ? 'ON' : 'OFF' },
   { id: 'autoRes', label: 'DYNAMIC RES', hint: 'renders at a lower resolution when the frame rate sags, back up when it recovers',
+    values: [true, false], fmt: v => v ? 'ON' : 'OFF' },
+  { id: 'post', label: 'POST FX', hint: 'bloom, colour grade and sun flare; HIGH quality only, switches itself off if the frame rate stays low',
     values: [true, false], fmt: v => v ? 'ON' : 'OFF' },
   { id: 'quality', label: 'QUALITY', hint: 'HIGH draws terrain to 9 km and casts real shadows; LOW is the lighter old view',
     values: ['high', 'low'], fmt: v => v.toUpperCase() },

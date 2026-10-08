@@ -1,10 +1,13 @@
 # ARCHIPELAGO — browser flight simulator
 
 Three.js flight sim, plain ES modules via import map (no bundler, no build step).
-v2: 5 aircraft, 2 maps (procedural archipelago + stylized Singapore), free flight,
-ring race, and a 7-lesson flight school. v7: faceted low-poly terrain, scattering-style sky + stars,
+v2: 5 aircraft, free flight, ring race, and a 7-lesson flight school. Maps: procedural archipelago,
+stylized Singapore, alpine, plus real-world airfields (streamed elevation). v7: faceted low-poly terrain, scattering-style sky + stars,
 low-poly cumulus, instanced forests, clear-water shallows, cockpit frames, fly-by camera,
 wingtip vortices / airshow smoke, live 3D menu backdrop, dynamic resolution.
+v8: spring chase cam + shake, control expo / Shift fine control, noise-based prop audio with Doppler,
+post FX (bloom/grade/flare), ocean swell + coastal foam + spray, nav lights/strobes + retracting gear,
+archipelago villages/lighthouses, and visual-only traffic (boats, circuit planes, birds).
 
 ## Run / test
 
@@ -23,7 +26,9 @@ wingtip vortices / airshow smoke, live 3D menu backdrop, dynamic resolution.
 - `src/terrain.js` — generic chunk streamer, plus instanced trees on a ±1.5 km ring of fine chunks (optional `map.forest(x,z,h,slope)` → 0..1 and `map.conifer(h)`; a map without `forest` grows none; LOW quality turns them off). `src/maps/noise.js` is shared noise for COSMETIC layers only (forest, meadow) — never feed it into `map.height`, the state hashes depend on heights.
 - **Art direction: crisp faceted low-poly.** terrain.js builds the fine tier non-indexed with ONE colour per triangle (map `color()` is called per face at its centroid with the face's own slope); the coarse tier stays smooth and is sunk ~250 m wherever the fine tier covers it (vertex shader), or its 200 m interpolation pokes through valleys. All maps paint from `src/maps/palette.js` (`PAL`, `seabed()`, `beach()`, `facetJitter()`, `decalMaterial()` — runway slabs need its polygon offset or they z-fight with the flat apron at range).
 - `src/environment.js` — sky dome shader, low-poly faceted cumulus (opaque, stylised top/underside shading), semi-transparent ocean (the turquoise seabed shows through as shallows near the aircraft; opaque beyond ~2 km), time-of-day palettes. `src/trails.js` — ribbon trails (wingtip vortices on G/alpha, `K` smoke); pooled, no per-frame allocation.
-- `src/camera.js` — `C` cycles CHASE/COCKPIT/ORBIT (tests rely on exactly that cycle), `V` toggles FLYBY, wheel zoom, left-drag free-look, per-aircraft cockpit frame (`catalog camera.cockpit.frame`: cabin/canopy/airliner), `updateMenu()` = the slow showcase orbit behind the menu. The menu backdrop is fed by `world.preview(sel)` (aircraft + time of day only; maps still load on START).
+- `src/camera.js`: chase cam is a critically damped spring on the offset from the aircraft (no steady-state lag). `C` cycles CHASE/COCKPIT/ORBIT (tests rely on exactly that cycle), `V` toggles FLYBY, wheel zoom, left-drag free-look, per-aircraft cockpit frame (`catalog camera.cockpit.frame`: cabin/canopy/airliner), `updateMenu()` = the slow showcase orbit behind the menu. The menu backdrop is fed by `world.preview(sel)` (aircraft + time of day only; maps still load on START).
+- `src/post.js`: EffectComposer (half-res bloom, grade/vignette/flare, OutputPass). HIGH quality + POST FX setting only, and it switches itself off for the session when dynamic res is pinned at 0.6 with fps < 30, so headless e2e ends up on the plain `renderer.render` path within seconds. Nav lights and lights meant to bloom use `toneMapped: false`.
+- `src/traffic.js`: visual-only boats, pattern traffic and bird flocks; pooled, never collides, off on LOW. Archipelago villages/piers/lighthouses live in `createScenery` and never touch `map.height`.
 - `src/rings.js` — parameterized gates (race + training themes); `src/modes.js` — menu/state machine; `src/main.js` — swap lifecycle + frame loop.
 - Body frame: +x forward, +y up, +z right. Body rate r about +y: **positive = nose LEFT** (sign mistakes here are the #1 physics bug source).
 
@@ -31,6 +36,7 @@ wingtip vortices / airshow smoke, live 3D menu backdrop, dynamic resolution.
 
 - **Headless Chrome starves rAF** unpredictably; the main loop has a 250 ms setTimeout watchdog with a generation ticket (see main.js `schedule()`). Never drive boot/pre-gen loops with rAF.
 - **Never use page.click/page.keyboard in tests** — headless input dispatch waits on compositor frames and hangs when the compositor stalls. Dispatch DOM events via `page.evaluate` (see test/e2e.mjs helpers).
+- `npm run school` and the ATC "Changi 02L" check in `npm run checks` were already failing before v8 (lesson 3 autopilot segments, lesson 7 flare); they are not regressions.
 - **In e2e, always `press(k)` (keydown+keyup), never a bare `keyEv('keydown', …)`** — controls.js tracks held keys, so a keydown without its keyup leaves that axis stuck for the REST of the suite. A stray held ArrowDown in a menu test cancelled the ArrowUp during rotation and rolled the aircraft off the runway, failing "airborne and climbing", "HUD live" and the minimap check ~40 lines later. `hold()`/`release()` exist for deliberately-held keys.
 - Puppeteer resolves a pinned Chrome build that may not be installed. If a browser test dies with "Could not find Chrome (ver. …)", run it with `PUPPETEER_EXECUTABLE_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"` rather than downloading one.
 - Puppeteer launches need `--enable-unsafe-swiftshader` and generous `protocolTimeout`; screenshots may fail when the compositor is stalled (wrap in try/catch).

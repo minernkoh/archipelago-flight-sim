@@ -4,7 +4,7 @@
 
 import * as THREE from 'three';
 
-const PUFF_COUNT = 40;   // smoke/dust/fireball — icosahedron blobs, shared geometry
+const PUFF_COUNT = 72;   // smoke/dust/fireball — icosahedron blobs, shared geometry
 const DEBRIS_COUNT = 20; // crash chunks — box geometry
 const GRAVITY = 9.81;    // local copy; this file can't import physics/
 
@@ -95,8 +95,58 @@ export function createEffects(scene) {
     }
   }
 
+  // Low and fast over water: pooled spray puffs trail behind the aircraft, two
+  // plumes either side of the track, denser the lower it flies. Call every
+  // frame; also remembers whether we are over water so crash() can splash.
+  let overWater = false, sprayAcc = 0;
+  function wake(ac, dt) {
+    const groundY = ac.pos.y - ac.agl;
+    const spd = Math.hypot(ac.vel.x, ac.vel.z);
+    overWater = groundY < 0.5 && ac.pos.y < 40;
+    const k = clamp(1 - (ac.pos.y - 1) / 14, 0, 1);
+    if (!overWater || k <= 0 || spd < 22 || dt <= 0) { sprayAcc = 0; return; }
+    sprayAcc += dt * (10 + 14 * k) * clamp(spd / 50, 0.5, 1.5);
+    const dx = ac.vel.x / spd, dz = ac.vel.z / spd;
+    const half = (ac.p?.span ?? 11) * 0.12;
+    while (sprayAcc >= 1) {
+      sprayAcc -= 1;
+      const side = Math.random() < 0.5 ? -1 : 1;
+      const back = 3 + Math.random() * 4;
+      const s = 0.8 + k * 1.2;
+      spawnPuff(
+        { x: ac.pos.x - dx * back - dz * side * half, y: 0.3, z: ac.pos.z - dz * back + dx * side * half },
+        {
+          color: 0xe6f2f6, life: 0.9 + Math.random() * 0.7,
+          scaleFrom: s, scaleTo: s * (3 + k * 2),
+          vx: -dx * spd * 0.12 - dz * side * 1.5, vz: -dz * spd * 0.12 + dx * side * 1.5,
+          vy: 0.6 + Math.random() * 1.2 * k, riseAccel: -0.4,
+          easePow: 2, opacityMax: 0.18 + 0.3 * k,
+        },
+      );
+    }
+  }
+
+  // Water ditch: a ring of white spray thrown up and out.
+  function splash(pos, vel) {
+    const speed = Math.hypot(vel.x, vel.z);
+    for (let i = 0; i < 16; i++) {
+      const ang = Math.random() * Math.PI * 2, r = 1 + Math.random() * 3;
+      spawnPuff(
+        { x: pos.x + Math.cos(ang) * r, y: 0.3, z: pos.z + Math.sin(ang) * r },
+        {
+          color: 0xf2fafc, life: 1.2 + Math.random() * 0.8,
+          scaleFrom: 1.5, scaleTo: 6 + Math.random() * 4,
+          vx: vel.x * 0.25 + Math.cos(ang) * (3 + speed * 0.05), vz: vel.z * 0.25 + Math.sin(ang) * (3 + speed * 0.05),
+          vy: 3 + Math.random() * 5, riseAccel: -3,
+          easePow: 2, opacityMax: 0.7,
+        },
+      );
+    }
+  }
+
   // One-shot: debris burst + fireball flash + lingering smoke column.
   function crash(pos, vel = { x: 0, y: 0, z: 0 }) {
+    if (overWater && pos.y < 6) splash(pos, vel);
     const speed = Math.hypot(vel.x, vel.y, vel.z);
     const spread = 2 + speed * 0.15;
     for (let i = 0; i < 14; i++) {
@@ -178,5 +228,5 @@ export function createEffects(scene) {
     for (const d of debris) d.mat.dispose();
   }
 
-  return { touchdown, crash, update, dispose };
+  return { touchdown, crash, wake, update, dispose };
 }

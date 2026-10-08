@@ -25,6 +25,16 @@ export function createControls() {
   let mouseHeld = false, mouseAnchor = null, mousePitch = 0, mouseRoll = 0;
   const MOUSE_FULL_PX = 220; // px of travel for full deflection
   const clamp1 = (v) => Math.max(-1, Math.min(1, v));
+  // Expo: blend of cubic and linear, so small stick offsets are gentle while
+  // full travel still reaches exactly 1. e=0 is linear.
+  const expo = (v, e) => Math.sign(v) * (e * Math.abs(v) ** 3 + (1 - e) * Math.abs(v));
+  const MOUSE_EXPO = 0.45, PAD_EXPO = 0.3;
+  // Hold Shift = fine control: keyboard and mouse deflection authority scaled
+  // for flare / formation precision. (Shift+F still retracts flaps.)
+  const FINE_SCALE = 0.4;
+  // Keyboard centring is snappier than ramp-up so taps are precise; the
+  // attack rate is unchanged, so a held key reaches full deflection as before.
+  const RELEASE_MUL = 1.8;
   window.addEventListener('mousedown', (e) => {
     if (e.button === 2 && mouseFlyOn) { mouseHeld = true; mouseAnchor = { x: e.clientX, y: e.clientY }; }
   });
@@ -88,7 +98,9 @@ export function createControls() {
   window.addEventListener('blur', () => keys.clear());
 
   function axis(cur, target, dt, rate = 5.5) {
-    return cur + (target - cur) * Math.min(1, dt * rate);
+    // Moving toward centre (target smaller in magnitude, same side) releases faster.
+    const releasing = Math.abs(target) < Math.abs(cur) && target * cur >= 0;
+    return cur + (target - cur) * Math.min(1, dt * rate * (releasing ? RELEASE_MUL : 1));
   }
 
   return {
@@ -121,22 +133,24 @@ export function createControls() {
     },
     poll(dt) {
       const s = state;
-      s.elevator = axis(s.elevator, (keys.has('ArrowUp') ? 1 : 0) + (keys.has('ArrowDown') ? -1 : 0), dt, pitchRollRate);
-      s.aileron  = axis(s.aileron, (keys.has('ArrowRight') ? 1 : 0) + (keys.has('ArrowLeft') ? -1 : 0), dt, pitchRollRate);
-      s.rudder   = axis(s.rudder, (keys.has('d') ? 1 : 0) + (keys.has('a') ? -1 : 0), dt, rudderRate);
+      const fine = keys.has('Shift') ? FINE_SCALE : 1;
+      s.elevator = axis(s.elevator, ((keys.has('ArrowUp') ? 1 : 0) + (keys.has('ArrowDown') ? -1 : 0)) * fine, dt, pitchRollRate);
+      s.aileron  = axis(s.aileron, ((keys.has('ArrowRight') ? 1 : 0) + (keys.has('ArrowLeft') ? -1 : 0)) * fine, dt, pitchRollRate);
+      s.rudder   = axis(s.rudder, ((keys.has('d') ? 1 : 0) + (keys.has('a') ? -1 : 0)) * fine, dt, rudderRate);
       if (keys.has('w')) s.throttle = Math.min(1, s.throttle + dt * 0.55);
       if (keys.has('s')) s.throttle = Math.max(0, s.throttle - dt * 0.7);
       // Mouse-fly and gamepad write their axes directly (position inputs —
       // see the notes above). Keyboard keeps the ramped path untouched.
       const inv = invertPitch ? -1 : 1;
       if (mouseHeld) {
-        s.elevator = mousePitch * inv;
-        s.aileron = mouseRoll;
+        const fine = keys.has('Shift') ? FINE_SCALE : 1;
+        s.elevator = expo(mousePitch, MOUSE_EXPO) * inv * fine;
+        s.aileron = expo(mouseRoll, MOUSE_EXPO) * fine;
       }
       const pad = padAxes();
       if (pad) {
-        if (pad.pitch) s.elevator = -pad.pitch * inv; // stick fwd (+) = nose down
-        if (pad.roll) s.aileron = pad.roll;
+        if (pad.pitch) s.elevator = -expo(pad.pitch, PAD_EXPO) * inv; // stick fwd (+) = nose down
+        if (pad.roll) s.aileron = expo(pad.roll, PAD_EXPO);
         if (pad.yaw) s.rudder = pad.yaw;
         if (pad.thr) s.throttle = Math.max(0, Math.min(1, s.throttle - pad.thr * dt * 0.8)); // stick up (-) increases
       }

@@ -19,9 +19,11 @@ import { createGameFlow } from './modes.js';
 import { createTrainingSystem } from './training.js';
 import { createEffects } from './effects.js';
 import { createTrails } from './trails.js';
+import { createTraffic } from './traffic.js';
 import { createWind, WEATHER } from './physics/wind.js';
 import { fetchLiveWeather } from './liveweather.js';
 import { loadPlan } from './planner.js';
+import { createPost } from './post.js';
 import { createMinimap } from './minimap.js';
 import { createPanel } from './panel.js';
 import { createAutopilot } from './autopilot.js';
@@ -53,8 +55,14 @@ scene.add(camera);   // hosts the cockpit frame (camera.js)
 // above ~56 fps creep it back up. Asymmetric steps + the dead band between
 // them keep it from hunting.
 let pixelRatioCap = 2, autoRes = true, resScale = 1;
+// Post-processing (post.js): built lazily the first time it is wanted, so LOW
+// quality and headless fallbacks never allocate the HDR target.
+let post = null, postWanted = true, postSunDir = null, postSunK = 1;
 let resAccT = 0, resFrames = 0;
-const applyPixelRatio = () => renderer.setPixelRatio(Math.min(window.devicePixelRatio, pixelRatioCap) * resScale);
+const applyPixelRatio = () => {
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, pixelRatioCap) * resScale);
+  post?.setSize();
+};
 function adaptResolution(rawDt) {
   if (!autoRes) return;
   resAccT += rawDt; resFrames++;
@@ -65,16 +73,25 @@ function adaptResolution(rawDt) {
   if (fps < 40) resScale = Math.max(0.6, resScale - 0.1);
   else if (fps > 56) resScale = Math.min(1, resScale + 0.05);
   if (resScale !== prev) applyPixelRatio();
+  post?.observeFps(fps, resScale);
 }
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  post?.setSize();
 });
 
 // --- world state (swappable) ---
 const env = createEnvironment(scene, renderer);
+function setTimeOfDay(name) {
+  env.setTimeOfDay(name);
+  postSunDir = env.sunDirection();            // cached: post reads it every frame
+  postSunK = name === 'night' ? 0.25 : 1;     // the "sun" is the moon at night
+  post?.setSun(postSunDir, postSunK);
+}
+env.setHeightFn(archipelagoMap.height);
 let currentMap = archipelagoMap;
 let terrain = createTerrain(scene, currentMap);
 // Survives map swaps: loadMap builds a fresh streamer, which would otherwise
@@ -83,6 +100,8 @@ let qualityHigh = true;
 let scenery = currentMap.createScenery(scene);
 let rings = createRings(scene, { course: currentMap.raceCourse, heightFn: currentMap.height });
 rings.show(false);
+// Ambient boats / pattern traffic / birds (visual only; off on LOW quality).
+let traffic = createTraffic(scene, currentMap, { enabled: qualityHigh });
 
 // Collision height folds solid obstacles in; aero ground effect and AGL use
 // bare terrain so overflying a rooftop doesn't fake ground effect.
@@ -116,9 +135,11 @@ async function loadMap(map) {
   terrain.disposeAll();
   scene.remove(scenery); disposeGroup(scenery);
   rings.dispose();
+  traffic.dispose();
   gauntletRings?.dispose(); gauntletRings = null;
   gatesAdapter.clear();
   currentMap = map;
+  env.setHeightFn(map.height);
   // Real-world maps stream elevation tiles; wait for the ones around the spawn
   // before building terrain so chunks/minimap sample real ground, not sea. Caps
   // at 12 s so a slow network degrades to a flat world rather than hanging;
@@ -143,6 +164,7 @@ async function loadMap(map) {
   scenery = map.createScenery(scene);
   rings = createRings(scene, { course: map.raceCourse, heightFn: map.height, finalDir: map.finalGateDir });
   rings.show(false);
+  traffic = createTraffic(scene, map, { enabled: qualityHigh });
   env.setGround(collisionHeight);
   env.onMapLoaded(currentMap, scenery);
   terrain.prime(map.runway.spawn.x, map.runway.spawn.z);
@@ -184,6 +206,7 @@ const hud = createHUD();
 const camRig = createCameraRig(camera);
 camRig.setGround((x, z) => collisionHeight(x, z));
 const audio = createAudio();
+const audioView = { x: 0, y: 0, z: 0, mode: 'CHASE' }; // reused each frame for Doppler/distance
 const minimap = createMinimap();
 const panel = createPanel();
 panel.mount(document.body);
@@ -250,12 +273,16 @@ const world = {
     qualityHigh = q !== 'low';
     terrain.setFarTier(qualityHigh);
     terrain.setTrees(qualityHigh);
+    traffic.setEnabled(qualityHigh);
     env.setShadows(qualityHigh);
     renderer.shadowMap.enabled = qualityHigh;
   },
+  // POST FX setting: bloom + grade + sun flare. Still gated on HIGH quality and
+  // on the session auto-disable in post.js.
+  setPost(on) { postWanted = on !== false; post?.setWanted(postWanted); },
   async apply(sel) {
     await loadMap(MAPS.find(m => m.id === sel.map) || MAPS[0]);
-    env.setTimeOfDay(sel.time || 'day');
+    setTimeOfDay(sel.time || 'day');
     setAircraft(byId(sel.aircraft));
     if (sel.weather === 'live') {
       // Neutral until the async fetch resolves — never block flight start on it.
@@ -286,7 +313,7 @@ const world = {
   // map row unbrowsable.
   preview(sel) {
     setAircraft(byId(sel.aircraft));
-    env.setTimeOfDay(sel.time || 'day');
+    setTimeOfDay(sel.time || 'day');
     const r = currentMap.runway;
     resetOnRunway(ac, { x: r.spawn.x, z: r.spawn.z, y: r.y, headingRad: r.headingRad });
   },
@@ -335,7 +362,7 @@ controls.on('ap-wing', () => { if (flying()) autopilot.toggleWing(ac); });
 window.__sim = { ac, controls, game, world, autopilot, env, windField, minimap,
   terrainCounts: () => terrain.counts(),
   get rings() { return gauntletRings || rings; }, get map() { return currentMap; },
-  get camName() { return camRig.modeName; }, get trails() { return trails; }, scene, renderer };
+  get camName() { return camRig.modeName; }, get trails() { return trails; }, get traffic() { return traffic; }, scene, renderer };
 
 // --- boot: pre-build terrain around the spawn, then reveal the menu ---
 // (setTimeout, not rAF: headless/hidden pages stop delivering animation frames
@@ -413,7 +440,7 @@ function frame(now) {
 
   plane.group.position.set(ac.pos.x, ac.pos.y, ac.pos.z);
   plane.group.quaternion.set(ac.q.x, ac.q.y, ac.q.z, ac.q.w);
-  plane.animate(c, ac.rpmNorm, dt);
+  plane.animate(c, ac.rpmNorm, dt, ac);
   plane.group.visible = camRig.modeName !== 'COCKPIT';
   // Six-pack auto-shows in the cockpit, auto-hides otherwise — but only on a
   // camera-mode transition, so it never flickers per frame and the manual `i`
@@ -431,6 +458,7 @@ function frame(now) {
     plan: autopilot.getPlan(), // v5-R4 moving-map route overlay
   });
   panel.update(ac);
+  if (isFlying) fx.wake(ac, dt);
   fx.update(dt);
   // A jump of hundreds of metres in one frame is a restart/teleport: drop the
   // trails, or they would draw a streak across the sky to the new position.
@@ -439,6 +467,7 @@ function frame(now) {
   if (game.state === 'menu' && trails.smokeOn) trails.reset();
   trails.update(ac, isFlying ? dt : 0, camera.position, isFlying);
   windField.setTime(elapsed);
+  scenery.userData?.tick?.(elapsed);   // lighthouse beams etc.
   const sock = scenery.userData?.windsock;
   if (sock) {
     const w = windField.get();
@@ -455,15 +484,21 @@ function frame(now) {
   // single digits of tiles (TILE_CAP is 220).
   if (!mapLoading && currentMap.prefetch) currentMap.prefetch(ac.pos.x, ac.pos.z, COARSE_TILE_RADIUS);
   env.update(ac, dt, elapsed, camera.position);
+  traffic.update(dt, camera.position, elapsed);
   camRig.setInput(isFlying);
   if (game.state === 'menu') camRig.updateMenu(ac, dt);
   else camRig.update(ac, dt);
   if (isFlying) {
     hud.update(ac, c, dt, ringBearing ?? null);
     hud.setAP(autopilot.status(ac));
-    audio.update(ac, c);
+    audioView.x = camera.position.x; audioView.y = camera.position.y; audioView.z = camera.position.z;
+    audioView.mode = camRig.modeName;
+    audio.update(ac, c, audioView);
   }
 
-  renderer.render(scene, camera);
+  if (postWanted && qualityHigh && !(post && post.disabled)) {
+    if (!post) { post = createPost(renderer, scene, camera); if (postSunDir) post.setSun(postSunDir, postSunK); }
+    post.render();
+  } else renderer.render(scene, camera);
   window.__sim.frames = (window.__sim.frames || 0) + 1;
 }

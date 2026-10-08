@@ -251,29 +251,103 @@ export function createEnvironment(scene, renderer) {
   // Semi-transparent: the faceted seabed (maps/palette.js seabed()) shows
   // through as turquoise shallows near shore and deep blue offshore, so the
   // coastline grades naturally instead of meeting a hard sand stripe. Grazing
-  // angles turn opaque and reflect the sky (fresnel). The sun path is one
-  // smooth highlight on long, slow swells — high-frequency normals used to
-  // break it into noisy white blotches.
+  // angles turn opaque and reflect the sky (fresnel).
+  // v8: low-poly swell. A radial grid that follows the aircraft (fine at the
+  // camera, coarse at the horizon) is displaced by a few summed directional
+  // sines; normals come from screen derivatives so every facet is flat and
+  // catches the sun on its own. Amplitude fades out over shallows and far away.
+  // Shallowness comes from a small R8 depth texture sampled from map.height on a
+  // coarse grid around the aircraft: rebuilt a few rows per frame whenever we
+  // move 500 m, so there is no hitch. It is read-only cosmetics and never feeds
+  // back into map.height.
+  const DEPTH_N = 128, DEPTH_SPAN = 4000, DEPTH_ROWS = 12;
+  const DEPTH_LO = -40, DEPTH_HI = 10; // metres mapped to byte 0..255
+  const depthShown = new Uint8Array(DEPTH_N * DEPTH_N).fill(0);
+  const depthBuild = new Uint8Array(DEPTH_N * DEPTH_N);
+  const depthTex = new THREE.DataTexture(depthShown, DEPTH_N, DEPTH_N, THREE.RedFormat, THREE.UnsignedByteType);
+  depthTex.minFilter = depthTex.magFilter = THREE.LinearFilter;
+  depthTex.wrapS = depthTex.wrapT = THREE.ClampToEdgeWrapping;
+  depthTex.needsUpdate = true;
+  let heightFn = null, depthValid = false;
+  let build = null; // { cx, cz, row } while a rebuild is in flight
+  let shownX = 0, shownZ = 0;
+  function buildRows(n) {
+    const cell = DEPTH_SPAN / DEPTH_N, x0 = build.cx - DEPTH_SPAN / 2, z0 = build.cz - DEPTH_SPAN / 2;
+    for (let k = 0; k < n && build.row < DEPTH_N; k++, build.row++) {
+      const z = z0 + (build.row + 0.5) * cell;
+      for (let i = 0; i < DEPTH_N; i++) {
+        const h = heightFn(x0 + (i + 0.5) * cell, z);
+        depthBuild[build.row * DEPTH_N + i] = Math.round(clamp01((h - DEPTH_LO) / (DEPTH_HI - DEPTH_LO)) * 255);
+      }
+    }
+    if (build.row >= DEPTH_N) {
+      depthShown.set(depthBuild); depthTex.needsUpdate = true;
+      oceanMat.uniforms.depthRect.value.set(build.cx, build.cz, DEPTH_SPAN);
+      shownX = build.cx; shownZ = build.cz; depthValid = true; build = null;
+      oceanMat.uniforms.depthOn.value = 1;
+    }
+  }
+  function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+  function updateDepth(x, z) {
+    if (!heightFn) return;
+    if (!build && (!depthValid || Math.hypot(x - shownX, z - shownZ) > 500)) build = { cx: x, cz: z, row: 0 };
+    if (build) buildRows(depthValid ? DEPTH_ROWS : DEPTH_N); // first build is synchronous
+  }
+
   const oceanMat = new THREE.ShaderMaterial({
-    fog: false, transparent: true,
+    fog: false, transparent: true, side: THREE.DoubleSide,
     uniforms: {
       time: { value: 0 }, sunDir: { value: tod.sunDir.clone() },
       deep: { value: tod.oceanDeep.clone() }, shallow: { value: tod.oceanShallow.clone() },
       skyCol: { value: tod.skyHorizon.clone() }, sunColor: { value: tod.sunColor.clone() },
       fogColor: { value: tod.fog.clone() }, fogNear: { value: tod.fogNear }, fogFar: { value: tod.fogFar },
       glint: { value: 1.0 },
+      depthTex: { value: depthTex }, depthRect: { value: new THREE.Vector3(0, 0, DEPTH_SPAN) }, depthOn: { value: 0 },
     },
-    vertexShader: `varying vec3 vWorld;
-      void main(){ vec4 w=modelMatrix*vec4(position,1.0); vWorld=w.xyz;
+    vertexShader: `varying vec3 vWorld; varying float vSwell;
+      uniform float time,depthOn; uniform sampler2D depthTex; uniform vec3 depthRect;
+      // four directional sines, ~90 / 55 / 35 / 22 m, deep-water dispersion w=sqrt(g k)
+      float swell(vec2 p){
+        float h=0.0;
+        h+=0.42*sin(dot(p,vec2(0.9,0.44))*0.0698-time*0.83);
+        h+=0.26*sin(dot(p,vec2(-0.34,0.94))*0.1142-time*1.06);
+        h+=0.14*sin(dot(p,vec2(0.62,-0.78))*0.1795-time*1.33);
+        h+=0.07*sin(dot(p,vec2(-0.97,0.24))*0.2856-time*1.67);
+        return h;
+      }
+      void main(){
+        vec4 w=modelMatrix*vec4(position,1.0);
+        float amp=1.0;
+        if(depthOn>0.5){
+          vec2 uv=(w.xz-depthRect.xy)/depthRect.z+0.5;
+          float h=texture2D(depthTex,uv).r*50.0-40.0;
+          float edge=max(abs(uv.x-0.5),abs(uv.y-0.5));
+          amp=mix(smoothstep(-2.0,-9.0,h),1.0,smoothstep(0.42,0.5,edge));
+        }
+        // fade the swell out with distance: far facets would only shimmer
+        float dc=distance(w.xz,cameraPosition.xz);
+        amp*=1.0-smoothstep(1800.0,4200.0,dc);
+        vSwell=amp;
+        w.y+=swell(w.xz)*amp;
+        vWorld=w.xyz;
         gl_Position=projectionMatrix*viewMatrix*w; }`,
-    fragmentShader: `varying vec3 vWorld;
-      uniform float time,fogNear,fogFar,glint; uniform vec3 sunDir,deep,shallow,skyCol,sunColor,fogColor;
+    fragmentShader: `varying vec3 vWorld; varying float vSwell;
+      uniform float time,fogNear,fogFar,glint,depthOn; uniform vec3 sunDir,deep,shallow,skyCol,sunColor,fogColor;
+      uniform sampler2D depthTex; uniform vec3 depthRect;
+      float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
+      float vnoise(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.0-2.0*f);
+        return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x),f.y); }
       void main(){
         vec2 p=vWorld.xz;
-        vec3 n=normalize(vec3(
+        // flat facet normal from screen derivatives; fades toward a soft analytic
+        // ripple where the swell has faded out (shallows, distance)
+        vec3 nf=normalize(cross(dFdy(vWorld),dFdx(vWorld)));
+        if(nf.y<0.0) nf=-nf;
+        vec3 ns=normalize(vec3(
           sin(p.x*0.018-time*0.35)*0.035+sin((p.x+p.y)*0.011+time*0.27)*0.03,
           1.0,
           sin(p.y*0.015+time*0.3)*0.035+sin((p.y-p.x)*0.009-time*0.22)*0.03));
+        vec3 n=normalize(mix(ns,nf,vSwell*0.9));
         vec3 view=normalize(cameraPosition-vWorld);
         float fres=pow(1.0-max(dot(view,n),0.0),3.0);
         vec3 c=mix(deep,shallow,0.25);
@@ -285,13 +359,56 @@ export function createEnvironment(scene, renderer) {
         // shallows only near the aircraft: far off the seabed is coarse and
         // smooth-shaded, and showing it through would paint glowing bands
         float a=mix(mix(0.5,0.96,fres),1.0,smoothstep(900.0,2400.0,d));
+        // coastal foam: a soft band over the shallows, drifting in and out
+        float foam=0.0;
+        if(depthOn>0.5){
+          vec2 uv=(p-depthRect.xy)/depthRect.z+0.5;
+          float dep=-(texture2D(depthTex,uv).r*50.0-40.0);
+          float edge=max(abs(uv.x-0.5),abs(uv.y-0.5));
+          float inside=1.0-smoothstep(0.40,0.48,edge);
+          float nz=vnoise(p*0.09+vec2(time*0.05,-time*0.04));
+          float shore=1.0-smoothstep(0.0,3.0+nz*2.5,dep);               // wet edge
+          float lines=sin(dep*0.9-time*0.9+nz*5.0)*0.5+0.5;
+          float band=(1.0-smoothstep(2.0,12.0,dep))*smoothstep(0.55,0.95,lines)*(0.35+0.65*nz);
+          foam=clamp(shore*0.9+band*0.65,0.0,1.0)*inside*step(-0.05,dep+0.05);
+          foam*=1.0-smoothstep(1500.0,3000.0,d);
+        }
+        c=mix(c,vec3(0.93,0.97,1.0)*(0.3+0.7*glint),foam);
+        a=max(a,foam*0.95);
         float fg=smoothstep(fogNear,fogFar,d);
         c=mix(c,fogColor,fg);
         gl_FragColor=vec4(c,max(a,fg));
       }`,
   });
-  const ocean = new THREE.Mesh(new THREE.PlaneGeometry(24000, 24000, 1, 1), oceanMat);
-  ocean.rotation.x = -Math.PI / 2;
+  // Radial grid in the xz plane: ring radii grow geometrically (~6 m spacing at
+  // the centre, ~600 m at the 12 km rim), so a few thousand vertices cover it.
+  function radialGrid(rings, segs, rMin, rMax) {
+    const pos = new Float32Array((rings * segs + 1) * 3);
+    let o = 3; // vertex 0 = centre
+    const k = Math.log(rMax / rMin + 1);
+    for (let i = 1; i <= rings; i++) {
+      const r = rMin * (Math.exp(k * i / rings) - 1);
+      for (let j = 0; j < segs; j++) {
+        const a = j / segs * Math.PI * 2;
+        pos[o++] = Math.cos(a) * r; pos[o++] = 0; pos[o++] = Math.sin(a) * r;
+      }
+    }
+    const idx = [];
+    for (let j = 0; j < segs; j++) idx.push(0, 1 + (j + 1) % segs, 1 + j);
+    for (let i = 1; i < rings; i++) {
+      const a0 = 1 + (i - 1) * segs, b0 = 1 + i * segs;
+      for (let j = 0; j < segs; j++) {
+        const j1 = (j + 1) % segs;
+        idx.push(a0 + j, b0 + j1, b0 + j, a0 + j, a0 + j1, b0 + j1);
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setIndex(idx);
+    return g;
+  }
+  const ocean = new THREE.Mesh(radialGrid(72, 120, 40, 12000), oceanMat);
+  ocean.frustumCulled = false;
   ocean.position.y = 0;
   scene.add(ocean);
 
@@ -444,11 +561,14 @@ export function createEnvironment(scene, renderer) {
         exposure: renderer ? renderer.toneMappingExposure : null,
       };
     },
+    /** Ocean shallows/foam read the active map's height (cosmetic, read-only). */
+    setHeightFn(fn) { heightFn = fn; depthValid = false; build = null; oceanMat.uniforms.depthOn.value = 0; },
     update(ac, dt, elapsed, camPos) {
       oceanMat.uniforms.time.value = elapsed;
       skyMat.uniforms.time.value = elapsed;
       ocean.position.x = ac.pos.x;
       ocean.position.z = ac.pos.z;
+      updateDepth(ac.pos.x, ac.pos.z);
       sky.position.set(ac.pos.x, 0, ac.pos.z);
 
       updateClouds(ac, dt, camPos);

@@ -61,6 +61,15 @@ export function createCameraRig(camera) {
   let groundFn = null;
   let zoom = 1, zoomS = 1;
   let gBob = 0;                           // smoothed head drop under G (cockpit)
+  let headRoll = 0, headSway = 0;         // cockpit head lag in bank rate / lateral G
+  let fovS = 62;                          // smoothed FOV
+  let lastMode = -1;
+  // Chase spring state: camera and look point as offsets from the aircraft
+  // (so steady flight has zero lag; only yaw/pitch swings are lagged).
+  const camOff = new THREE.Vector3(), camVel = new THREE.Vector3();
+  const lookOff = new THREE.Vector3(), lookVel = new THREE.Vector3();
+  const tOff = new THREE.Vector3();
+  let turbS = 0, gSlow = 1, lastTd = null, tdKick = 0;   // shake inputs
   // Free-look (left drag): offsets in radians, spring back when released.
   let lookYaw = 0, lookPitch = 0, dragging = false, dragX = 0, dragY = 0;
   // Per-aircraft offsets (a 200 t airliner needs a much longer leash)
@@ -96,14 +105,24 @@ export function createCameraRig(camera) {
     if (pos.y < g + clearance) pos.y = g + clearance;
   }
 
-  // Smooth pseudo-random shake (sum of incommensurate sines), not per-frame
-  // white noise — that read as jitter rather than buffet.
+  // Smooth pseudo-random shake (sum of incommensurate low-frequency sines), not
+  // per-frame white noise. `mag` is metres at the camera, capped.
   function shake(mag, dt) {
     shakeT += dt;
-    const t = shakeT * 23;
+    mag = Math.min(mag, 0.45);
+    const t = shakeT * 9;
     camera.position.x += (Math.sin(t * 1.13) + Math.sin(t * 2.71 + 1.3)) * 0.5 * mag;
     camera.position.y += (Math.sin(t * 1.57 + 0.4) + Math.sin(t * 3.11 + 2.1)) * 0.5 * mag;
     camera.position.z += (Math.sin(t * 1.91 + 2.2) + Math.sin(t * 2.33 + 0.7)) * 0.5 * mag;
+  }
+
+  // Critically damped spring step on a vector offset (semi-implicit Euler).
+  function spring(x, v, goal, w, dt) {
+    const h = Math.min(dt, 0.05);
+    v.x += (w * w * (goal.x - x.x) - 2 * w * v.x) * h;
+    v.y += (w * w * (goal.y - x.y) - 2 * w * v.y) * h;
+    v.z += (w * w * (goal.z - x.z) - 2 * w * v.z) * h;
+    x.x += v.x * h; x.y += v.y * h; x.z += v.z * h;
   }
 
   // FLYBY: park the camera ahead of the aircraft, a little off its track, and
@@ -177,28 +196,47 @@ export function createCameraRig(camera) {
 
       // Speed sensation: FOV stretches toward Vne; shake from buffet/AB/ground roll
       const speedFrac = Math.min(1, ac.airspeed / (ac.p.maxSpeed || 88));
-      const fovBoost = 12 * speedFrac * speedFrac;
-      const nearStall = ac.airspeed > 15 && !ac.onGround && ac.alpha > 0.8 * ac.p.alphaStall;
-      const shakeMag =
-        (ac.stalled ? 0.30 : nearStall ? 0.12 : 0) +
-        (ac.abOn ? 0.10 : 0) +
-        (ac.onGround && ac.groundSpeed > 8 ? 0.06 * Math.min(1, ac.groundSpeed / 50) : 0);
+      const fovBoost = 8 * speedFrac * speedFrac;
+      // Turbulence proxy: fast part of the g-load (it minus a slow average).
+      const gl = ac.gLoad ?? 1;
+      gSlow += (gl - gSlow) * damp(1.5, dt);
+      turbS += (Math.min(1, Math.abs(gl - gSlow) * 2.5) - turbS) * damp(3, dt);
+      if (ac.touchdown && ac.touchdown !== lastTd) tdKick = Math.min(0.4, 0.06 + Math.abs(ac.touchdown.fpm || 0) / 1500);
+      lastTd = ac.touchdown;
+      tdKick *= Math.exp(-5 * dt);
+      const alphaFrac = ac.p.alphaStall ? ac.alpha / ac.p.alphaStall : 0;
+      const nearStall = ac.airspeed > 15 && !ac.onGround && alphaFrac > 0.8;
+      const shakeMag = Math.min(0.45,
+        (ac.stalled ? 0.12 : nearStall ? 0.02 + 0.10 * Math.min(1, (alphaFrac - 0.8) * 5) : 0) +
+        (ac.abOn ? 0.03 : 0) +
+        (!ac.onGround ? 0.05 * turbS * speedFrac : 0) +
+        (ac.onGround && ac.groundSpeed > 8 ? 0.025 * Math.min(1, ac.groundSpeed / 50) : 0) +
+        tdKick);
+      if (mode !== lastMode) { lastMode = mode; fovS = camera.fov; }
       const name = CAM_MODES[mode];
+      let fovT = 55, snapFov = false, shakeOn = true;
       frame.visible = name === 'COCKPIT';
 
       if (name === 'COCKPIT') {
-        // Head sinks under positive G and floats under negative — a few cm,
-        // just enough to feel a pull-up.
-        gBob += (Math.max(-1.5, Math.min(4, (ac.gLoad ?? 1) - 1)) - gBob) * damp(6, dt);
+        // Head sinks and is pushed back under positive G, floats under
+        // negative; it also lags the bank rate with a slight tilt and sways
+        // with lateral load. A few cm / a degree or two: felt, not seen.
+        const k = damp(6, dt);
+        gBob += (Math.max(-1.5, Math.min(4, gl - 1)) - gBob) * k;
+        headRoll += (Math.max(-0.07, Math.min(0.07, (ac.omega?.x || 0) * 0.04)) - headRoll) * k;
+        headSway += (Math.max(-0.5, Math.min(0.5, (ac.omega?.y || 0) * 0.15)) - headSway) * k;
+        right.set(0, 0, 1).applyQuaternion(tmpQ);
         camera.position.set(p.x, p.y, p.z)
-          .addScaledVector(fwd, cfg.cockpit.fwd)
-          .addScaledVector(up, cfg.cockpit.up - gBob * 0.035);
+          .addScaledVector(fwd, cfg.cockpit.fwd - gBob * 0.02)
+          .addScaledVector(up, cfg.cockpit.up - gBob * 0.035)
+          .addScaledVector(right, headSway * 0.03);
         camera.quaternion.copy(tmpQ).multiply(ALIGN);
         if (lookYaw || lookPitch) {
           camera.rotateY(lookYaw);
           camera.rotateX(-lookPitch);
         }
-        camera.fov = 72 + fovBoost * 0.7;
+        camera.rotateZ(headRoll);
+        fovT = 72 + fovBoost * 0.5;
       } else if (name === 'ORBIT') {
         orbitT += dt * 0.12;
         const r = cfg.orbitR * zoomS;
@@ -207,7 +245,7 @@ export function createCameraRig(camera) {
         camera.position.lerp(target, initialized ? damp(3, dt) : 1);
         camera.up.set(0, 1, 0);
         camera.lookAt(p.x, p.y, p.z);
-        camera.fov = 55;
+        fovT = 55; shakeOn = false;
       } else if (name === 'FLYBY') {
         if (!flybyArmed || !initialized) placeFlyby(ac);
         const dx = p.x - flybyPos.x, dy = p.y - flybyPos.y, dz = p.z - flybyPos.z;
@@ -220,7 +258,8 @@ export function createCameraRig(camera) {
         camera.lookAt(p.x, p.y, p.z);
         // Zoom to keep the airframe a steady size on screen, like a long lens.
         const span = 14 * (cfg.chaseDist / 14);
-        camera.fov = THREE.MathUtils.clamp(2 * Math.atan2(span, Math.max(1, dist)) * 180 / Math.PI, 8, 60);
+        fovT = THREE.MathUtils.clamp(2 * Math.atan2(span, Math.max(1, dist)) * 180 / Math.PI, 8, 60);
+        snapFov = true; shakeOn = false;
       } else { // CHASE — follow behind the yaw direction, spring-damped
         const yaw = Math.atan2(-fwd.z, fwd.x) + lookYaw;
         const dist = cfg.chaseDist * zoomS;
@@ -230,20 +269,28 @@ export function createCameraRig(camera) {
           p.x - Math.cos(yaw) * dist * horiz,
           p.y + cfg.chaseHeight * zoomS - fwd.y * dist * 0.36 + Math.sin(pitchOff) * dist,
           p.z + Math.sin(yaw) * dist * horiz);
-        clampAboveGround(target, 1.2);
-        if (!initialized) { camera.position.copy(target); }
-        else camera.position.lerp(target, damp(5.2, dt));
-        // Look a little ahead along the flight path (velocity), not just the
-        // nose, so turns and climbs open up the view where you are going.
+        // Critically damped springs on the offset from the aircraft: the camera
+        // lags into turns and swings out on yaw, settling without overshoot.
+        tOff.copy(target).sub(p);
         const sp = Math.hypot(ac.vel.x, ac.vel.y, ac.vel.z);
-        look.set(p.x, p.y, p.z).addScaledVector(fwd, 8 * zoomS);
+        // Look a little ahead along the flight path (velocity), not just the nose.
+        look.set(0, 0, 0).addScaledVector(fwd, 8 * zoomS);
         if (sp > 5 && !lookYaw) look.addScaledVector(v3.set(ac.vel.x, ac.vel.y, ac.vel.z), 6 / sp);
-        if (!initialized) lookS.copy(look); else lookS.lerp(look, damp(9, dt));
+        if (!initialized) { camOff.copy(tOff); camVel.set(0, 0, 0); lookOff.copy(look); lookVel.set(0, 0, 0); }
+        else {
+          spring(camOff, camVel, tOff, dragging || lookYaw ? 9 : 5.5, dt);
+          spring(lookOff, lookVel, look, 8, dt);
+        }
+        camera.position.set(p.x + camOff.x, p.y + camOff.y, p.z + camOff.z);
+        clampAboveGround(camera.position, 1.2);
+        lookS.set(p.x + lookOff.x, p.y + lookOff.y, p.z + lookOff.z);
         camera.up.set(0, 1, 0).lerp(up, 0.18).normalize(); // lean into the bank a touch
         camera.lookAt(lookS);
-        camera.fov = 62 + fovBoost;
+        fovT = 62 + fovBoost;
       }
-      if (shakeMag > 0) shake(shakeMag, dt);
+      fovS = snapFov ? fovT : fovS + (fovT - fovS) * damp(2.5, dt);
+      camera.fov = fovS;
+      if (shakeOn && shakeMag > 0.002) shake(shakeMag, dt);
       camera.updateProjectionMatrix();
       initialized = true;
     },
