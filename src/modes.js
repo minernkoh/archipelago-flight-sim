@@ -164,6 +164,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
     world.setPixelRatioCap?.(settings.pixelRatioCap);
     world.setAutoRes?.(settings.autoRes);
     world.setQuality?.(settings.quality);   // v6: draw distance + shadows
+    world.setPost?.(settings.post);
     atcVoice.setEnabled(settings.atc);
     atc?.setArmed(settings.atc);
     if (!settings.atc) silenceAtc();

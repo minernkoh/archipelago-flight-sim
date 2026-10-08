@@ -22,6 +22,7 @@ import { createTrails } from './trails.js';
 import { createWind, WEATHER } from './physics/wind.js';
 import { fetchLiveWeather } from './liveweather.js';
 import { loadPlan } from './planner.js';
+import { createPost } from './post.js';
 import { createMinimap } from './minimap.js';
 import { createPanel } from './panel.js';
 import { createAutopilot } from './autopilot.js';
@@ -53,8 +54,14 @@ scene.add(camera);   // hosts the cockpit frame (camera.js)
 // above ~56 fps creep it back up. Asymmetric steps + the dead band between
 // them keep it from hunting.
 let pixelRatioCap = 2, autoRes = true, resScale = 1;
+// Post-processing (post.js): built lazily the first time it is wanted, so LOW
+// quality and headless fallbacks never allocate the HDR target.
+let post = null, postWanted = true, postSunDir = null, postSunK = 1;
 let resAccT = 0, resFrames = 0;
-const applyPixelRatio = () => renderer.setPixelRatio(Math.min(window.devicePixelRatio, pixelRatioCap) * resScale);
+const applyPixelRatio = () => {
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, pixelRatioCap) * resScale);
+  post?.setSize();
+};
 function adaptResolution(rawDt) {
   if (!autoRes) return;
   resAccT += rawDt; resFrames++;
@@ -65,16 +72,24 @@ function adaptResolution(rawDt) {
   if (fps < 40) resScale = Math.max(0.6, resScale - 0.1);
   else if (fps > 56) resScale = Math.min(1, resScale + 0.05);
   if (resScale !== prev) applyPixelRatio();
+  post?.observeFps(fps, resScale);
 }
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  post?.setSize();
 });
 
 // --- world state (swappable) ---
 const env = createEnvironment(scene, renderer);
+function setTimeOfDay(name) {
+  env.setTimeOfDay(name);
+  postSunDir = env.sunDirection();            // cached: post reads it every frame
+  postSunK = name === 'night' ? 0.25 : 1;     // the "sun" is the moon at night
+  post?.setSun(postSunDir, postSunK);
+}
 let currentMap = archipelagoMap;
 let terrain = createTerrain(scene, currentMap);
 // Survives map swaps: loadMap builds a fresh streamer, which would otherwise
@@ -253,9 +268,12 @@ const world = {
     env.setShadows(qualityHigh);
     renderer.shadowMap.enabled = qualityHigh;
   },
+  // POST FX setting: bloom + grade + sun flare. Still gated on HIGH quality and
+  // on the session auto-disable in post.js.
+  setPost(on) { postWanted = on !== false; post?.setWanted(postWanted); },
   async apply(sel) {
     await loadMap(MAPS.find(m => m.id === sel.map) || MAPS[0]);
-    env.setTimeOfDay(sel.time || 'day');
+    setTimeOfDay(sel.time || 'day');
     setAircraft(byId(sel.aircraft));
     if (sel.weather === 'live') {
       // Neutral until the async fetch resolves — never block flight start on it.
@@ -286,7 +304,7 @@ const world = {
   // map row unbrowsable.
   preview(sel) {
     setAircraft(byId(sel.aircraft));
-    env.setTimeOfDay(sel.time || 'day');
+    setTimeOfDay(sel.time || 'day');
     const r = currentMap.runway;
     resetOnRunway(ac, { x: r.spawn.x, z: r.spawn.z, y: r.y, headingRad: r.headingRad });
   },
@@ -464,6 +482,9 @@ function frame(now) {
     audio.update(ac, c);
   }
 
-  renderer.render(scene, camera);
+  if (postWanted && qualityHigh && !(post && post.disabled)) {
+    if (!post) { post = createPost(renderer, scene, camera); if (postSunDir) post.setSun(postSunDir, postSunK); }
+    post.render();
+  } else renderer.render(scene, camera);
   window.__sim.frames = (window.__sim.frames || 0) + 1;
 }
