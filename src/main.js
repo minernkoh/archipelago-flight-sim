@@ -19,6 +19,7 @@ import { createGameFlow } from './modes.js';
 import { createTrainingSystem } from './training.js';
 import { createEffects } from './effects.js';
 import { createTrails } from './trails.js';
+import { createTraffic } from './traffic.js';
 import { createWind, WEATHER } from './physics/wind.js';
 import { fetchLiveWeather } from './liveweather.js';
 import { loadPlan } from './planner.js';
@@ -83,6 +84,8 @@ let qualityHigh = true;
 let scenery = currentMap.createScenery(scene);
 let rings = createRings(scene, { course: currentMap.raceCourse, heightFn: currentMap.height });
 rings.show(false);
+// Ambient boats / pattern traffic / birds (visual only; off on LOW quality).
+let traffic = createTraffic(scene, currentMap, { enabled: qualityHigh });
 
 // Collision height folds solid obstacles in; aero ground effect and AGL use
 // bare terrain so overflying a rooftop doesn't fake ground effect.
@@ -116,6 +119,7 @@ async function loadMap(map) {
   terrain.disposeAll();
   scene.remove(scenery); disposeGroup(scenery);
   rings.dispose();
+  traffic.dispose();
   gauntletRings?.dispose(); gauntletRings = null;
   gatesAdapter.clear();
   currentMap = map;
@@ -143,6 +147,7 @@ async function loadMap(map) {
   scenery = map.createScenery(scene);
   rings = createRings(scene, { course: map.raceCourse, heightFn: map.height, finalDir: map.finalGateDir });
   rings.show(false);
+  traffic = createTraffic(scene, map, { enabled: qualityHigh });
   env.setGround(collisionHeight);
   env.onMapLoaded(currentMap, scenery);
   terrain.prime(map.runway.spawn.x, map.runway.spawn.z);
@@ -250,6 +255,7 @@ const world = {
     qualityHigh = q !== 'low';
     terrain.setFarTier(qualityHigh);
     terrain.setTrees(qualityHigh);
+    traffic.setEnabled(qualityHigh);
     env.setShadows(qualityHigh);
     renderer.shadowMap.enabled = qualityHigh;
   },
@@ -335,7 +341,7 @@ controls.on('ap-wing', () => { if (flying()) autopilot.toggleWing(ac); });
 window.__sim = { ac, controls, game, world, autopilot, env, windField, minimap,
   terrainCounts: () => terrain.counts(),
   get rings() { return gauntletRings || rings; }, get map() { return currentMap; },
-  get camName() { return camRig.modeName; }, get trails() { return trails; }, scene, renderer };
+  get camName() { return camRig.modeName; }, get trails() { return trails; }, get traffic() { return traffic; }, scene, renderer };
 
 // --- boot: pre-build terrain around the spawn, then reveal the menu ---
 // (setTimeout, not rAF: headless/hidden pages stop delivering animation frames
@@ -439,6 +445,7 @@ function frame(now) {
   if (game.state === 'menu' && trails.smokeOn) trails.reset();
   trails.update(ac, isFlying ? dt : 0, camera.position, isFlying);
   windField.setTime(elapsed);
+  scenery.userData?.tick?.(elapsed);   // lighthouse beams etc.
   const sock = scenery.userData?.windsock;
   if (sock) {
     const w = windField.get();
@@ -455,6 +462,7 @@ function frame(now) {
   // single digits of tiles (TILE_CAP is 220).
   if (!mapLoading && currentMap.prefetch) currentMap.prefetch(ac.pos.x, ac.pos.z, COARSE_TILE_RADIUS);
   env.update(ac, dt, elapsed, camera.position);
+  traffic.update(dt, camera.position, elapsed);
   camRig.setInput(isFlying);
   if (game.state === 'menu') camRig.updateMenu(ac, dt);
   else camRig.update(ac, dt);
