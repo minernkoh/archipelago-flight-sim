@@ -211,6 +211,7 @@ function gearRig(legs) {
       else if (st.agl < 200 && vy < -2) up = false;
     } else up = false;
     const target = up ? 1 : 0;
+    if (st) st.gearPos = pos; // read by audio.js for the gear motor (visual state only)
     if (pos === target) return;
     const step = dt * 0.25;
     pos = pos < target ? Math.min(target, pos + step) : Math.max(target, pos - step);

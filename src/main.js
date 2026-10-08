@@ -432,7 +432,7 @@ function frame(now) {
 
   plane.group.position.set(ac.pos.x, ac.pos.y, ac.pos.z);
   plane.group.quaternion.set(ac.q.x, ac.q.y, ac.q.z, ac.q.w);
-  plane.animate(c, ac.rpmNorm, dt);
+  plane.animate(c, ac.rpmNorm, dt, ac);
   plane.group.visible = camRig.modeName !== 'COCKPIT';
   // Six-pack auto-shows in the cockpit, auto-hides otherwise — but only on a
   // camera-mode transition, so it never flickers per frame and the manual `i`
