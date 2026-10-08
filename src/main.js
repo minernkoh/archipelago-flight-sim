@@ -184,6 +184,7 @@ const hud = createHUD();
 const camRig = createCameraRig(camera);
 camRig.setGround((x, z) => collisionHeight(x, z));
 const audio = createAudio();
+const audioView = { x: 0, y: 0, z: 0, mode: 'CHASE' }; // reused each frame for Doppler/distance
 const minimap = createMinimap();
 const panel = createPanel();
 panel.mount(document.body);
@@ -461,7 +462,9 @@ function frame(now) {
   if (isFlying) {
     hud.update(ac, c, dt, ringBearing ?? null);
     hud.setAP(autopilot.status(ac));
-    audio.update(ac, c);
+    audioView.x = camera.position.x; audioView.y = camera.position.y; audioView.z = camera.position.z;
+    audioView.mode = camRig.modeName;
+    audio.update(ac, c, audioView);
   }
 
   renderer.render(scene, camera);
