@@ -5,7 +5,7 @@ A browser flight simulator built with **Three.js**
 ## Features
 
 - **5 flyable aircraft** with distinct handling.
-- **Procedural archipelago** terrain plus a stylized Singapore.
+- **Procedural archipelago**, a stylized Singapore, an alpine valley and real-world airfields.
 - **Ring races** — timed courses through floating gates.
 - **Flight school** — PPL-style guided lessons.
 - **Living world** — crisp faceted low-poly terrain, clear turquoise shallows,
@@ -14,6 +14,9 @@ A browser flight simulator built with **Three.js**
 - **Cameras** — chase (wheel zoom, drag to look around), cockpit with a framed
   canopy, orbit, and a cinematic fly-by (`V`).
 - **Airshow touches** — wingtip vortices when you pull G, smoke trail on `K`.
+- **Feel**: spring-damped chase camera with buffet shake, control expo, Shift for fine control, prop audio with Doppler.
+- **Eye candy**: bloom and lens flare, ocean swell with coastal foam and spray, nav lights and strobes, retracting gear.
+- **A living world**: villages, lighthouses, boats, circuit traffic and birds.
 - **Dynamic resolution** — keeps the frame rate up on weaker GPUs.
 
 ## Getting started
@@ -27,7 +30,7 @@ npm run serve      # → http://localhost:8123
 
 ```bash
 npm test           # physics tests
-node test/e2e.mjs  # end-to-end test
+npm run e2e        # end-to-end test (needs npm run serve)
 ```
 
 ## Layout
