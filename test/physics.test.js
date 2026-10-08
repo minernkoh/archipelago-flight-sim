@@ -1227,6 +1227,49 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
     coarseTris < 121 * 36 * 36 * 2 * 0.06, `${coarseTris} tris`);
 }
 
+// ---- v9 fine-tier LOD ----
+// Chunks 3+ rings out build every other grid line; their borders keep every
+// fine vertex, so neighbours of either LOD must share identical border
+// vertices (any mismatch is a crack you can see the sky through).
+{
+  const { createTerrain } = await import('../src/terrain.js');
+  const { archipelagoMap } = await import('../src/maps/archipelago.js');
+  const meshes = new Set();
+  const t = createTerrain({ add: m => meshes.add(m), remove: m => meshes.delete(m) }, archipelagoMap);
+  t.setFarTier(false); t.setTrees(false);
+  t.update(1234, -567, 999, true);
+  let tris = 0, lod = 0, shadowed = 0;
+  for (const m of meshes) {
+    tris += m.geometry.attributes.position.count / 3;
+    if (m.userData.step === 2) lod++;
+    if (m.receiveShadow) shadowed++;
+    const a = m.geometry.attributes.position.array, pts = new Set();
+    for (let i = 0; i < a.length; i += 3) {
+      if (Math.abs(Math.abs(a[i]) - 300) < 1e-6 || Math.abs(Math.abs(a[i + 2]) - 300) < 1e-6)
+        pts.add(`${(m.position.x + a[i]).toFixed(3)},${(m.position.z + a[i + 2]).toFixed(3)},${a[i + 1]}`);
+    }
+    m.userData.border = pts;
+  }
+  check('terrain LOD: 96 of 121 fine chunks decimated', meshes.size === 121 && lod === 96, `${meshes.size} chunks, ${lod} LOD`);
+  check('terrain LOD: fine tier under half its old 313,632 triangles', tris < 313632 / 2, `${tris} tris`);
+  check('terrain LOD: only the 3x3 chunks the shadow box reaches receive shadows', shadowed === 9, `${shadowed}`);
+  let shared = 0, missing = 0;
+  for (const m of meshes) for (const n of meshes) {
+    const dx = n.position.x - m.position.x, dz = n.position.z - m.position.z;
+    if (!((Math.abs(dx) === 600 && dz === 0) || (dx === 0 && Math.abs(dz) === 600))) continue;
+    const lx = m.position.x + dx / 2, lz = m.position.z + dz / 2;
+    for (const p of m.userData.border) {
+      const [x, z] = p.split(',').map(Number);
+      if ((dx && Math.abs(x - lx) > 1e-3) || (dz && Math.abs(z - lz) > 1e-3)) continue;
+      shared++; if (!n.userData.border.has(p)) missing++;
+    }
+  }
+  check('terrain LOD: every shared border vertex matches its neighbour (no cracks)', shared > 10000 && missing === 0, `${shared} shared, ${missing} unmatched`);
+  t.update(1234 + 600, -567, 999, true);   // one chunk east: rings shift, LODs swap
+  let lod2 = 0; for (const m of meshes) if (m.userData.step === 2) lod2++;
+  check('terrain LOD: moving a chunk re-levels the rings without holes', meshes.size === 121 && lod2 === 96, `${meshes.size} chunks, ${lod2} LOD`);
+}
+
 // ---- v7 vegetation: cosmetic forest layer ----
 // Trees are scattered from map.forest(); it must never plant one on a runway,
 // in the sea, or (by construction) move the terrain. The shared noise must be

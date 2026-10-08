@@ -51,7 +51,9 @@ const GradeShader = {
 
 export function createPost(renderer, scene, camera) {
   const size = renderer.getSize(new THREE.Vector2());
-  const target = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: 4 });
+  // MSAA only where the canvas has it: main.js turns it off on software GL.
+  const samples = renderer.getContext().getContextAttributes()?.antialias ? 4 : 0;
+  const target = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples });
   const composer = new EffectComposer(renderer, target);
   composer.addPass(new RenderPass(scene, camera));
   // Threshold is above anything diffuse: only the sun/moon disc, ocean glints and

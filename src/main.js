@@ -33,7 +33,22 @@ const PHYS_DT = 1 / 120;
 // Fictional maps first, then real-world airfields (streamed elevation).
 const MAPS = [archipelagoMap, singaporeMap, alpineMap, ...AIRPORTS.map(createRealWorldMap)];
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+// Software rasterisers (SwiftShader in headless Chrome, llvmpipe, Windows'
+// Basic Render Driver) pay for 4x MSAA on every pixel: the perf probe
+// (test/perfprobe.mjs) measured it at ~45% of the frame there. Real GPUs keep it.
+// Asked of a throwaway context because antialias can't change after creation.
+function softwareGL() {
+  try {
+    const gl = document.createElement('canvas').getContext('webgl2');
+    if (!gl) return false;
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    const name = String(gl.getParameter(dbg ? dbg.UNMASKED_RENDERER_WEBGL : gl.RENDERER));
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    return /swiftshader|llvmpipe|softpipe|software|basic render/i.test(name);
+  } catch { return false; }
+}
+const SOFTWARE_GL = softwareGL();
+const renderer = new THREE.WebGLRenderer({ antialias: !SOFTWARE_GL });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -359,7 +374,7 @@ controls.on('ap-ias', () => { if (flying()) autopilot.toggleIas(ac, controls); }
 controls.on('ap-nav', () => { if (flying()) autopilot.toggleNav(ac); });
 controls.on('ap-wing', () => { if (flying()) autopilot.toggleWing(ac); });
 
-window.__sim = { ac, controls, game, world, autopilot, env, windField, minimap,
+window.__sim = { softwareGL: SOFTWARE_GL, ac, controls, game, world, autopilot, env, windField, minimap,
   terrainCounts: () => terrain.counts(),
   get rings() { return gauntletRings || rings; }, get map() { return currentMap; },
   get camName() { return camRig.modeName; }, get trails() { return trails; }, get traffic() { return traffic; }, scene, renderer };

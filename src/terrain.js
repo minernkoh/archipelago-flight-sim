@@ -22,6 +22,14 @@ import { archipelagoMap } from './maps/archipelago.js';
 const CHUNK = 600, RES = 36, VIEW_R = 5;      // fine: 11x11 -> +/-3300 m
 const FAR_CHUNK = 3600, FAR_RES = 18, FAR_R = 2; // coarse: 5x5 -> +/-9000 m
 const FAR_DROP = 2;                           // metres the coarse tier sits below
+// Fine-tier LOD (v9). Software-rendered runs spent ~40% of every frame on the
+// fine tier's ~140k visible triangles, most of them in chunks a kilometre or
+// more away where a 17 m facet is a pixel or two. Chunks LOD_R or more rings
+// out build every other grid line (33 m facets, a quarter of the triangles);
+// their EDGES keep every fine vertex, so they stitch crack-free to any
+// neighbour (see buildChunk). SHADOW_R: only the chunks the ~280 m shadow box
+// can reach receive shadows; the rest skip the shadow-map lookups entirely.
+const LOD_R = 3, SHADOW_R = 1;
 
 /**
  * Which coarse cells to keep for a position — pure, so the tiling is unit
@@ -246,7 +254,7 @@ export function createTerrain(scene, map = archipelagoMap) {
   // than low-poly; a flat colour per facet is what gives the style its crisp
   // cut-paper look. Costs a non-indexed geometry (6 verts per quad).
   const _fc = new THREE.Color();
-  function buildChunk(cx, cz, size = CHUNK, res = RES, drop = 0) {
+  function buildChunk(cx, cz, size = CHUNK, res = RES, drop = 0, step = 1) {
     const x0 = cx * size, z0 = cz * size;
     const n = res + 1, cell = size / res, half = size / 2;
     const hgt = new Float32Array(n * n);
@@ -254,11 +262,17 @@ export function createTerrain(scene, map = archipelagoMap) {
       hgt[j * n + i] = heightFn(x0 - half + i * cell, z0 - half + j * cell);
     }
     if (drop) return buildSmooth(hgt, n, cell, half, x0, z0, drop);
-    const tris = res * res * 2;
+    // Triangles are emitted by grid index so a decimated chunk (step 2) uses
+    // bit-identical positions and heights to its full-res neighbour.
+    const m = res / step;
+    const tris = m * m * 2 + (step > 1 ? m * 4 : 0);   // + one split per edge cell
     const pos = new Float32Array(tris * 9);
     const col = new Float32Array(tris * 9);
     let p = 0;
-    const tri = (ax, az, ah, bx, bz, bh, qx, qz, qh) => {
+    const tri = (ai, aj, bi, bj, qi, qj) => {
+      const ax = -half + ai * cell, az = -half + aj * cell, ah = hgt[aj * n + ai];
+      const bx = -half + bi * cell, bz = -half + bj * cell, bh = hgt[bj * n + bi];
+      const qx = -half + qi * cell, qz = -half + qj * cell, qh = hgt[qj * n + qi];
       // face normal (y-up) -> slope as rise/run, same scale the maps expect
       const ux = bx - ax, uy = bh - ah, uz = bz - az, vx = qx - ax, vy = qh - ah, vz = qz - az;
       const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
@@ -271,27 +285,45 @@ export function createTerrain(scene, map = archipelagoMap) {
       for (let k = 0; k < 9; k += 3) { col[p + k] = _fc.r; col[p + k + 1] = _fc.g; col[p + k + 2] = _fc.b; }
       p += 9;
     };
-    for (let j = 0; j < res; j++) for (let i = 0; i < res; i++) {
-      const xa = -half + i * cell, xb = xa + cell, za = -half + j * cell, zb = za + cell;
-      const h00 = hgt[j * n + i], h10 = hgt[j * n + i + 1], h01 = hgt[(j + 1) * n + i], h11 = hgt[(j + 1) * n + i + 1];
+    // An edge lying on the chunk border and spanning two fine cells is split at
+    // its fine midpoint, so the border matches a full-res neighbour exactly.
+    const onBorder = (ai, aj, bi, bj) => (ai === bi && (ai === 0 || ai === res)) || (aj === bj && (aj === 0 || aj === res));
+    const face = (ai, aj, bi, bj, qi, qj) => {
+      if (step > 1) {
+        const e = [[ai, aj, bi, bj, qi, qj], [bi, bj, qi, qj, ai, aj], [qi, qj, ai, aj, bi, bj]];
+        for (const [a1, a2, b1, b2, c1, c2] of e) {
+          if (Math.abs(a1 - b1) + Math.abs(a2 - b2) > 1 && onBorder(a1, a2, b1, b2)) {
+            const mi = (a1 + b1) >> 1, mj = (a2 + b2) >> 1;
+            face(a1, a2, mi, mj, c1, c2); face(mi, mj, b1, b2, c1, c2);
+            return;
+          }
+        }
+      }
+      tri(ai, aj, bi, bj, qi, qj);
+    };
+    for (let j = 0; j < m; j++) for (let i = 0; i < m; i++) {
+      const ia = i * step, ib = ia + step, ja = j * step, jb = ja + step;
       // alternate the diagonal so facets don't all lean the same way
       if ((i + j) & 1) {
-        tri(xa, za, h00, xa, zb, h01, xb, za, h10);
-        tri(xb, za, h10, xa, zb, h01, xb, zb, h11);
+        face(ia, ja, ia, jb, ib, ja);
+        face(ib, ja, ia, jb, ib, jb);
       } else {
-        tri(xa, za, h00, xa, zb, h01, xb, zb, h11);
-        tri(xa, za, h00, xb, zb, h11, xb, za, h10);
+        face(ia, ja, ia, jb, ib, jb);
+        face(ia, ja, ib, jb, ib, ja);
       }
     }
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    geo.setAttribute('position', new THREE.BufferAttribute(p < pos.length ? pos.slice(0, p) : pos, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(p < col.length ? col.slice(0, p) : col, 3));
     geo.computeVertexNormals();
-    const mesh = new THREE.Mesh(geo, drop ? farMat : mat);
-    mesh.position.set(x0, -drop, z0);
-    mesh.receiveShadow = !drop;   // shadows only land on the fine tier
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(x0, 0, z0);
+    mesh.userData.step = step;
     return mesh;
   }
+  // Chebyshev ring of a fine chunk about the aircraft's chunk -> grid step.
+  const ringOf = (cx, cz) => Math.max(Math.abs(cx - curCx), Math.abs(cz - curCz));
+  const stepFor = (cx, cz) => (ringOf(cx, cz) >= LOD_R ? 2 : 1);
 
   // Keys are tier-prefixed ("n:" fine, "f:" coarse) so one map holds both.
   function want(px, pz) {
@@ -311,7 +343,17 @@ export function createTerrain(scene, map = archipelagoMap) {
       }
     }
     pending.length = 0;
-    for (const key of need) if (!chunks.has(key)) pending.push(key);
+    for (const key of need) {
+      const m = chunks.get(key);
+      if (!m) { pending.push(key); continue; }
+      if (key.startsWith('n:')) {
+        const [ax, az] = key.slice(2).split(',').map(Number);
+        m.receiveShadow = ringOf(ax, az) <= SHADOW_R;
+        // Wrong LOD: rebuild in place. The old mesh stays up until the new one
+        // replaces it, so a swap never opens a hole.
+        if (m.userData.step !== stepFor(ax, az)) pending.push(key);
+      }
+    }
     // Fine tier first, then nearest-first inside each tier: the ground under
     // the aircraft must never be the thing that is still missing.
     const rank = (k) => {
@@ -332,9 +374,10 @@ export function createTerrain(scene, map = archipelagoMap) {
       want(px, pz);
       for (let n = 0; n < budget && pending.length; n++) {
         const key = pending.shift();
-        if (chunks.has(key)) continue;
         const fine = key.startsWith('n:');
         const [cx, cz] = key.slice(2).split(',').map(Number);
+        const old = chunks.get(key);
+        if (old && (!fine || old.userData.step === stepFor(cx, cz))) continue;
         // Real-world maps return sea level for tiles that have not arrived, so
         // a coarse chunk built too early bakes a flat plate that never
         // corrects. Defer it (re-queued at the back) until its tiles land.
@@ -343,8 +386,10 @@ export function createTerrain(scene, map = archipelagoMap) {
           pending.push(key);
           continue;
         }
-        const mesh = fine ? buildChunk(cx, cz)
+        const mesh = fine ? buildChunk(cx, cz, CHUNK, RES, 0, stepFor(cx, cz))
           : buildChunk(cx, cz, FAR_CHUNK, FAR_RES, FAR_DROP);
+        if (fine) mesh.receiveShadow = ringOf(cx, cz) <= SHADOW_R;
+        if (old) { scene.remove(old); old.geometry.dispose(); }
         chunks.set(key, mesh);
         scene.add(mesh);
       }
