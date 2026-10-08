@@ -75,6 +75,7 @@ window.addEventListener('resize', () => {
 
 // --- world state (swappable) ---
 const env = createEnvironment(scene, renderer);
+env.setHeightFn(archipelagoMap.height);
 let currentMap = archipelagoMap;
 let terrain = createTerrain(scene, currentMap);
 // Survives map swaps: loadMap builds a fresh streamer, which would otherwise
@@ -119,6 +120,7 @@ async function loadMap(map) {
   gauntletRings?.dispose(); gauntletRings = null;
   gatesAdapter.clear();
   currentMap = map;
+  env.setHeightFn(map.height);
   // Real-world maps stream elevation tiles; wait for the ones around the spawn
   // before building terrain so chunks/minimap sample real ground, not sea. Caps
   // at 12 s so a slow network degrades to a flat world rather than hanging;
@@ -431,6 +433,7 @@ function frame(now) {
     plan: autopilot.getPlan(), // v5-R4 moving-map route overlay
   });
   panel.update(ac);
+  if (isFlying) fx.wake(ac, dt);
   fx.update(dt);
   // A jump of hundreds of metres in one frame is a restart/teleport: drop the
   // trails, or they would draw a streak across the sky to the new position.
