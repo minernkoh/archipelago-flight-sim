@@ -364,7 +364,7 @@ function pfd(x, X, Y, S, v, ac) {
   if (v.mach > 0.3) x.fillText(`M ${v.mach.toFixed(2)}`, X + S * 0.09, cy + R + S * 0.05);
   x.restore();
 }
-function nd(x, X, Y, S, v) {
+function nd(x, X, Y, S, v, radio = null) {
   x.save(); x.beginPath(); x.rect(X, Y, S, S); x.clip();
   x.fillStyle = '#05070a'; x.fillRect(X, Y, S, S);
   const cx = X + S / 2, cy = Y + S * 0.72, R = S * 0.6;
@@ -385,6 +385,16 @@ function nd(x, X, Y, S, v) {
   x.fillStyle = '#34ff6a'; x.textAlign = 'right';
   x.fillText(`GS ${Math.round(v.ias)}`, X + S * 0.95, Y + S * 0.07);
   x.restore();
+  if (radio) {
+    // NAV 1 active / standby in the top corners, magenta when it is the field's ILS
+    x.save();
+    x.font = `bold ${S * 0.045}px "B612 Mono", monospace`; x.textBaseline = 'top';
+    x.textAlign = 'left'; x.fillStyle = radio.nav.ils ? MAG : '#34ff6a';
+    x.fillText(`NAV1 ${radio.nav.act}`, X + S * 0.05, Y + S * 0.12);   // under HDG / GS, clear of the rose
+    x.textAlign = 'right'; x.fillStyle = '#c8a43a';
+    x.fillText(`SBY ${radio.nav.sby}`, X + S * 0.95, Y + S * 0.12);
+    x.restore();
+  }
 }
 function eicas(x, X, Y, S, v) {
   x.save(); x.beginPath(); x.rect(X, Y, S, S); x.clip();
@@ -423,7 +433,7 @@ export function drawGlassPanel(x, W, H, ac, layout = 'airliner', ui = null) {
     x.fillStyle = '#0e1013'; x.fillRect(X - 8, Y - 8, S + 16, S + 16);
     if (ac.avionics === false) { x.fillStyle = '#020304'; x.fillRect(X, Y, S, S); return; }   // dead bus: blank glass
     if (k === 'pfd') pfd(x, X, Y, S, v, ac);
-    else if (k === 'nd') nd(x, X, Y, S, v);
+    else if (k === 'nd') nd(x, X, Y, S, v, ui?.radio);
     else eicas(x, X, Y, S, v);
   });
   if (!band) return [];

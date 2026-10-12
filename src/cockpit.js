@@ -165,7 +165,9 @@ export function createCockpit(cfg, hud, p = null) {
     ...(p?.startup ? [{ id: 'bat', label: 'BAT' }, { id: 'mags', label: 'MAGS' }, { id: 'start', label: 'START' }, { id: 'mix', label: 'MIX' }] : []),
     { id: 'flap-up', label: 'FLAP ▲' }, { id: 'flap-dn', label: 'FLAP ▼' },
     // circuit breakers (lit = in): avionics bus, autopilot, flap motor
-    ...(glass ? [] : [{ id: 'cb-avn', label: 'CB AVN' }, { id: 'cb-ap', label: 'CB AP' }, { id: 'cb-flap', label: 'CB FLP' }]),
+    { id: 'cb-avn', label: 'CB AVN' }, { id: 'cb-ap', label: 'CB AP' }, { id: 'cb-flap', label: 'CB FLP' },
+    // glass cockpits tune NAV 1 here (the steam panels have it in the radio stack)
+    ...(glass ? [{ id: 'nav-dn', label: 'NAV−' }, { id: 'nav-up', label: 'NAV+' }, { id: 'nav-swap', label: 'NAV ⇄' }] : []),
   ];
   const strips = [];
   // switch rows drawn INTO the instrument panel canvas (instruments.js), so
@@ -245,13 +247,13 @@ export function createCockpit(cfg, hud, p = null) {
     const over = std(0x3c4148, 0.85);
     panel = panelFace(eye, {
       w: 1.92, h: 0.48, x: 0.92, y: -0.4, tilt: 0.12, cw: 1536, ch: 384,
-      draw: (x, W, H, ac) => drawGlassPanel(x, W, H, ac, 'airliner'),
+      draw: (x, W, H, ac) => drawGlassPanel(x, W, H, ac, 'airliner', ui),
     });
     box(eye, darker, 0.36, 0.56, 2.0, 1.12, -0.4, 0);
     box(eye, dark, 0.42, 0.05, 2.1, 0.92, -0.14, 0, 0, 0, 0.1);              // glareshield
     box(eye, std(0x1f2226, 0.6), 0.04, 0.06, 1.0, 0.72, -0.12, 0);          // MCP face
     // MCP: the autopilot buttons along the glareshield
-    strips.push(buttonStrip(eye, { buttons: [...AP_BUTTONS, ...sysButtons], w: 0.112 * (AP_BUTTONS.length + sysButtons.length), h: 0.05, x: 0.697, y: -0.12, z: 0 }));
+    strips.push(buttonStrip(eye, { buttons: [...AP_BUTTONS, ...sysButtons], w: 0.088 * (AP_BUTTONS.length + sysButtons.length), h: 0.05, x: 0.697, y: -0.12, z: 0 }));
     box(eye, over, 1.4, 0.06, 1.9, 0.0, 0.5, 0);                              // overhead
     rodBetween(eye, trim, [1.08, -0.17, 0], [0.82, 0.47, 0], 0.022);         // centre post
     for (const s of [-1, 1]) {
