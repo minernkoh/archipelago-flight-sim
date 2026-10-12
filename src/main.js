@@ -672,7 +672,7 @@ function frame(now) {
   // single digits of tiles (TILE_CAP is 220).
   if (!mapLoading && currentMap.prefetch) currentMap.prefetch(view.pos.x, view.pos.z, COARSE_TILE_RADIUS);
   env.update(view, dt, elapsed, camera.position, camera);
-  traffic.update(dt, camera.position, elapsed);
+  traffic.update(dt, camera.position, elapsed, isFlying ? ac.pos : null);   // the circuit traffic steps away from you
   camRig.setInput(isFlying);
   if (game.state === 'menu') camRig.updateMenu(ac, dt);
   else if (!replaying) camRig.update(ac, dt);

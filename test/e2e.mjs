@@ -863,6 +863,19 @@ const aiNow = await sim('(() => { const a = __sim.world.aiTraffic(); return a &&
 check('AI circuit traffic is flying the pattern', !!aiNow && typeof aiNow.phase === 'string', JSON.stringify(aiNow));
 const jetArr = await sim(`(() => { for (let t = 0; t < 700; t += 2) { const j = __sim.traffic.aiStates(t).find(a => a.heavy); if (j) return { t, phase: j.phase, toAim: Math.round(j.toAim) }; } return null; })()`);
 check('an AI airliner arrives on a straight-in ILS', !!jetArr && jetArr.phase === 'final', JSON.stringify(jetArr));
+// v12 avoidance: park right beside an airborne club aircraft; it steps away vertically
+const avoid0 = await page.evaluate(() => {
+  const s = window.__sim, list = s.traffic.aiStates().filter(a => !a.heavy && a.y - s.map.runway.y > 120);
+  if (!list.length) return null;
+  const a = list[0];
+  s.ac.pos = { x: a.x + 150, y: a.y, z: a.z }; s.ac.vel = { x: 0, y: 0, z: 0 }; s.ac.onGround = false;
+  return { id: a.id, y: Math.round(a.y) };
+});
+if (avoid0) {
+  await simSettle(5000);
+  const avoid1 = await sim(`(() => { const a = __sim.traffic.aiStates().find(x => x.id === ${avoid0.id}); return { avoiding: a.avoiding, y: Math.round(a.y) }; })()`);
+  check('AI circuit traffic steps away from you vertically when you get close', avoid1.avoiding === true, JSON.stringify({ avoid0, avoid1 }));
+} else check('AI circuit traffic steps away from you vertically when you get close', false, 'no airborne club aircraft to test with');
 
 // A lesson must leave the frequency to the instructor.
 await page.evaluate(() => window.__sim.game.toMenu());

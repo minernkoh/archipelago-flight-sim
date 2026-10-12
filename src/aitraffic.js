@@ -100,11 +100,12 @@ export function clockOf(headingRad, dx, dz) {
 }
 
 /**
- * An airliner on a straight-in ILS arrival (v12): appears `out` m out on the
- * extended centreline, flies the 3 deg glideslope to the same aim point at
- * approach speed, flares, rolls out decelerating, and vacates near the end of
- * the runway, then is gone until the next arrival `period` seconds later.
- * `offset` shifts the cycle (traffic.js times it into a gap in the circuit).
+ * An airliner's cycle (v12): a straight-in ILS arrival from `out` m on the
+ * 3 deg glideslope to the aim point, rollout, and a taxi turn off the runway
+ * to the right; then, half a cycle later, a departure: it lines up 400 m
+ * down the runway (ahead of the player's spawn), takes off and climbs out.
+ * The circuit traffic repeats every half cycle, so the departure falls in
+ * the same clear window the arrival was slotted into (slotStraightIn).
  */
 export function createStraightInTraffic(rwy, { out = 14000, vapp = 72, period = 596, offset = 0, type = 'Heavy jet' } = {}) {
   const h = rwy.headingRad;
@@ -112,38 +113,73 @@ export function createStraightInTraffic(rwy, { out = 14000, vapp = 72, period = 
   const spawnU = rwy.spawn.x * fx + rwy.spawn.z * fz;
   const aim = spawnU + 300;
   const x1 = Number.isFinite(rwy.x1) ? rwy.x1 : aim + 2500;
+  const GSL = Math.tan(3 * Math.PI / 180);
   const tFinal = out / vapp;                                  // seconds on the glideslope
   const decel = 2.2, vTaxi = 12;
   const rollLen = Math.max(200, Math.min((vapp * vapp - vTaxi * vTaxi) / (2 * decel), x1 - aim - 150));
   const tRoll = (vapp - Math.sqrt(Math.max(vTaxi * vTaxi, vapp * vapp - 2 * decel * rollLen))) / decel;
+  const uExit = aim + vapp * tRoll - 0.5 * decel * tRoll * tRoll;
+  const TR = 45, tTurn = (Math.PI / 2 * TR) / vTaxi, tTaxi = tTurn + 160 / vTaxi;
+  // departure: start of its roll (cycle time), acceleration, rotate speed, climb
+  const dep0 = tFinal - 20 + period / 2, accel = 2.0, vRot = 68, uDep = spawnU + 400;
+  const tTO = vRot / accel, tClimb = 4000 / 75, climb = Math.tan(8 * Math.PI / 180);
   const out_ = { x: 0, y: 0, z: 0, u: 0, v: 0, yaw: h, pitch: 0, bank: 0, phase: 'gone', onRunway: false, toAim: 1e9,
-    type, heavy: true, speed: 0, agl: 0, visible: false };
+    type, heavy: true, speed: 0, agl: 0, visible: false, departing: false };
+  const put = (u, v, y, yaw, spd) => {
+    out_.visible = true; out_.u = u; out_.v = v; out_.speed = spd; out_.agl = y;
+    out_.x = fx * u + rx * v; out_.z = fz * u + rz * v; out_.y = (rwy.y || 0) + y; out_.yaw = yaw; out_.bank = 0;
+    return out_;
+  };
   return {
-    period, tFinal, tRoll,
-    /** Arrival-cycle time (s) at absolute time t; 0 = appears on the extended centreline. */
+    period, tFinal, tRoll, tTaxi, dep0, tTO, tClimb,
+    /** Cycle time (s) at absolute time t; 0 = the arrival appears on the extended centreline. */
     cycle(t) { return (((t + offset) % period) + period) % period; },
     at(t) {
       const c = this.cycle(t);
-      let u, y, spd;
-      if (c < tFinal) {
-        u = aim - out + vapp * c; spd = vapp;
-        y = (aim - u) * Math.tan(3 * Math.PI / 180);
+      out_.departing = false;
+      if (c < tFinal) {                                          // final
+        const u = aim - out + vapp * c;
+        let y = (aim - u) * GSL;
         if (aim - u < 400) y *= 0.55 + 0.45 * (aim - u) / 400;   // the flare: shallower over the threshold
         out_.phase = 'final'; out_.pitch = aim - u < 400 ? 0.05 : 0.035;
-      } else if (c < tFinal + tRoll) {
-        const tr = c - tFinal;
-        u = aim + vapp * tr - 0.5 * decel * tr * tr; spd = vapp - decel * tr; y = 0;
-        out_.phase = 'runway'; out_.pitch = 0;
-      } else {
-        out_.phase = 'gone'; out_.visible = false; out_.onRunway = false; out_.toAim = 1e9; out_.speed = 0;
+        put(u, 0, y, h, vapp);
+        out_.onRunway = y < 15; out_.toAim = aim - u;
         return out_;
       }
-      out_.visible = true;
-      out_.u = u; out_.v = 0; out_.speed = spd; out_.agl = y;
-      out_.x = fx * u; out_.z = fz * u; out_.y = (rwy.y || 0) + y;
-      out_.yaw = h; out_.bank = 0;
-      out_.onRunway = out_.phase === 'runway' || y < 15;
-      out_.toAim = aim - u;
+      if (c < tFinal + tRoll) {                                  // landing roll
+        const tr = c - tFinal;
+        out_.phase = 'runway'; out_.pitch = 0;
+        put(aim + vapp * tr - 0.5 * decel * tr * tr, 0, 0, h, vapp - decel * tr);
+        out_.onRunway = true; out_.toAim = aim - out_.u;
+        return out_;
+      }
+      if (c < tFinal + tRoll + tTaxi) {                          // turn off to the right and taxi clear
+        const tt = c - tFinal - tRoll;
+        out_.phase = 'taxi'; out_.pitch = 0;
+        if (tt < tTurn) {
+          const a = tt * vTaxi / TR;                             // 0 .. pi/2
+          put(uExit + TR * Math.sin(a), TR * (1 - Math.cos(a)), 0, h - a, vTaxi);
+        } else put(uExit + TR, TR + (tt - tTurn) * vTaxi, 0, h - Math.PI / 2, vTaxi);
+        out_.onRunway = out_.v < 40; out_.toAim = 1e9;
+        return out_;
+      }
+      if (c >= dep0 && c < dep0 + tTO + tClimb) {                // departure
+        const td = c - dep0;
+        out_.departing = true;
+        if (td < tTO) {
+          out_.phase = 'departure'; out_.pitch = 0;
+          put(uDep + 0.5 * accel * td * td, 0, 0, h, accel * td);
+          out_.onRunway = true;
+        } else {
+          const tc = td - tTO, d = vRot * tc;
+          out_.phase = 'climb'; out_.pitch = 0.14;
+          put(uDep + 0.5 * accel * tTO * tTO + d, 0, d * climb, h, vRot);
+          out_.onRunway = out_.agl < 15;
+        }
+        out_.toAim = 1e9;
+        return out_;
+      }
+      out_.phase = 'gone'; out_.visible = false; out_.onRunway = false; out_.toAim = 1e9; out_.speed = 0;
       return out_;
     },
   };
@@ -158,7 +194,7 @@ export function slotStraightIn(rwy, circuit, spacing) {
   const clubPeriod = circuit.total / circuit.speed;
   const busy = (t) => [0, spacing].some(o => { const a = circuit.at(t + o); return a.onRunway || (a.phase === 'final' && a.toAim < 1500); });
   const probe = createStraightInTraffic(rwy, { period: 2 * clubPeriod });
-  const t0 = probe.tFinal - 1500 / 72 - 6, t1 = probe.tFinal + probe.tRoll + 10;
+  const t0 = probe.tFinal - 1500 / 72 - 6, t1 = Math.max(probe.tFinal + probe.tRoll + 10, probe.dep0 - probe.period / 2 + probe.tTO + 8);
   for (let off = 0; off < 2 * clubPeriod; off += 2) {
     let ok = true;
     // with offset `off` the jet's cycle time c happens at absolute t = c - off

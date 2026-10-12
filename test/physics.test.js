@@ -1668,6 +1668,10 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
       if (jetBusy && club) clash++;
     }
     check('AI airliner: straight-in on the 3 deg glideslope, lands and rolls out', onGs && seenRoll);
+    const ph = new Set(); let taxiEndV = 0, climbTop = 0;
+    for (let t = 0; t < jet.period; t += 0.5) { const j = jet.at(t); if (!j.visible) continue; ph.add(j.phase); if (j.phase === 'taxi') taxiEndV = Math.max(taxiEndV, j.v); if (j.phase === 'climb') climbTop = Math.max(climbTop, j.agl); }
+    check('AI airliner: turns off and taxis clear after landing, then departs and climbs out',
+      ['final', 'runway', 'taxi', 'departure', 'climb'].every(p => ph.has(p)) && taxiEndV > 150 && climbTop > 400, `${[...ph].join(',')} taxi v ${taxiEndV.toFixed(0)} climb ${climbTop.toFixed(0)}`);
     check('AI airliner: slotted so it never shares short final (1.5 km) or the runway with the circuit traffic', clash === 0 && jet.slotted === true, `${clash} clashes, slotted ${jet.slotted}`);
   }
   check('clock positions', clockOf(0, 100, 0) === 12 && clockOf(0, 0, 100) === 3 && clockOf(0, -100, 0) === 6 && clockOf(0, 0, -100) === 9);

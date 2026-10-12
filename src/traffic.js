@@ -419,7 +419,8 @@ export function createTraffic(scene, map, opts = {}) {
   }
 
   // ------------------------------------------------------------------ API --
-  function update(dt, camPos, t) {
+  const avoidY = [0, 0];
+  function update(dt, camPos, t, playerPos = null) {
     if (!enabled) return;
     const ix = Math.floor(camPos.x / CELL), iz = Math.floor(camPos.z / CELL);
     refreshT += dt;
@@ -438,9 +439,11 @@ export function createTraffic(scene, map, opts = {}) {
       if (jetMesh.visible) {
         jetMesh.position.set(j.x, j.y + 5.5, j.z);
         jetMesh.rotation.set(0, j.yaw, j.pitch);
-        jetSt.onGround = j.phase === 'runway'; jetSt.agl = j.agl; jetSt.airspeed = jetSt.groundSpeed = j.speed;
-        jetCtl.throttle = j.phase === 'runway' ? 0 : 0.35;
-        try { jetAnim.animate(jetCtl, j.phase === 'runway' ? 0.3 : 0.55, dt, jetSt); } catch { /* cosmetic only */ }
+        const ground = j.phase === 'runway' || j.phase === 'taxi' || j.phase === 'departure';
+        jetSt.onGround = ground; jetSt.agl = j.agl; jetSt.airspeed = jetSt.groundSpeed = j.speed;
+        jetCtl.throttle = j.departing ? 1 : j.phase === 'runway' || j.phase === 'taxi' ? 0.05 : 0.35;
+        jetCtl.flaps = j.phase === 'climb' ? 0.33 : j.departing ? 0.33 : 1;
+        try { jetAnim.animate(jetCtl, j.departing ? 0.95 : ground ? 0.3 : 0.55, dt, jetSt); } catch { /* cosmetic only */ }
       }
     }
     if (hasRunway) {
@@ -453,7 +456,15 @@ export function createTraffic(scene, map, opts = {}) {
           // both club aircraft fly the touch-and-go circuit, half a lap apart
           aiT = t;
           const a = ai.at(t + i * AI_SPACING);
-          mesh.position.set(a.x, a.y + 1.1, a.z);
+          // collision avoidance: step up or down away from the player when
+          // close (within 600 m and 150 m vertically), then rejoin
+          let target = 0;
+          if (playerPos && a.y - (rwy.y || 0) > 60) {
+            const dx = a.x - playerPos.x, dz = a.z - playerPos.z, dy = a.y - playerPos.y;
+            if (dx * dx + dz * dz < 600 * 600 && Math.abs(dy) < 150) target = dy >= 0 || a.y - (rwy.y || 0) < 200 ? 150 : -150;
+          }
+          avoidY[i] += Math.max(-6 * dt, Math.min(6 * dt, target - avoidY[i]));
+          mesh.position.set(a.x, a.y + 1.1 + avoidY[i], a.z);
           if (i === 0) { bank0 += (a.bank - bank0) * Math.min(1, dt * 1.5); mesh.rotation.set(bank0, a.yaw, a.pitch); }
           else { bank1 += (a.bank - bank1) * Math.min(1, dt * 1.5); mesh.rotation.set(bank1, a.yaw, a.pitch); }
           continue;
@@ -477,7 +488,7 @@ export function createTraffic(scene, map, opts = {}) {
     /** Both circuit aircraft (copies), for the tower to pick the one that matters. */
     aiStates(t = aiT) {
       if (!enabled || !ai) return [];
-      const list = [0, 1].map(i => Object.assign(aiOut[i], ai.at(t + i * AI_SPACING), { id: i }));
+      const list = [0, 1].map(i => { const o = Object.assign(aiOut[i], ai.at(t + i * AI_SPACING), { id: i }); o.y += avoidY[i]; o.avoiding = Math.abs(avoidY[i]) > 1; return o; });
       if (jet) { const j = jet.at(t); if (j.visible) list.push(Object.assign(aiOut[2], j, { id: 2 })); }
       return list;
     },
