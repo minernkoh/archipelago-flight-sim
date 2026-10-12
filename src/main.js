@@ -404,8 +404,13 @@ const world = {
     if (!list.length) return null;
     const busy = list.find(a => a.onRunway) || list.find(a => a.phase === 'final' && a.toAim < 2500);
     if (busy) return busy;
+    // aircraft parked, taxiing or holding off the runway are not traffic
+    const GROUND = new Set(['parked', 'pushback', 'taxi', 'holding', 'lineup', 'gone']);
     let best = null, bd = Infinity;
-    for (const a of list) { const d = Math.hypot(a.x - pos.x, a.y - pos.y, a.z - pos.z); if (d < bd) { bd = d; best = a; } }
+    for (const a of list) {
+      if (GROUND.has(a.phase)) continue;
+      const d = Math.hypot(a.x - pos.x, a.y - pos.y, a.z - pos.z); if (d < bd) { bd = d; best = a; }
+    }
     return best;
   },
   // Tests/tools: force the full or lite shading path (overrides the auto drop).
