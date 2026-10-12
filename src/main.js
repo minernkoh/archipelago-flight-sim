@@ -69,6 +69,8 @@ function cockpitAction(id) {
     case 'mags': if (s && s.mags !== 'START') { const C = ['OFF', 'R', 'L', 'BOTH']; s.mags = C[(C.indexOf(s.mags) + 1) % C.length]; } break;
     case 'flap-up': controls.flapStep(-1); break;
     case 'flap-dn': controls.flapStep(1); break;
+    case 'hdg-dn': case 'hdg-up': autopilot.sel.hdg = (Math.round(autopilot.sel.hdg / 5) * 5 + (id === 'hdg-up' ? 5 : -5) + 360) % 360; break;
+    case 'alt-dn': case 'alt-up': autopilot.sel.alt = Math.max(0, (Math.round(autopilot.sel.alt * 3.28084 / 100) * 100 + (id === 'alt-up' ? 100 : -100)) / 3.28084); break;
     default: if (id.startsWith('ap')) controls.fire(id === 'ap' ? 'ap' : id);
   }
   audio.click?.();
@@ -608,6 +610,8 @@ function frame(now) {
     cockpit.setUi({
       ap: apS.on, 'ap-hdg': apS.hdg, 'ap-alt': apS.alt, 'ap-ias': apS.ias, 'ap-nav': apS.nav,
       'ap-apr': apS.apr ? (apS.apr.loc && apS.apr.gs ? true : 'APR·') : false,
+      // the + knobs show the selected value, so the setting is readable in the cockpit
+      'hdg-up': '+' + String(Math.round(apS.selHdg) % 360).padStart(3, '0'), 'alt-up': '+' + (Math.round(apS.selAlt * 3.28084 / 100) * 100),
       bat: !!ac.sys?.battery, mix: (ac.sys?.mixture ?? 1) > 0.3, start: ac.sys?.mags === 'START',
       mags: ac.sys ? (ac.sys.mags === 'OFF' ? false : 'M ' + (ac.sys.mags === 'START' ? 'ST' : ac.sys.mags)) : false,
       'flap-up': controls.flapDetent === 0, 'flap-dn': controls.flapDetent > 0 ? (flapNames?.[controls.flapDetent] ?? true) : false,

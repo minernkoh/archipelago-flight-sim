@@ -292,9 +292,16 @@ const ckClick = await page.evaluate(async () => {
   const before = s.autopilot.modes.hdg;
   if (Math.abs(p.x) > 1 || Math.abs(p.y) > 1) return { offscreen: [p.x, p.y], before };
   fire('mousedown', x, y, cv); fire('mouseup', x, y);
-  return { x: Math.round(x), y: Math.round(y), before, after: s.autopilot.modes.hdg };
+  // the HDG+ selector knob steps the heading bug by 5 deg
+  const k = s.cockpit.buttonWorld('hdg-up'); k.project(s.camera);
+  const kx = r.left + (k.x + 1) / 2 * r.width, ky = r.top + (1 - k.y) / 2 * r.height;
+  const bug0 = s.autopilot.sel.hdg;
+  fire('mousedown', kx, ky, cv); fire('mouseup', kx, ky);
+  const bugStep = ((s.autopilot.sel.hdg - Math.round(bug0 / 5) * 5) + 360) % 360;
+  return { x: Math.round(x), y: Math.round(y), before, after: s.autopilot.modes.hdg, bugStep };
 });
 check('clicking the cockpit HDG button engages heading hold', ckClick.before === false && ckClick.after === true, JSON.stringify(ckClick));
+check('clicking the HDG+ knob steps the heading bug 5 deg', ckClick.bugStep === 5, JSON.stringify(ckClick));
 await press('h');   // HDG back off
 await press('c');
 await settle(400);

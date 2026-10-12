@@ -268,8 +268,8 @@ export function drawSteamPanel(x, W, H, ac, hud, ui = null) {
   if (!ui) return [];
   const hits = [];
   const apY = H * 0.1 + 2 * H * 0.27 - H * 0.02;
-  x.fillStyle = '#121416'; x.fillRect(rx, apY, rw, H * 0.3);
-  hits.push(...drawButtons(x, ui.ap, ui.states, { x: rx, y: apY, w: rw, h: H * 0.3 }, 3));
+  x.fillStyle = '#121416'; x.fillRect(rx, apY, rw, H * 0.34);
+  hits.push(...drawButtons(x, ui.ap, ui.states, { x: rx, y: apY, w: rw, h: H * 0.34 }, Math.ceil(ui.ap.length / 2)));
   // master / mags / starter / mixture / flaps: a switch column at the left edge
   const sx = W * 0.012, sw = gx - r * 1.2 - sx;
   if (sw > 40 && ui.sys.length) hits.push(...drawButtons(x, ui.sys, ui.states, { x: sx, y: H * 0.05, w: sw, h: H * 0.9 }, 1));

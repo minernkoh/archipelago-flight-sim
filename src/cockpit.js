@@ -119,6 +119,8 @@ function buttonStrip(parent, { buttons, w, h, x, y, z = 0, tilt = 0, orient = 'f
 const AP_BUTTONS = [
   { id: 'ap', label: 'AP' }, { id: 'ap-hdg', label: 'HDG' }, { id: 'ap-alt', label: 'ALT' },
   { id: 'ap-ias', label: 'IAS' }, { id: 'ap-nav', label: 'NAV' }, { id: 'ap-apr', label: 'APR' },
+  // selector knobs: heading bug and selected altitude
+  { id: 'hdg-dn', label: 'HDG−' }, { id: 'hdg-up', label: 'HDG+' }, { id: 'alt-dn', label: 'ALT−' }, { id: 'alt-up', label: 'ALT+' },
 ];
 
 function yoke(parent, mat, grip, z, x, y) {

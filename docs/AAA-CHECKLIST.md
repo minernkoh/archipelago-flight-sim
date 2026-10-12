@@ -36,7 +36,7 @@ Those are marked as scope limits, not as defects.
 | Area | Rating | Evidence |
 |---|---|---|
 | Exterior models: PBR paint, animated controls, gear, lights | Met | `src/aircraft/meshes.js`, `test/showroom.mjs` |
-| 3D cockpits with live instruments and clickable controls | Partial | `src/cockpit.js`. AP, battery, mags, starter, mixture and flap switches are clickable; individual knobs, radios and breakers are not, unlike study-level MSFS/X-Plane aircraft. |
+| 3D cockpits with live instruments and clickable controls | Partial | `src/cockpit.js`. AP mode buttons, HDG and ALT selector knobs, battery, mags, starter, mixture and flap switches are clickable; individual knobs, radios and breakers are not, unlike study-level MSFS/X-Plane aircraft. |
 | Five distinct aircraft (trainer, aerobatic, fighter, airliner, flying wing) | Met | `src/aircraft/params.js` |
 
 ## World
