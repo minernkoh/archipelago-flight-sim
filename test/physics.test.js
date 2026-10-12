@@ -1909,6 +1909,13 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
       }
     }
   }
+  { const { engineAux } = await import('../src/instruments.js');
+    const ac = createAircraft({ pos: { x: 0, y: 1000, z: 0 }, vel: { x: 55, y: 0, z: 0 } });
+    for (let i = 0; i < 60; i++) step(ac, { elevator: 0, aileron: 0, rudder: 0, throttle: 0.6, flaps: 0, brakes: false, trim: 0 }, env, 1 / 120);
+    const ok = engineAux(ac); failSystem(ac, 'vacuum'); failSystem(ac, 'electrical'); const bad = engineAux(ac);
+    setColdStart(ac); ac.sys.battery = true; ac.sys.mags = 'START'; const crank = engineAux(ac);
+    check('instruments: vacuum 4.5-5.5 inHg and a charging ammeter when healthy; 0 inHg and a discharge after the failures; starter draw',
+      ok.vac > 4.5 && ok.vac < 5.5 && ok.amps >= 0 && bad.vac === 0 && bad.amps < 0 && crank.amps <= -50 && crank.vac === 0, JSON.stringify({ ok, bad, crank })); }
   check('instruments: every panel layout draws for every aircraft, healthy, failed and cold', errs.length === 0, errs.slice(0, 3).join(' | '));
 }
 

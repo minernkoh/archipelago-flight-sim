@@ -435,7 +435,14 @@ export function createTraffic(scene, map, opts = {}) {
   // ------------------------------------------------------------------ API --
   const avoidY = [0, 0];
   const jetAir = { on: false, x: 0, y: 0, z: 0 };
-  function update(dt, camPos, t, playerPos = null) {
+  // coordinated TCAS (v12): main.js passes the player's resolution advisory;
+  // the intruder it names manoeuvres the complementary way (you CLIMB, it
+  // descends), as two TCAS-equipped aircraft coordinate over their datalink
+  let coordRa = null;
+  const raY = (id) => !coordRa || coordRa.id !== id ? null : coordRa.sense === 'CLIMB' ? -150 : 150;
+  let jetAvoid = 0;
+  function update(dt, camPos, t, playerPos = null, ra = null) {
+    coordRa = ra;
     if (!enabled) return;
     const ix = Math.floor(camPos.x / CELL), iz = Math.floor(camPos.z / CELL);
     refreshT += dt;
@@ -450,11 +457,14 @@ export function createTraffic(scene, map, opts = {}) {
     jetAir.on = false;
     if (jet && jetMesh) {
       const j = jet.at(t);
-      if (j.visible && j.agl > 20) { jetAir.on = true; jetAir.x = j.x; jetAir.y = j.y; jetAir.z = j.z; }
+      // the airliner flies its RA too (only ever airborne, never below 300 m AGL)
+      const jt = j.visible && j.agl > 300 ? (raY(2) ?? 0) : 0;
+      jetAvoid += Math.max(-8 * dt, Math.min(8 * dt, jt - jetAvoid));
+      if (j.visible && j.agl > 20) { jetAir.on = true; jetAir.x = j.x; jetAir.y = j.y + jetAvoid; jetAir.z = j.z; }
       const near = Math.hypot(camPos.x - j.x, camPos.z - j.z) < 20000;
       jetMesh.visible = j.visible && near;
       if (jetMesh.visible) {
-        jetMesh.position.set(j.x, j.y + 5.5, j.z);
+        jetMesh.position.set(j.x, j.y + 5.5 + jetAvoid, j.z);
         jetMesh.rotation.set(0, j.yaw, j.pitch);
         const ground = j.agl < 1;
         jetSt.onGround = ground; jetSt.agl = j.agl; jetSt.airspeed = jetSt.groundSpeed = j.speed;
@@ -479,6 +489,8 @@ export function createTraffic(scene, map, opts = {}) {
           // then rejoin
           let target = 0;
           if (a.y - (rwy.y || 0) > 60) {
+            const rq = raY(i);
+            if (rq != null) target = rq;                      // coordinated RA wins
             for (const th of [playerPos, jetAir.on ? jetAir : null]) {
               if (!th || target) continue;
               const dx = a.x - th.x, dz = a.z - th.z, dy = a.y - th.y;
@@ -510,8 +522,8 @@ export function createTraffic(scene, map, opts = {}) {
     /** Both circuit aircraft (copies), for the tower to pick the one that matters. */
     aiStates(t = aiT) {
       if (!enabled || !ai) return [];
-      const list = [0, 1].map(i => { const o = Object.assign(aiOut[i], ai.at(t + i * AI_SPACING, -i * AI_SPACING), { id: i }); o.y += avoidY[i]; o.avoiding = Math.abs(avoidY[i]) > 1; return o; });
-      if (jet) { const j = jet.at(t); if (j.visible) list.push(Object.assign(aiOut[2], j, { id: 2 })); }
+      const list = [0, 1].map(i => { const o = Object.assign(aiOut[i], ai.at(t + i * AI_SPACING, -i * AI_SPACING), { id: i }); o.y += avoidY[i]; o.avoidDy = avoidY[i]; o.avoiding = Math.abs(avoidY[i]) > 1; return o; });
+      if (jet) { const j = jet.at(t); if (j.visible) { const o = Object.assign(aiOut[2], j, { id: 2 }); o.y += jetAvoid; o.avoiding = Math.abs(jetAvoid) > 1; list.push(o); } }
       return list;
     },
     setEnabled(on) { enabled = !!on; group.visible = enabled; },

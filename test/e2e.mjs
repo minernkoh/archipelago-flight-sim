@@ -906,6 +906,23 @@ await page.evaluate(() => window.__sim.tcasInject([]));
 await simSettle(800);
 const tcasOff = await sim('({ level: __sim.tcas?.level ?? null, shown: document.querySelector("#tcas").classList.contains("show") })');
 await page.evaluate(() => window.__sim.tcasInject(null));
+// coordinated RA: with RAs forced on, a co-altitude intruder 500 m ahead is an
+// RA; the AI aircraft it names manoeuvres the complementary way
+const coord = await page.evaluate(() => {
+  const s = window.__sim, list = s.traffic.aiStates().filter(a => !a.heavy && a.y - s.map.runway.y > 120);
+  if (!list.length) return null;
+  const ac = s.ac; s.tcasForceRa(true);
+  s.tcasInject([{ id: list[0].id, x: ac.pos.x + 500, y: ac.pos.y, z: ac.pos.z }]);
+  return { id: list[0].id };
+});
+let coordRes = null;
+if (coord) {
+  await simSettle(5000);
+  coordRes = await sim(`(() => { const a = __sim.traffic.aiStates().find(x => x.id === ${coord.id}); return { level: __sim.tcas?.level, sense: __sim.tcas?.sense, dy: Math.round(a.avoidDy) }; })()`);
+}
+await page.evaluate(() => { window.__sim.tcasInject(null); window.__sim.tcasForceRa(null); });
+check('TCAS: an RA is coordinated, the intruder flies the opposite sense',
+  !!coordRes && coordRes.level === 'RA' && ((coordRes.sense === 'CLIMB' && coordRes.dy < -10) || (coordRes.sense === 'DESCEND' && coordRes.dy > 10)), JSON.stringify(coordRes));
 check('TCAS: close traffic gives a TA on the HUD (no RA in a light aircraft), and it clears',
   tcasOn.level === 'TA' && tcasOn.sense === null && tcasOn.hud === 'TRAFFIC' && tcasOn.shown && tcasOff.level === null && !tcasOff.shown,
   JSON.stringify({ tcasOn, tcasOff }));

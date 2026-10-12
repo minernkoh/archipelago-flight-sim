@@ -241,6 +241,32 @@ function smallGauge(x, cx, cy, r, frac, txt, red = 0.92, lowRed = false) {
   label(x, cx, cy + r * 0.55, txt, r * 0.22);
 }
 
+/**
+ * Vacuum (inHg) and ammeter (A) for the steam panel (v12), derived from the
+ * engine and electrical state: the engine-driven pump pulls 4.6-5.2 inHg and
+ * nothing when it has failed or the engine is stopped; the ammeter shows the
+ * starter draw, the recharge after a start (tapering as the battery fills),
+ * and a steady discharge on a dead alternator or with the engine off.
+ */
+export function engineAux(ac) {
+  const running = !!ac.engineRunning || (!ac.p?.startup && !ac.engineFailed);
+  const vac = running && ac.systems?.vacuum !== false ? 4.0 + 1.2 * Math.min(1, num(ac.rpmNorm) * 1.3) : 0;
+  let amps = 0;
+  const batt = ac.sys ? !!ac.sys.battery : true;
+  if (batt) {
+    if (ac.sys?.mags === 'START' && !ac.engineRunning) amps = -60;
+    else if (running && ac.systems?.electrical !== false) amps = Math.min(30, 2 + 28 * (1 - num(ac.batteryCharge, 1)));
+    else amps = -(8 + (ac.avionics ? 6 : 0));
+  }
+  return { vac, amps };
+}
+function miniGauge(x, cx, cy, r, frac, txt, g0, g1) {
+  bezel(x, cx, cy, r);
+  arc(x, cx, cy, r * 0.8, -2.2 + 4.4 * g0, -2.2 + 4.4 * g1, '#3fbf4f', r * 0.12);
+  needle(x, cx, cy, -2.2 + 4.4 * clamp(frac, 0, 1), r * 0.78, r * 0.09);
+  label(x, cx, cy + r * 0.55, txt, r * 0.26);
+}
+
 /** Light-aircraft panel: six-pack, engine gauges, radio stack. */
 export function drawSteamPanel(x, W, H, ac, hud, ui = null) {
   const v = readout(ac);
@@ -255,6 +281,10 @@ export function drawSteamPanel(x, W, H, ac, hud, ui = null) {
   turnCoord(x, gx, gy + dy, r, v.turn, v.slip);
   headingInd(x, gx + dx, gy + dy, r, v.hdg);
   vsiInd(x, gx + dx * 2, gy + dy, r, v.vsi);
+  // suction and ammeter between the six-pack and the engine cluster
+  const aux = engineAux(ac), mx = gx + dx * 2 + r * 1.62;
+  miniGauge(x, mx, gy, r * 0.34, aux.vac / 7, `VAC ${aux.vac.toFixed(1)}`, 4.5 / 7, 5.5 / 7);
+  miniGauge(x, mx, gy + dy, r * 0.34, 0.5 + aux.amps / 120, `AMP ${aux.amps > 0 ? '+' : ''}${Math.round(aux.amps)}`, 0.5, 0.75);
   // engine cluster
   const ex = gx + dx * 3 + r * 0.4;
   smallGauge(x, ex, gy, r * 0.62, v.rpm, `${Math.round(700 + 2000 * v.rpm)}`, 0.95);

@@ -541,13 +541,13 @@ const AI_GROUND_PHASES = new Set(['parked', 'pushback', 'taxi', 'holding', 'line
 const tcas = createTcas();
 const tcasVoice = createVoice();
 const tcasEl = document.getElementById('tcas');
-let tcasState = null, tcasInject = null, tcasShown = '';
+let tcasState = null, tcasInject = null, tcasShown = '', tcasForceRa = null;
 function updateTcas(active) {
   if (!active || ac.onGround || ac.crashed) {
     if (tcasState) { tcas.reset(); tcasState = null; }
   } else {
     const agl = ac.pos.y - currentMap.height(ac.pos.x, ac.pos.z);
-    tcas.setRa(ac.p.engine?.type === 'jet' && !ac.p.engine?.afterburner && agl > 305);
+    tcas.setRa(tcasForceRa ?? (ac.p.engine?.type === 'jet' && !ac.p.engine?.afterburner && agl > 305));
     const q = ac.q;
     const own = { pos: ac.pos, vel: ac.vel, headingRad: Math.atan2(-2 * (q.x * q.z - q.w * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)) };
     const list = tcasInject ?? traffic.aiStates().filter(a => !AI_GROUND_PHASES.has(a.phase) && a.visible !== false);
@@ -567,7 +567,7 @@ function updateTcas(active) {
   }
 }
 
-window.__sim = { get tcas() { return tcasState; }, tcasInject: (list) => { tcasInject = list; }, ac, controls, game, world, autopilot, audio, failures, radios, env, windField, minimap, camRig, camera, weatherFx, physEnv, replay, get simTime() { return elapsed; }, get cockpit() { return cockpit; }, cockpitAction: (id) => cockpitAction(id), get plane() { return plane; },
+window.__sim = { get tcas() { return tcasState; }, tcasInject: (list) => { tcasInject = list; }, tcasForceRa: (on) => { tcasForceRa = on; }, ac, controls, game, world, autopilot, audio, failures, radios, env, windField, minimap, camRig, camera, weatherFx, physEnv, replay, get simTime() { return elapsed; }, get cockpit() { return cockpit; }, cockpitAction: (id) => cockpitAction(id), get plane() { return plane; },
   terrainCounts: () => terrain.counts(),
   get rings() { return gauntletRings || rings; }, get map() { return currentMap; },
   get camName() { return camRig.modeName; }, get trails() { return trails; }, get traffic() { return traffic; }, scene, renderer };
@@ -735,7 +735,9 @@ function frame(now) {
   // single digits of tiles (TILE_CAP is 220).
   if (!mapLoading && currentMap.prefetch) currentMap.prefetch(view.pos.x, view.pos.z, COARSE_TILE_RADIUS);
   env.update(view, dt, elapsed, camera.position, camera);
-  traffic.update(dt, camera.position, elapsed, isFlying ? ac.pos : null);   // the circuit traffic steps away from you
+  // the circuit traffic steps away from you; the intruder of a TCAS RA flies the complementary sense
+  traffic.update(dt, camera.position, elapsed, isFlying ? ac.pos : null,
+    tcasState?.level === 'RA' ? { id: tcasState.targets.find(x => x.level === 'RA')?.id, sense: tcasState.sense } : null);
   updateTcas(isFlying && !replaying);
   camRig.setInput(isFlying);
   if (game.state === 'menu') camRig.updateMenu(ac, dt);
