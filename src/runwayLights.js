@@ -137,15 +137,60 @@ export function createRunwayLights(map) {
   const papiPts = pp.build(papiMat);
   group.add(papiPts);
   const papiCol = papiPts.geometry.attributes.lcolor;
+
+  // Taxiways: blue edge lights every ~30 m down both sides of every taxiway
+  // the map lays out (taxinet.js layouts, the extra runways' too). None on a
+  // runway, and none inside another taxiway's pavement, so junctions and
+  // connectors stay open the way the real fixtures are cut back.
+  const tx = new PointSet();
+  const layouts = [];
+  const strips = [r];
+  try { if (map.taxiLayout) layouts.push(map.taxiLayout()); } catch (e) { /* no layout yet */ }
+  for (const ex of (map.extraRunways ? map.extraRunways() : [])) { layouts.push(ex.taxiLayout); strips.push(ex.runway); }
+  const onRunway = (x, z) => strips.some(s => {
+    const fx = Math.cos(s.headingRad), fz = -Math.sin(s.headingRad);
+    const ox = s.spawn ? s.spawn.x : 0, oz = s.spawn ? s.spawn.z : 0;
+    const v = (x - ox) * -fz + (z - oz) * fx;
+    const u = x * fx + z * fz;
+    const x0 = Number.isFinite(s.x0) ? s.x0 : -1e9, x1 = Number.isFinite(s.x1) ? s.x1 : 1e9;
+    return Math.abs(v) < (s.halfWidth || 15) + 6 && u > x0 - 30 && u < x1 + 30;
+  });
+  for (const lay of layouts) {
+    if (!lay || !lay.lines) continue;
+    const half = (lay.width || 23) / 2;
+    const segs = [];
+    for (const ln of lay.lines) for (let i = 1; i < ln.length; i++) segs.push([ln[i - 1], ln[i]]);
+    const inPavement = (x, z) => segs.some(([a, b]) => {
+      const dx = b[0] - a[0], dz = b[1] - a[1], l2 = dx * dx + dz * dz || 1;
+      const t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (z - a[1]) * dz) / l2));
+      return Math.hypot(x - a[0] - dx * t, z - a[1] - dz * t) < half + 0.5;
+    });
+    for (const [a, b] of segs) {
+      const dx = b[0] - a[0], dz = b[1] - a[1], len = Math.hypot(dx, dz);
+      if (len < 1) continue;
+      const nx = -dz / len, nz = dx / len, n = Math.max(1, Math.round(len / 30));
+      for (let i = 0; i <= n; i++) {
+        const t = i / n;
+        for (const sd of [-1, 1]) {
+          const x = a[0] + dx * t + nx * sd * (half + 1), z = a[1] + dz * t + nz * sd * (half + 1);
+          if (onRunway(x, z) || inPavement(x, z)) continue;
+          tx.add(x, ground(x, z) + 0.4, z, COL.blue);
+        }
+      }
+    }
+  }
+  const txMat = lightMaterial(1.1, 1.6);
+  const txPts = tx.build(txMat);
+  group.add(txPts);
   let papiWhites = 2;
 
-  const mats = [rwMat, flashMat, papiMat];
+  const mats = [rwMat, flashMat, papiMat, txMat];
   const tmp = new THREE.Vector2();
   return {
     group,
     // k: 0 off, 0..1 day/dusk/night brightness
     setMode(k) {
-      rwPts.visible = alsPts.visible = flPts.visible = k > 0.01;
+      rwPts.visible = alsPts.visible = flPts.visible = txPts.visible = k > 0.01;
       rwMat.uniforms.dayK.value = flashMat.uniforms.dayK.value = k;
       papiMat.uniforms.dayK.value = Math.max(k, 0.9);    // PAPI is daylight-visible
     },
@@ -170,6 +215,8 @@ export function createRunwayLights(map) {
     },
     /** Number of white PAPI units seen from the camera (0 = well low, 4 = well high). */
     papiWhites() { return papiWhites; },
+    /** Number of blue taxiway edge lights (tests). */
+    taxiLights: tx.p.length / 3,
     dispose() {
       group.traverse(o => { if (o.geometry) o.geometry.dispose(); });
       for (const m of mats) m.dispose();

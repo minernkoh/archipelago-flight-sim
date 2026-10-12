@@ -1310,6 +1310,26 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
     check(`forest: ${m.name} grows real woodland somewhere`, wooded / n > 0.03, `${(100 * wooded / n).toFixed(1)}% wooded`);
     check(`forest: ${m.name} plants nothing in the sea`, wet === 0, `${wet} wet samples`);
   }
+
+  // Taxiway edge lights: every map with a taxi layout gets them, none sit on a runway.
+  const { createRunwayLights } = await import('../src/runwayLights.js');
+  for (const m of [archipelagoMap, alpineMap, singaporeMap]) {
+    const L = createRunwayLights(m);
+    const pos = L.group.children[L.group.children.length - 1].geometry.attributes.position;
+    const strips = [m.runway, ...(m.extraRunways ? m.extraRunways().map(e => e.runway) : [])];
+    let onRwy = 0;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), z = pos.getZ(i);
+      for (const r of strips) {
+        const fx = Math.cos(r.headingRad), fz = -Math.sin(r.headingRad);
+        const u = x * fx + z * fz, v = (x - r.spawn.x) * -fz + (z - r.spawn.z) * fx;
+        if (Math.abs(v) < r.halfWidth + 2 && u > r.x0 && u < r.x1) onRwy++;
+      }
+    }
+    check(`taxi lights: ${m.name} has blue taxiway edges, none on a runway`, L.taxiLights > 20 && onRwy === 0,
+      `${L.taxiLights} lights, ${onRwy} on a runway`);
+    L.dispose();
+  }
 }
 
 // ---- v7 trails: wingtip vortices + smoke ----
