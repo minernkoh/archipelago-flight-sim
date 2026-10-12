@@ -167,6 +167,8 @@ export function createCockpit(cfg, hud, p = null) {
     { id: 'flap-up', label: 'FLAP ▲' }, { id: 'flap-dn', label: 'FLAP ▼' },
     // circuit breakers (lit = in): avionics bus, autopilot, flap motor
     { id: 'cb-avn', label: 'CB AVN' }, { id: 'cb-ap', label: 'CB AP' }, { id: 'cb-flap', label: 'CB FLP' },
+    { id: 'cb-lts', label: 'CB LTS' }, { id: 'cb-com', label: 'CB COM' }, { id: 'cb-xpdr', label: 'CB XPD' },
+    ...(glass ? [] : [{ id: 'cb-tc', label: 'CB TC' }]),
     // steam cockpits: light switches, fuel selector (start-up aircraft) and the trim wheel
     ...(glass ? [] : [
       { id: 'lt-land', label: 'LAND' }, { id: 'lt-nav', label: 'NAV' }, { id: 'lt-strb', label: 'STRB' }, { id: 'lt-bcn', label: 'BCN' },
@@ -180,7 +182,15 @@ export function createCockpit(cfg, hud, p = null) {
   const strips = [];
   // switch rows drawn INTO the instrument panel canvas (instruments.js), so
   // they are always in view: cockpit free-look springs back on release
-  const ui = { sys: sysButtons, ap: AP_BUTTONS, states: {}, radio: null };
+  // steam panels have more switches than fit legibly in one column, so they
+  // are two pages: switches, then the breaker panel (a PAGE button flips them)
+  const isCb = (b) => b.id.startsWith('cb-');
+  const pages = glass ? null : [
+    [...sysButtons.filter(b => !isCb(b)), { id: 'page', label: 'BRKRS ▸' }],
+    [...sysButtons.filter(isCb), { id: 'page', label: '◂ SWITCH' }],
+  ];
+  const ui = { ap: AP_BUTTONS, states: {}, radio: null, page: 0, sysAll: sysButtons };
+  Object.defineProperty(ui, 'sys', { get: () => (pages ? pages[ui.page] : sysButtons), enumerable: true });
 
   if (style === 'cabin') {
     const head = std(0xbdb6a8, 0.95), wall = std(0x6e6a62, 0.9);
@@ -299,6 +309,9 @@ export function createCockpit(cfg, hud, p = null) {
       for (const st of strips) st.mat.emissiveIntensity = night ? 0.7 : 0.25;
     },
     /** Lit/label state for the switch rows (main.js: AP status + switch positions). */
+    /** Flip the steam panel's switch column between switches and breakers. */
+    togglePage() { if (ui.sysAll && !glass) ui.page ^= 1; return ui.page; },
+    get page() { return ui.page; },
     setUi(states, radio = null) { ui.states = states; ui.radio = radio; for (const st of strips) st.draw(states); },
     /**
      * Which cockpit control a ray hits, or null. Only the button rows are

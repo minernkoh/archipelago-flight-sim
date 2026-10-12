@@ -53,7 +53,7 @@ export function readout(ac) {
     ias: num(ac.iasIndicated) * KT,
     alt: num(ac.altIndicated ?? ac.pos?.y) * FT,
     vsi: num(ac.vsIndicated ?? ac.vel?.y) * FT * 60,
-    turn: -num(ac.omega?.y) / D2R,          // deg/s, + = right
+    turn: ac.breakers?.tc === false ? 0 : -num(ac.omega?.y) / D2R,   // deg/s, + = right (electric: dead with its breaker out)
     slip: num(ac.beta),
     pitch, roll, hdg,
     rpm: num(ac.rpmNorm), spool: num(ac.spool ?? ac.rpmNorm),
@@ -303,33 +303,44 @@ export function drawSteamPanel(x, W, H, ac, hud, ui = null) {
     const warn = ac.shockCooling || hot > 460;
     label(x, ex, gy - r * 0.68, `CHT${ci} ${Math.round(hot)}\u00b0F`, r * 0.13, warn ? '#ffb300' : '#9aa0a6');
   }
-  // radio stack: COM + NAV, then the autopilot (KAP 140 style) when clickable
+  // radio stack: COM, NAV and the transponder, then the autopilot (KAP 140
+  // style) when clickable; the clickable stack is compressed so all of it
+  // stays in the default cockpit view
   const rx = ex + r * 1.0, rw = W - rx - W * 0.03;
-  const radios = ui ? 2 : 3;
   const hits = [];
-  for (let i = 0; i < radios; i++) {
-    const y = H * 0.1 + i * H * 0.27;
-    x.fillStyle = '#121416'; x.fillRect(rx, y, rw, H * 0.2);
+  for (let i = 0; i < 3; i++) {
+    const y = ui ? H * (0.03 + i * 0.175) : H * 0.1 + i * H * 0.27, bh = ui ? H * 0.15 : H * 0.2, k = bh / (H * 0.2);
+    x.fillStyle = '#121416'; x.fillRect(rx, y, rw, bh);
     x.fillStyle = '#3e4248'; x.fillRect(rx + 4, y + 4, rw - 8, 6);
     x.fillStyle = '#34ff6a'; x.textAlign = 'left'; x.textBaseline = 'middle';
-    if (ui && ui.radio) {
+    if (ui && ui.radio && i < 2) {
       // active frequency big, standby small, then the tune / swap buttons
       const id = i === 0 ? 'com' : 'nav', rd = ui.radio[id];
-      x.font = `bold ${Math.min(H * 0.055, rw * 0.095)}px "B612 Mono", monospace`;
-      x.fillText(`${id.toUpperCase()} ${rd.act}`, rx + rw * 0.05, y + H * 0.08);
-      x.fillStyle = '#c8a43a'; x.font = `${Math.min(H * 0.04, rw * 0.07)}px "B612 Mono", monospace`;
-      x.fillText(`SBY ${rd.sby}${id === 'nav' && rd.ils ? '  ILS' : ''}`, rx + rw * 0.05, y + H * 0.155);
+      x.font = `bold ${Math.min(H * 0.05, rw * 0.09)}px "B612 Mono", monospace`;
+      x.fillText(`${id.toUpperCase()} ${rd.act}`, rx + rw * 0.05, y + H * 0.08 * k);
+      x.fillStyle = '#c8a43a'; x.font = `${Math.min(H * 0.038, rw * 0.068)}px "B612 Mono", monospace`;
+      x.fillText(`SBY ${rd.sby}${id === 'nav' && rd.ils ? '  ILS' : ''}`, rx + rw * 0.05, y + H * 0.155 * k);
       hits.push(...drawButtons(x, [{ id: id + '-dn', label: '−' }, { id: id + '-up', label: '+' }, { id: id + '-swap', label: '⇄' }],
-        ui.states, { x: rx + rw * 0.6, y: y + H * 0.015, w: rw * 0.38, h: H * 0.17 }, 3));
+        ui.states, { x: rx + rw * 0.6, y: y + H * 0.015 * k, w: rw * 0.38, h: H * 0.17 * k }, 3));
+    } else if (ui && i === 2) {
+      // transponder: the squawk code and its four octal knobs (dark with its breaker out)
+      const on = ac.breakers?.xpdr !== false;
+      x.font = `bold ${Math.min(H * 0.05, rw * 0.09)}px "B612 Mono", monospace`;
+      x.fillStyle = on ? '#34ff6a' : '#1d3a26';
+      x.fillText(`XPDR ${on ? String(ac.sys?.xpdr ?? 1200).padStart(4, '0') : '----'}`, rx + rw * 0.05, y + bh * 0.42);
+      x.fillStyle = '#c8a43a'; x.font = `${Math.min(H * 0.034, rw * 0.06)}px "B612 Mono", monospace`;
+      if (on) x.fillText('ALT', rx + rw * 0.05, y + bh * 0.78);
+      hits.push(...drawButtons(x, [1, 2, 3, 4].map(n => ({ id: 'xp-' + n, label: '0' })),
+        ui.states, { x: rx + rw * 0.5, y: y + bh * 0.08, w: rw * 0.48, h: bh * 0.84 }, 4));
     } else if (!ui) {
       x.font = `bold ${Math.min(H * 0.06, rw * 0.11)}px "B612 Mono", monospace`;
       x.fillText(['COM 118.30', 'NAV 110.50', `XPDR ${ac.sys?.xpdr ?? 1200}`][i], rx + rw * 0.08, y + H * 0.11);
     }   // (ui without a radio view = avionics bus dead: the displays stay dark)
   }
   if (!ui) return [];
-  const apY = H * 0.1 + 2 * H * 0.27 - H * 0.02;
-  x.fillStyle = '#121416'; x.fillRect(rx, apY, rw, H * 0.34);
-  hits.push(...drawButtons(x, ui.ap, ui.states, { x: rx, y: apY, w: rw, h: H * 0.34 }, Math.ceil(ui.ap.length / 2)));
+  const apY = H * 0.56;
+  x.fillStyle = '#121416'; x.fillRect(rx, apY, rw, H * 0.3);
+  hits.push(...drawButtons(x, ui.ap, ui.states, { x: rx, y: apY, w: rw, h: H * 0.3 }, Math.ceil(ui.ap.length / 2)));
   // master / mags / starter / mixture / flaps: a switch column at the left edge
   const sx = W * 0.012, sw = gx - r * 1.2 - sx;
   // two columns once it grows past six switches, so the lower ones stay above the HUD's status box

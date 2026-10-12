@@ -314,6 +314,29 @@ const sw = await page.evaluate(() => {
 });
 check('cockpit trim, light, fuel, carb heat, transponder and mixture leaning switches act',
   sw.trim === 0.03 && sw.strobe === false && sw.fuel === 'L' && sw.carb === true && sw.xpdr === 7000 && sw.mix === 0.94 && sw.rich === 1 && sw.alt === true, JSON.stringify(sw));
+// v12: transponder code knobs (octal digits) and the extra breakers
+const xp = await page.evaluate(() => {
+  const s = window.__sim, x0 = s.ac.sys.xpdr;
+  s.cockpitAction('xp-2'); s.cockpitAction('xp-2'); const two = s.ac.sys.xpdr;
+  for (let i = 0; i < 6; i++) s.cockpitAction('xp-2');                 // 8 steps: back where it was
+  return { x0, two, back: s.ac.sys.xpdr };
+});
+check('transponder knobs set any code, digit by digit, octal', xp.x0 === 1200 && xp.two === 1400 && xp.back === 1200, JSON.stringify(xp));
+// every control must be clickable from the default cockpit view (free-look
+// springs back): the XPDR knobs, the page button and, after a page flip, the breakers
+const onScreen = (ids) => page.evaluate((ids) => {
+  const s = window.__sim; s.camera.updateMatrixWorld();
+  return Object.fromEntries(ids.map(id => { const p = s.cockpit.buttonWorld(id); if (!p) return [id, 'missing']; p.project(s.camera);
+    return [id, Math.abs(p.x) <= 0.98 && Math.abs(p.y) <= 0.98 ? 'ok' : `off ${p.x.toFixed(2)},${p.y.toFixed(2)}`]; }));
+}, ids);
+const reach0 = await onScreen(['xp-1', 'xp-4', 'page', 'bat', 'ap-apr', 'hdg-up']);
+await page.evaluate(() => window.__sim.cockpitAction('page'));
+await page.waitForFunction('!!window.__sim.cockpit.buttonWorld("cb-tc")', { timeout: 60000, polling: 300 });
+const reach1 = await onScreen(['cb-avn', 'cb-tc', 'cb-xpdr', 'page']);
+await page.evaluate(() => window.__sim.cockpitAction('page'));
+await page.waitForFunction('!!window.__sim.cockpit.buttonWorld("bat")', { timeout: 60000, polling: 300 });
+check('every cockpit control is in the default view (switches, breaker page, XPDR knobs)',
+  Object.values({ ...reach0, ...reach1 }).every(v => v === 'ok'), JSON.stringify({ reach0, reach1 }));
 await press('h');   // HDG back off
 await press('c');
 await settle(400);
@@ -590,6 +613,12 @@ await press('o');
 const aprRefused = await sim('({ apr: !!__sim.autopilot.modes.apr, msg: document.querySelector("#msg").textContent })');
 check('APR refuses until NAV 1 is on the ILS', !aprRefused.apr && /tune NAV 1/.test(aprRefused.msg), JSON.stringify(aprRefused));
 await page.evaluate(() => { window.__sim.cockpitAction('nav-swap'); });
+// the COM/NAV breaker out: radios dark, so APR refuses even on the right frequency
+await page.evaluate(() => window.__sim.cockpitAction('cb-com'));
+await press('o');
+const aprNoCom = await sim('({ apr: !!__sim.autopilot.modes.apr })');
+await page.evaluate(() => window.__sim.cockpitAction('cb-com'));
+check('APR refuses with the COM/NAV breaker pulled', aprNoCom.apr === false, JSON.stringify(aprNoCom));
 await press('o'); await press('j');
 await page.evaluate(() => { window.__sim.autopilot.sel.ias = 34; });
 await simSettle(12000, '__sim.autopilot.status(__sim.ac).apr?.gs === true && __sim.simTime > 0');
@@ -905,6 +934,13 @@ const tcasOn = await sim('({ level: __sim.tcas?.level, sense: __sim.tcas?.sense,
 await page.evaluate(() => window.__sim.tcasInject([]));
 await simSettle(800);
 const tcasOff = await sim('({ level: __sim.tcas?.level ?? null, shown: document.querySelector("#tcas").classList.contains("show") })');
+// no transponder, no TCAS: pull its breaker and the same intruder raises nothing
+await page.evaluate(() => { const s = window.__sim; s.cockpitAction('cb-xpdr'); s.tcasInject([{ id: 98, x: s.ac.pos.x + 800, y: s.ac.pos.y, z: s.ac.pos.z }]); });
+await simSettle(1200);
+const tcasNoXpdr = await sim('({ level: __sim.tcas?.level ?? null })');
+await page.evaluate(() => { const s = window.__sim; s.cockpitAction('cb-xpdr'); s.tcasInject([]); });
+await simSettle(400);
+check('TCAS is dead with the transponder breaker pulled', tcasNoXpdr.level === null, JSON.stringify(tcasNoXpdr));
 await page.evaluate(() => window.__sim.tcasInject(null));
 // coordinated RA: with RAs forced on, a co-altitude intruder 500 m ahead is an
 // RA; the AI aircraft it names manoeuvres the complementary way

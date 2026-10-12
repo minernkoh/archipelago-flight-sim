@@ -87,13 +87,19 @@ function cockpitAction(id) {
       if (s && s.lights) s.lights[k] = !s.lights[k];
       break;
     }
+    case 'page': cockpit?.togglePage?.(); break;
     case 'altstat': if (s) s.altStatic = !s.altStatic; break;
     case 'carb': if (s) s.carbHeat = !s.carbHeat; break;
     case 'prime': if (s && !ac.engineRunning) s.primes = Math.min(9, (s.primes || 0) + 1); break;
     case 'xpdr': if (s) { const X = [1200, 7000, 7600, 7700]; s.xpdr = X[(X.indexOf(s.xpdr ?? 1200) + 1) % X.length]; } break;
     case 'fuel': if (s) { const F = ['BOTH', 'L', 'R', 'OFF']; s.fuel = F[(F.indexOf(s.fuel || 'BOTH') + 1) % F.length]; } break;
     case 'trim-dn': case 'trim-up': controls.state.trim = Math.max(-0.3, Math.min(0.3, (controls.state.trim || 0) + (id === 'trim-up' ? 0.03 : -0.03))); break;
-    case 'cb-avn': case 'cb-ap': case 'cb-flap': { const k = id.slice(3); if (ac.breakers) ac.breakers[k] = !ac.breakers[k]; break; }
+    case 'cb-avn': case 'cb-ap': case 'cb-flap': case 'cb-lts': case 'cb-com': case 'cb-xpdr': case 'cb-tc': { const k = id.slice(3); if (ac.breakers) ac.breakers[k] = !ac.breakers[k]; break; }
+    // transponder code knobs: each digit steps 0-7 (squawk codes are octal)
+    case 'xp-1': case 'xp-2': case 'xp-3': case 'xp-4': if (s) {
+      const d = String(s.xpdr ?? 1200).padStart(4, '0').split(''), i = +id.slice(3) - 1;
+      d[i] = String((+d[i] + 1) % 8); s.xpdr = +d.join('');
+    } break;
     case 'hdg-dn': case 'hdg-up': autopilot.sel.hdg = (Math.round(autopilot.sel.hdg / 5) * 5 + (id === 'hdg-up' ? 5 : -5) + 360) % 360; break;
     case 'alt-dn': case 'alt-up': autopilot.sel.alt = Math.max(0, (Math.round(autopilot.sel.alt * 3.28084 / 100) * 100 + (id === 'alt-up' ? 100 : -100)) / 3.28084); break;
     default: if (id.startsWith('ap')) controls.fire(id === 'ap' ? 'ap' : id);
@@ -531,7 +537,7 @@ controls.on('ap-wing', () => { if (flying()) autopilot.toggleWing(ac); });
 controls.on('ap-apr', () => {
   if (!flying()) return;
   // APR flies the ILS, so NAV 1 has to be on it (it comes pre-tuned)
-  if (!radios.ilsTuned && !autopilot.modes.apr) { hud.message(`APR needs the ILS: tune NAV 1 to ${fmtFreq(radios.ils)}`, 3500); return; }
+  if ((!radios.ilsTuned || ac.breakers?.com === false) && !autopilot.modes.apr) { hud.message(`APR needs the ILS: tune NAV 1 to ${fmtFreq(radios.ils)}`, 3500); return; }
   autopilot.toggleApr(ac, controls);
 });
 
@@ -545,7 +551,8 @@ const tcasVoice = createVoice();
 const tcasEl = document.getElementById('tcas');
 let tcasState = null, tcasInject = null, tcasShown = '', tcasForceRa = null;
 function updateTcas(active) {
-  if (!active || ac.onGround || ac.crashed) {
+  // TCAS / TAS interrogate through the transponder: dead with its breaker out
+  if (!active || ac.onGround || ac.crashed || ac.breakers?.xpdr === false) {
     if (tcasState) { tcas.reset(); tcasState = null; }
   } else {
     const agl = ac.pos.y - currentMap.height(ac.pos.x, ac.pos.z);
@@ -695,8 +702,10 @@ function frame(now) {
       'trim-up': (controls.state.trim || 0) > 0.005 ? 'T ' + Math.round(controls.state.trim * 100) : false,
       'trim-dn': (controls.state.trim || 0) < -0.005 ? 'T ' + Math.round(controls.state.trim * 100) : false,
       'cb-avn': ac.breakers?.avn !== false, 'cb-ap': ac.breakers?.ap !== false, 'cb-flap': ac.breakers?.flap !== false,
+      'cb-lts': ac.breakers?.lts !== false, 'cb-com': ac.breakers?.com !== false, 'cb-xpdr': ac.breakers?.xpdr !== false, 'cb-tc': ac.breakers?.tc !== false,
+      ...Object.fromEntries([0, 1, 2, 3].map(i => ['xp-' + (i + 1), String(ac.sys?.xpdr ?? 1200).padStart(4, '0')[i]])),
       'flap-up': controls.flapDetent === 0, 'flap-dn': controls.flapDetent > 0 ? (flapNames?.[controls.flapDetent] ?? true) : false,
-    }, ac.avionics === false ? null : {
+    }, ac.avionics === false || ac.breakers?.com === false ? null : {
       com: { act: fmtFreq(radios.com.act), sby: fmtFreq(radios.com.sby) },
       nav: { act: fmtFreq(radios.nav.act), sby: fmtFreq(radios.nav.sby), ils: radios.ilsTuned },
       tcas: tcasState?.targets ?? null,
@@ -753,7 +762,7 @@ function frame(now) {
     hud.setAnnunciators?.(annunciators(ac));
     // ILS receiver: needles live inside the localizer beam out to 18 km (or whenever APR is armed)
     const appr = apS.ils;
-    NAV.ils = radios.ilsTuned && appr && appr.dist > -300 && appr.dist < 18000 && (apS.apr || Math.abs(appr.locDots) < 5) ? appr : null;
+    NAV.ils = radios.ilsTuned && ac.breakers?.com !== false && appr && appr.dist > -300 && appr.dist < 18000 && (apS.apr || Math.abs(appr.locDots) < 5) ? appr : null;
     audioView.x = camera.position.x; audioView.y = camera.position.y; audioView.z = camera.position.z;
     audioView.mode = camRig.modeName;
     audio.update(ac, c, audioView);

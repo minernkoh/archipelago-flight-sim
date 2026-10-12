@@ -81,7 +81,7 @@ export function createAircraft(opts = {}) {
     altIndicated: opts.pos ? opts.pos.y : 1000, vsIndicated: 0,   // static-port instruments
     gyro: null,            // drifting gyro attitude after a vacuum failure, else null
     // circuit breakers the pilot can pull (cockpit.js): avionics bus, autopilot, flap motor
-    breakers: { avn: true, ap: true, flap: true },
+    breakers: { avn: true, ap: true, flap: true, lts: true, com: true, xpdr: true, tc: true },
     // v5-R3: piston start/electrical state (only exercised for p.startup aircraft).
     // Defaults are ready-to-fly so every existing caller spawns hot.
     // player switch positions (v12: fuel selector and light switches)
@@ -134,7 +134,7 @@ export function resetSystems(ac) {
   ac._flapJam = null; ac.gyro = null;
   ac.oilQty = 1; ac.oilT = null; ac.oilLowT = 0;      // oil warms up again from the next update
   ac.cht = null; ac.chtRate = 0; ac.shockCooling = false; ac.engineWear = 0;   // a fresh engine on every respawn
-  ac.breakers = { avn: true, ap: true, flap: true };
+  ac.breakers = { avn: true, ap: true, flap: true, lts: true, com: true, xpdr: true, tc: true };
   // Ready-to-fly: master on, mags BOTH, mixture rich, engine turning, full battery.
   ac.sys = { battery: true, mags: 'BOTH', mixture: 1, fuel: 'BOTH', lights: { land: true, nav: true, strobe: true, beacon: true },
     carbHeat: false, primes: 2, xpdr: 1200, altStatic: false };

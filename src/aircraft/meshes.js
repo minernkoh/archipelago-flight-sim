@@ -104,6 +104,13 @@ function navMats(col) {
   }
   return [_navCoreMat[col], _navGlowMat[col]];
 }
+// the cockpit light switches, all off when the LTS breaker is pulled (AI
+// traffic passes no state: all on)
+const LIGHTS_OFF = { land: false, nav: false, strobe: false, beacon: false };
+function litSwitches(st) {
+  if (!st || !st.sys) return null;
+  return st.breakers && st.breakers.lts === false ? LIGHTS_OFF : st.sys.lights;
+}
 function navLights(parent, s, specs) {
   const blinkers = [], steady = [];
   for (const [kind, x, y, z] of specs) {
@@ -381,7 +388,7 @@ function c172() {
       propAngle += spinner(rpmNorm) * dt;
       blades.rotation.x = propAngle;
       propBlur(disc, blades, rpmNorm);
-      lights(dt, st && st.sys && st.sys.lights);
+      lights(dt, litSwitches(st));
     },
   };
 }
@@ -525,7 +532,7 @@ function extra300() {
       propAngle += (4 + 130 * rpmNorm) * dt;
       blades.rotation.x = propAngle;
       propBlur(disc, blades, rpmNorm);
-      lights(dt, st && st.sys && st.sys.lights);
+      lights(dt, litSwitches(st));
     },
   };
 }
@@ -697,7 +704,7 @@ function hornet() {
     group: g,
     animate(controls, rpmNorm, dt, st) {
       gear(dt, st);
-      lights(dt, st && st.sys && st.sys.lights);
+      lights(dt, litSwitches(st));
       const e = 0.28 * controls.elevator;
       stabs[0].set(e); stabs[1].set(-e);
       const ael = 0.4 * controls.aileron;
@@ -905,7 +912,7 @@ function heavy() {
     group: g,
     animate(controls, rpmNorm, dt, st) {
       gear(dt, st);
-      lights(dt, st && st.sys && st.sys.lights);
+      lights(dt, litSwitches(st));
       const e = 0.12 * controls.elevator;
       HR.elev.set(e); HL.elev.set(-e);
       const ael = 0.15 * controls.aileron;
@@ -1022,7 +1029,7 @@ function spirit() {
     group: g,
     animate(controls, rpmNorm, dt, st) {
       gear(dt, st);
-      lights(dt, st && st.sys && st.sys.lights);
+      lights(dt, litSwitches(st));
       const eR = 0.3 * controls.elevator + 0.35 * controls.aileron;
       const eL = 0.3 * controls.elevator - 0.35 * controls.aileron;
       RW.elev.set(eR); LW.elev.set(-eL);
