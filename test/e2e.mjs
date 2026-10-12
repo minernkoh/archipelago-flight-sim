@@ -775,10 +775,10 @@ check('cold & dark spawns engine-off with the panel + checklist up',
 // run the real sequence through the switch state (battery, mixture, crank, release)
 await page.evaluate(() => { const s = window.__sim.ac.sys; s.battery = true; s.mixture = 1; s.mags = 'START'; });
 const f0 = await sim('__sim.frames');
-await settle(2600);
+await simSettle(4000, '__sim.ac.engineRunning');   // the starter needs 1.6 s of SIM time
 const crankDiag = await sim('({ crank: __sim.ac.crankT, run: __sim.ac.engineRunning, state: __sim.game.state, cam: __sim.camName, res: __sim.world.resScale })');
 await page.evaluate(() => { window.__sim.ac.sys.mags = 'BOTH'; window.__sim.controls.state.throttle = 0.3; });
-await settle(1200);
+await simSettle(1500);
 const hotNow = await sim('({ running: __sim.ac.engineRunning, avionics: __sim.ac.avionics, thrust: Math.round(__sim.ac.thrust) })');
 hotNow.diag = { ...crankDiag, frames: (await sim('__sim.frames')) - f0 };
 check('start sequence brings the engine to life', hotNow.running && hotNow.avionics && hotNow.thrust > 100, JSON.stringify(hotNow));
