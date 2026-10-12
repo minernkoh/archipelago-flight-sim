@@ -14,6 +14,9 @@ import { makeNoise, woodland } from './noise.js';
 import { PAL, seabed, beach, facetJitter } from './palette.js';
 import { runwayDressing, reciprocal } from './runwayPaint.js';
 import { makeProjection, tileOfPixel, decodeTerrarium, bilerp, bearingToHeadingRad } from './tilesampler.js';
+import { fetchOsm, buildOsmWorld, makeLL, LC, OSM_ATTRIBUTION } from './osm.js';
+import { buildingMeshes, groundMeshes } from './osmMeshes.js';
+import { setFacadeNight } from './sgLandmarks.js';
 
 const TILE_BASE = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium';
 const TILE_CAP = 220;      // LRU cap on decoded tiles (~14 MB of Float32 at 256²)
@@ -168,6 +171,13 @@ export function createRealWorldMap(preset) {
       h = h * (1 - w) + elev * w;
       if (d < 60) h = elev;
     }
+    // OSM airport pavement (aprons, taxiways, the other runways) sits flat at
+    // field elevation, eased in over ~40 m. Only once committed: see osm.js.
+    if (osm.committed && x * x + z * z < 4600 * 4600) {
+      let k = 0;
+      for (let dz = -24; dz <= 24; dz += 24) for (let dx = -24; dx <= 24; dx += 24) if (osm.world.landCover(x + dx, z + dz) === LC.PAVED) k++;
+      if (k) h += (elev - h) * smoothstep(0, 5, k);
+    }
     return h;
   }
 
@@ -179,11 +189,17 @@ export function createRealWorldMap(preset) {
   // Cosmetic woodland (no land-cover data, so a plausible noise mask) below a
   // ~1800 m treeline, clear of the field.
   const NZ = makeNoise(Math.round(preset.lat * 1000) ^ Math.round(preset.lon * 1000) << 8);
+  // With OSM land cover the trees grow where the real forests are.
+  const COVER_TREES = { [LC.FOREST]: 0.95, [LC.SCRUB]: 0.3, [LC.GRASS]: 0.05, [LC.URBAN]: 0.07, [LC.FARM]: 0.01 };
   function forestDensity(x, z, h, slope) {
     if (h < 3 || h > 1850 || slope > 0.6) return 0;
     const d = runwayDist(x, z);
     if (d < 240) return 0;
     const fade = smoothstep(240, 450, d) * (1 - smoothstep(1650, 1850, h)) * (1 - smoothstep(0.45, 0.6, slope));
+    if (osm.committed) {
+      const c = osm.world.landCover(x, z);
+      if (c !== LC.NONE || osm.inside(x, z)) return (COVER_TREES[c] || 0) * fade;
+    }
     return woodland(NZ, x, z, 480, 0.75) * fade;
   }
 
@@ -195,9 +211,53 @@ export function createRealWorldMap(preset) {
     out.lerp(PAL.rock, smoothstep(1700, 2400, h));
     const f = forestDensity(x, z, h, slope);
     if (f > 0.08) out.lerp(PAL.forest, Math.min(1, f));
+    if (osm.committed) coverColour(x, z, h, out);
     if (h > 40) out.lerp(PAL.rock, smoothstep(0.5, 0.85, slope));
     if (h > 2700) out.lerp(PAL.snow, smoothstep(2700, 3200, h) * (1 - smoothstep(0.7, 1.0, slope)));
     return facetJitter(x, z, out);
+  }
+
+  // ---------------- OpenStreetMap scenery (osm.js) ----------------
+  const ll = makeLL(proj);
+  const osm = {
+    data: null, world: null, committed: false, promise: null, status: 'idle',
+    inside: (x, z) => Math.abs(x) < 6800 && Math.abs(z) < 6800,   // inside the land-cover query box
+  };
+  function loadScenery() {
+    if (!osm.promise) {
+      osm.status = 'loading';
+      osm.promise = fetchOsm(preset.lat, preset.lon, ll).then((data) => {
+        if (!data || (!data.buildings.length && !data.areas.length)) { osm.status = 'failed'; return false; }
+        osm.data = data;
+        osm.world = buildOsmWorld(data);
+        osm.status = 'ready';
+        return true;
+      });
+    }
+    return osm.promise;
+  }
+  // Land cover may only change height/colour/trees BEFORE terrain is built.
+  function commitScenery() { if (osm.world) osm.committed = true; return osm.committed; }
+
+  const FIELDS = [0xc7b467, 0x87a34f, 0x8b7357, 0xa8b06a, 0x6a8e43, 0xb8a272].map(c => new THREE.Color(c));
+  const COVER = {
+    [LC.URBAN]: new THREE.Color(0x9c9d96), [LC.INDUSTRIAL]: new THREE.Color(0xa5a7a6), [LC.WATER]: new THREE.Color(0x2c5566),
+    [LC.ROCK]: PAL.rock, [LC.ICE]: PAL.snow, [LC.SAND]: PAL.sand, [LC.SCRUB]: PAL.scrub, [LC.PAVED]: new THREE.Color(0x6c6e6d),
+    [LC.GRASS]: PAL.meadow,
+  };
+  const tmpCol = new THREE.Color();
+  function coverColour(x, z, h, out) {
+    const c = osm.world.landCover(x, z);
+    // PAVED is left alone: the pavement meshes draw it crisply, and tinting the
+    // terrain under them only smeared grey bands along every taxiway edge
+    if (c === LC.NONE || c === LC.FOREST || c === LC.PAVED) return;
+    if (c === LC.FARM) {
+      const t = osm.world.fieldTone(x, z);
+      tmpCol.copy(FIELDS[t % FIELDS.length]).offsetHSL(0, 0, ((t >> 3) / 32 - 0.5) * 0.06);
+      out.lerp(tmpCol, 0.8);
+    } else if (c === LC.URBAN) {
+      out.lerp(COVER[c], 0.55);              // gardens and street trees keep some green
+    } else out.lerp(COVER[c], c === LC.GRASS ? 0.45 : 0.85);
   }
 
   // Race gates + demo-plan fixes generated in the runway frame around the field.
@@ -251,6 +311,35 @@ export function createRealWorldMap(preset) {
     g.add(pole, sock);
     g.userData.windsock = sock;
 
+    // OpenStreetMap buildings, pavement, roads and lakes: now if the data
+    // is here, or when it lands (buildings and roads only, see osm.js)
+    const addOsm = () => {
+      if (!osm.data) return;
+      const b = buildingMeshes(osm.data.buildings, height);
+      const gr = groundMeshes(osm.data, {
+        heightFn: height, elev, flat: osm.committed,
+        skipRunway: (rw) => {
+          const m = toRunway((rw.a[0] + rw.b[0]) / 2, (rw.a[1] + rw.b[1]) / 2);
+          const dx = rw.b[0] - rw.a[0], dz = rw.b[1] - rw.a[1];
+          const cross = Math.abs(dx * fwd.z - dz * fwd.x) / (Math.hypot(dx, dz) || 1);
+          return Math.abs(m.u) < halfLen && Math.abs(m.v) < halfWidth + 40 && cross < 0.18;
+        },
+        lakeLevel: (ring) => {
+          const hs = [];
+          const step = Math.max(1, Math.floor(ring.length / 64));
+          for (let i = 0; i < ring.length; i += step) hs.push(height(ring[i][0], ring[i][1]));
+          hs.sort((p, q) => p - q);
+          return hs[Math.floor(hs.length * 0.2)];
+        },
+      });
+      g.add(b, gr);
+      if (osm.data.buildings.length > 20) tower.visible = false;   // the real tower is in the data
+      g.userData.osm = { buildings: osm.data.buildings.length, roads: osm.data.lines.length, areas: osm.data.areas.length, committed: osm.committed };
+    };
+    if (osm.data) addOsm();
+    else if (osm.promise) osm.promise.then((ok) => { if (ok && g.parent) addOsm(); });
+    g.userData.nightGlow = (on) => setFacadeNight(on);
+
     scene.add(g);
     return g;
   }
@@ -259,11 +348,19 @@ export function createRealWorldMap(preset) {
     id: preset.id, name: preset.name,
     height, color, isRunway, runway, createScenery, raceCourse, fixes,
     forest: forestDensity, conifer: (h) => smoothstep(250, 900, h) * 0.85 + 0.1,
-    obstacleTop() { return -Infinity; },
+    obstacleTop(x, z) {
+      if (!osm.world) return -Infinity;
+      const i = osm.world.buildingAt(x, z);
+      const b = i >= 0 ? osm.data.buildings[i] : null;
+      return b && b.top !== undefined ? b.top : -Infinity;
+    },
+    loadScenery, commitScenery,
+    get osmStatus() { return osm.status; },
+    get attribution() { return osm.data ? 'Elevation: Mapzen Terrain Tiles · Scenery ' + OSM_ATTRIBUTION : 'Elevation: Mapzen Terrain Tiles'; },
     // real-world extras used by main.js / modes.js
     latLon: { lat: preset.lat, lon: preset.lon },
     prefetch, ready, abandonPending,
     get elevationOffline() { return offline; },
-    _debug: { proj, headingRad, spawn, toRunway, rawHeight, tiles },
+    _debug: { proj, headingRad, spawn, toRunway, rawHeight, tiles, osm },
   };
 }

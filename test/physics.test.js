@@ -1453,6 +1453,95 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   check('engine sound: deterministic for a given seed', r1.every((v, i) => v === r2[i]));
 }
 
+// ---- v12: OpenStreetMap scenery for the real-world maps (osm.js) ----
+// Driven by a HAND-WRITTEN fixture in Overpass JSON format (test/fixtures/
+// make-osm-fixture.mjs), not real OSM data: the container that runs these has
+// no route to Overpass. It checks the pipeline: parse, rasterise, collide, mesh.
+{
+  const { readFileSync } = await import('node:fs');
+  const osm = await import('../src/maps/osm.js');
+  const { makeProjection, bearingToHeadingRad } = await import('../src/maps/tilesampler.js');
+  const fx = JSON.parse(readFileSync(new URL('./fixtures/overpass-changi.json', import.meta.url)));
+  const proj = makeProjection(1.3592, 103.9894, 12);
+  const ll = osm.makeLL(proj);
+  const o = ll(1.3592, 103.9894), n1k = ll(1.3592 + 1000 / 110574, 103.9894), e1k = ll(1.3592, 103.9894 + 1000 / (111320 * Math.cos(1.3592 * Math.PI / 180)));
+  check('osm: lat/lon lands in the map frame (origin, 1 km N = -z, 1 km E = +x)',
+    Math.hypot(...o) < 0.01 && Math.abs(n1k[1] + 1000) < 8 && Math.abs(n1k[0]) < 0.01 && Math.abs(e1k[0] - 1000) < 8,
+    `N ${n1k.map(v => v.toFixed(1))}, E ${e1k.map(v => v.toFixed(1))}`);
+  const data = osm.parseOverpass(fx, ll);
+  check('osm: fixture parses into buildings, areas, roads/taxiways and runways',
+    data.buildings.length === 22 && data.runways.length === 2 && data.lines.filter(l => l.kind === 'road').length === 2 && data.lines.filter(l => l.kind === 'taxiway').length === 2,
+    `${data.buildings.length} buildings, ${data.areas.length} areas, ${data.lines.length} lines, ${data.runways.length} runways`);
+  const office = data.buildings.find(b => Math.abs(b.height - 62) < 0.01);
+  const flats = data.buildings.filter(b => b.kind === 1 && b.height > 30);
+  check('osm: heights come from height=, else building:levels x 3.2 m', !!office && office.kind === 0 && flats.some(b => Math.abs(b.height - (20 * 3.2 + 0.6)) < 0.01),
+    `office ${office?.height} m, tallest flats ${Math.max(...flats.map(b => b.height)).toFixed(1)} m`);
+  const retail = data.buildings.find(b => Math.abs(b.height - (3 * 3.2 + 0.6)) < 0.01);
+  check('osm: a multipolygon outline split over two ways joins into one ring', !!retail && retail.ring.length === 4,
+    retail ? `${retail.ring.length} corners, area ${Math.abs(osm.ringArea(retail.ring)).toFixed(0)} m2` : 'missing');
+  check('osm: every ring comes out counter-clockwise', [...data.buildings.map(b => b.ring), ...data.areas.map(a => a.ring)].every(r => osm.ringArea(r) > 0));
+  const world = osm.buildOsmWorld(data);
+  const H = bearingToHeadingRad(23), fwd = [Math.cos(H), -Math.sin(H)], right = [Math.sin(H), Math.cos(H)];
+  const rf = (u, v) => [fwd[0] * u + right[0] * v, fwd[1] * u + right[1] * v];
+  const lc = (u, v) => world.landCover(...rf(u, v));
+  check('osm: land cover raster (forest, farmland, water, apron, taxiway, other runway)',
+    lc(0, -1600) === osm.LC.FOREST && lc(-1800, -900) === osm.LC.FARM && lc(1800, -1500) === osm.LC.WATER
+    && lc(0, 470) === osm.LC.PAVED && lc(1000, 200) === osm.LC.PAVED && lc(0, 1650) === osm.LC.PAVED && lc(3000, -3000) === osm.LC.NONE,
+    [lc(0, -1600), lc(-1800, -900), lc(1800, -1500), lc(0, 470), lc(1000, 200), lc(0, 1650)].join(','));
+  check('osm: neighbouring fields get different tones (patchwork)', new Set([0, 1, 2, 3].map(i => world.fieldTone(...rf(-1800 + i * 260, -900)))).size >= 3);
+  const iOffice = world.buildingAt(...rf(200, 1020));
+  check('osm: building lookup finds the tower under its footprint, nothing beside it',
+    iOffice >= 0 && data.buildings[iOffice] === office && world.buildingAt(...rf(200, 1080)) === -1);
+
+  // meshes: footprint extruded to height on the lowest ground, roofs on top
+  const { buildingMeshes, groundMeshes } = await import('../src/maps/osmMeshes.js');
+  const bm = buildingMeshes(data.buildings, (x, z) => 7 + x * 0.001);
+  let tris = 0; bm.traverse(m => { if (m.isMesh) tris += m.geometry.attributes.position.count / 3; });
+  check('osm: buildings merge into a few draw calls per tile', bm.children.length <= 8 && tris > 200, `${bm.children.length} meshes, ${tris} triangles`);
+  check('osm: building tops = ground + height (collision uses these)', Math.abs(office.top - (7 + rf(200, 1020)[0] * 0.001 + 62)) < 0.6, `top ${office.top.toFixed(1)}`);
+  const gm = groundMeshes(data, {
+    heightFn: () => 7, elev: 7, flat: true, lakeLevel: () => 12,
+    skipRunway: (rw) => /02L/.test(rw.ref),
+  });
+  const names = []; gm.traverse(m => { if (m.name) names.push(m.name); });
+  const strips = gm.children.filter(c => c.isGroup).length;
+  check('osm: the other runway gets a marked strip, ours is not drawn twice', strips === 1, `${strips} runway strips`);
+  check('osm: lakes above sea level get a water surface; roads are drawn', names.includes('osm-lakes') && names.includes('osm-roads'), names.join(','));
+  const gm2 = groundMeshes(data, { heightFn: () => 7, elev: 7, flat: false, lakeLevel: () => 12, skipRunway: () => false });
+  check('osm: late data (terrain already built) adds roads but no pavement or lakes',
+    gm2.children.every(c => c.name === 'osm-roads'), gm2.children.map(c => c.name || c.type).join(','));
+
+  // the real-world map end to end, with fetch stubbed to the fixture
+  const { createRealWorldMap } = await import('../src/maps/realworld.js');
+  const { AIRPORTS } = await import('../src/maps/airports.js');
+  const realFetch = globalThis.fetch;
+  let asked = '';
+  globalThis.fetch = async (u) => {
+    if (String(u).includes('overpass')) { asked = String(u); return new Response(JSON.stringify(fx), { status: 200 }); }
+    throw new Error('offline in tests');
+  };
+  try {
+    const map = createRealWorldMap(AIRPORTS.find(a => a.id === 'changi'));
+    const p = rf(0, 470), before = map.height(...p);
+    const ok = await map.loadScenery();
+    check('osm: the map asks Overpass for this field and accepts the answer', ok && /interpreter\?data=/.test(asked) && map.osmStatus === 'ready');
+    check('osm: nothing changes height/colour until committed', map.height(...p) === before);
+    map.commitScenery();
+    check('osm: committed apron is flattened to field elevation', Math.abs(map.height(...p) - 7) < 0.01, `${map.height(...p)}`);
+    const fForest = map.forest(...rf(0, -1600), 10, 0.05), fFarm = map.forest(...rf(-1800, -900), 10, 0.05);
+    check('osm: trees grow in the mapped forest and not on the fields', fForest > 0.8 && fFarm < 0.05, `forest ${fForest.toFixed(2)}, farm ${fFarm.toFixed(2)}`);
+    check('osm: attribution names OpenStreetMap once its data is used', /OpenStreetMap contributors/.test(map.attribution));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  const offlineFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('offline'); };
+  try {
+    const m2 = createRealWorldMap(AIRPORTS.find(a => a.id === 'innsbruck'));
+    check('osm: offline, the map degrades to the old scenery', (await m2.loadScenery()) === false && !m2.commitScenery() && m2.obstacleTop(0, 0) === -Infinity);
+  } finally { globalThis.fetch = offlineFetch; }
+}
+
 // ---- v11: autopilot ALT hold auto-trim ----
 // Before the integrators, P-only ALT hold settled 200-400 ft off target on the
 // Extra and Hornet (it needed a standing VS error to hold level-flight pitch).

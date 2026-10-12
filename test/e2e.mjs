@@ -661,12 +661,27 @@ const flat = await sim(`(() => { const m = window.__sim.world.maps.find(m => m.i
   return { h: Math.round(m.height(m.runway.spawn.x, m.runway.spawn.z)), elev: m.runway.y }; })()`);
 check('real-world runway flattens to field elevation (no tiles needed)', flat.h === flat.elev, JSON.stringify(flat));
 await page.evaluate(() => { window.__sim.game.toMenu?.(); });
+// v12: OpenStreetMap scenery. Overpass is stubbed with a HAND-WRITTEN fixture
+// (test/fixtures/make-osm-fixture.mjs), so this checks the pipeline offline.
+await page.evaluate(() => {
+  window.__osmFetch = window.fetch;
+  window.fetch = (u, o) => String(u).includes('overpass') ? window.__osmFetch('/test/fixtures/overpass-changi.json') : window.__osmFetch(u, o);
+});
 await page.evaluate(() => window.__sim.game.select({ mode: 'free', map: 'changi', aircraft: 'c172', time: 'day' }));
 await click('#btn-start');
 await page.waitForFunction('!document.querySelector("#loading").classList.contains("show") && window.__sim.game.state === "flying"', { timeout: 120000, polling: 1000 });
 await settle(800);
 const rw = await sim('({ map: window.__sim.map.id, ground: window.__sim.ac.onGround, crashed: window.__sim.ac.crashed, rwy: window.__sim.map.runway.name })');
 check('real-world Changi loads and spawns on the runway', rw.map === 'changi' && rw.ground && !rw.crashed, JSON.stringify(rw));
+const osmState = await sim(`(() => { const m = __sim.map; let ud = null;
+  (function walk(o) { if (o.userData && o.userData.osm) ud = o.userData.osm; (o.children || []).forEach(walk); })(__sim.camera.parent || {});
+  const H = m.runway.headingRad, fx = Math.cos(H), fz = -Math.sin(H), rx = Math.sin(H), rz = Math.cos(H);
+  const top = m.obstacleTop(fx * 200 + rx * 1020, fz * 200 + rz * 1020);
+  return { status: m.osmStatus, ud, top: Math.round(top), credit: document.querySelector('#map-credit').classList.contains('on') && /OpenStreetMap/.test(document.querySelector('#map-credit').textContent) }; })()`);
+check('OSM scenery: buildings, roads and land cover load, committed before the terrain',
+  osmState.status === 'ready' && osmState.ud && osmState.ud.buildings === 22 && osmState.ud.committed, JSON.stringify(osmState));
+check('OSM scenery: buildings are solid (62 m tower) and attribution is shown', osmState.top > 62 && osmState.credit, JSON.stringify(osmState));
+await page.evaluate(() => { if (window.__osmFetch) window.fetch = window.__osmFetch; });
 
 // --- v5 R2: LIVE weather fetches Open-Meteo and applies real wind ---
 console.log('live weather…');

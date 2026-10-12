@@ -191,6 +191,11 @@
           width: 180px; height: 180px; background: var(--panel); border: 1px solid var(--panel-line);
           display: none; z-index: 5; }
   #minimap.on { display: block; }
+  /* data attribution for the real-world maps (ODbL / terrain tiles) */
+  #map-credit { position: fixed; left: .5rem; bottom: .3rem; z-index: 5; display: none;
+          font: 10px/1.2 "B612", sans-serif; color: rgba(230,236,240,.72); text-shadow: 0 1px 2px rgba(0,0,0,.7);
+          pointer-events: none; }
+  #map-credit.on { display: block; }
 
   /* ---------- Flight school ---------- */
   #instructor { position: absolute; bottom: max(9vh, 4.5rem); left: 50%; transform: translateX(-50%);
@@ -494,6 +499,7 @@
 </div>
 
 <div class="screen show" id="loading"><div class="inner">INITIALISING TERRAIN &hellip;</div></div>
+<div id="map-credit"></div>
 
 <div class="screen" id="menu">
   <div class="inner">

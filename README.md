@@ -20,6 +20,11 @@ A browser flight simulator built with **Three.js**
   night. The wings, struts and engines stay visible through the glass.
 - **Airshow touches** — wingtip vortices when you pull G, smoke trail on `K`.
 - **Feel**: spring-damped chase camera with buffet shake, control expo, Shift for fine control.
+- **Real-world scenery from OpenStreetMap** at the real airfields: towns
+  extruded to their mapped heights with windows that light up at night, the
+  airport's aprons, taxiways and other runways (with proper markings), roads,
+  lakes, and fields and forests where they really are. Buildings are solid.
+  Data © OpenStreetMap contributors (ODbL), credited on screen.
 - **Engine sound modelled from physics**, not loops: you hear each cylinder
   fire through the exhaust and the propeller blades beat (a lumpy idle, a
   starter cranking, pops when you chop the throttle in the Extra), or a

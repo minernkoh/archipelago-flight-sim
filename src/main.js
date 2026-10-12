@@ -175,6 +175,21 @@ async function loadMap(map) {
     if (!map.ready(map.runway.spawn.x, map.runway.spawn.z, COARSE_TILE_RADIUS)) map.abandonPending?.();
     if (map.elevationOffline) hud.message('Elevation tiles offline — flying a flat world.', 5000);
   }
+  // OpenStreetMap scenery (real-world maps): wait up to 15 s so land cover,
+  // forests and flat aprons are in the terrain from the first chunk. Slower
+  // than that, the terrain is built without it and only the buildings and
+  // roads appear when the data lands (osm.js explains why).
+  if (map.loadScenery) {
+    const inner = loading.querySelector('.inner'), was = inner?.textContent;
+    if (inner) inner.textContent = 'LOADING OPENSTREETMAP SCENERY …';
+    const ok = await Promise.race([map.loadScenery(), new Promise(r => setTimeout(() => r(false), 15000))]);
+    if (ok) map.commitScenery();
+    if (inner) inner.textContent = was;
+  }
+  const credit = document.querySelector('#map-credit');
+  const showCredit = () => { if (!credit) return; credit.textContent = map.attribution || ''; credit.classList.toggle('on', !!map.attribution && currentMap === map); };
+  showCredit();
+  map.loadScenery?.().then(showCredit);
   terrain = createTerrain(scene, map);   // picks up GROUND_DETAIL (lite or full) at creation
   terrain.setFarTier(qualityHigh);   // a fresh streamer defaults to on — re-apply the setting
   terrain.setTrees(qualityHigh);

@@ -14,7 +14,7 @@ const lam = (c) => new THREE.MeshLambertMaterial({ color: c });
 // glass. At night a hashed subset of windows lights up warm. All analytic,
 // no textures; distance-faded so it never shimmers.
 const FACADE = { night: { value: 0 }, sky: { value: new THREE.Color(0x9fb4c8) } };
-function facade(mat, kind) {   // kind: 0 curtain-wall glass, 1 concrete with windows
+export function facade(mat, kind) {   // kind: 0 curtain-wall glass, 1 concrete with windows
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.fNight = FACADE.night;
     sh.uniforms.fSky = FACADE.sky;
@@ -77,6 +77,9 @@ for (const m of WARM_MATS) facade(m, 0);
 for (const m of [M.concrete, M.white, M.sand]) facade(m, 1);
 // Night: the facade shader lights individual windows (FACADE.night); the old
 // whole-building emissive stays as a faint wash so towers read at distance.
+/** Facade window lights only (shared by every facade material, any map). */
+export function setFacadeNight(on) { FACADE.night.value = on ? 1 : 0; }
+
 export function setNightGlow(on) {
   FACADE.night.value = on ? 1 : 0;
   for (const m of WARM_MATS) { m.emissive.copy(on ? WARM : BLACK); m.emissiveIntensity = on ? 0.08 : 0; }
