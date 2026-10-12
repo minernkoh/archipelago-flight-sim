@@ -5,6 +5,7 @@ import { launch } from './browser.mjs';
 const out = process.argv[2] || 'test/shots';
 const map = process.argv[3] || 'archipelago';
 const time = process.argv[4] || 'day';
+const weather = process.argv[5] || 'calm';
 const W = 1280, H = 720;
 const browser = await launch({ headless: true, protocolTimeout: 180000,
   args: ['--enable-unsafe-swiftshader', `--window-size=${W},${H}`], defaultViewport: { width: W, height: H } });
@@ -22,11 +23,11 @@ await page.waitForFunction('(window.__sim.frames || 0) > 3', { timeout: 90000, p
 const wait = (ms) => new Promise(r => setTimeout(r, ms));
 const shot = async (name) => {
   await wait(+(process.env.SHOT_WAIT || 4000));
-  try { await page.screenshot({ path: `${out}/${map}-${time}-${name}.png` }); console.log('shot', name); }
+  try { await page.screenshot({ path: `${out}/${map}-${time}${weather === 'calm' ? '' : '-' + weather}-${name}.png` }); console.log('shot', name); }
   catch (e) { console.log('shot failed', name, e.message); }
 };
 await shot('menu');
-await page.evaluate((m, t) => window.__sim.game.select({ map: m, time: t, mode: 'free', aircraft: 'c172' }), map, time);
+await page.evaluate((m, t, w) => window.__sim.game.select({ map: m, time: t, mode: 'free', aircraft: 'c172', weather: w }), map, time, weather);
 await page.evaluate(() => document.querySelector('#btn-start').click());
 await page.waitForFunction('window.__sim.game.state === "flying"', { timeout: 120000, polling: 500 });
 await shot('runway');

@@ -1023,6 +1023,44 @@ import { mapWeather } from '../src/liveweather.js';
   check('liveweather: extreme wind clamps to the flyable cap', gale.wind.kts <= 34 && gale.clamped === true, JSON.stringify(gale.wind));
   const still = mapWeather({});
   check('liveweather: empty response -> calm, no NaNs', still.wind.kts === 0 && still.wind.gustKts === 0 && Number.isFinite(still.wind.turb));
+  check('liveweather: no weather code -> clear sky', still.sky === 'clear');
+  check('liveweather: WMO rain codes -> rain', mapWeather({ weather_code: 63 }).sky === 'rain' && mapWeather({ weather_code: 81 }).sky === 'rain');
+  check('liveweather: WMO thunderstorm -> storm', mapWeather({ weather_code: 95 }).sky === 'storm');
+  check('liveweather: measurable precipitation alone -> rain', mapWeather({ precipitation: 1.2 }).sky === 'rain');
+}
+
+// ---- v9: precipitation presets + wet-runway braking ----
+import { WET_WEATHER } from '../src/physics/wind.js';
+{
+  check('weather: rain/storm presets exist', !!WEATHER.rain && !!WEATHER.storm);
+  check('weather: storm air stays inside the proven gusty envelope',
+    WEATHER.storm.turb <= WEATHER.gusty.turb && WEATHER.storm.gustKts <= WEATHER.gusty.gustKts,
+    JSON.stringify(WEATHER.storm));
+  check('weather: rain and storm wet the runway, calm does not',
+    WET_WEATHER.has('rain') && WET_WEATHER.has('storm') && !WET_WEATHER.has('calm'));
+
+  // Same 25 m/s rollout on full brakes, dry vs wet: wet stops measurably longer.
+  const stopDist = (wet) => {
+    const a = createAircraft({ pos: v3(0, 2, 0) });
+    resetOnRunway(a, { x: 0, z: 0, y: 0, headingRad: 0 });
+    fly(a, ctl(), 1, { ...flat, wet });       // settle on the gear
+    a.vel.x = 25;
+    const x0 = a.pos.x;
+    let t = 0;
+    fly(a, ctl({ brakes: true }), 30, { ...flat, wet }, () => { if (Math.hypot(a.vel.x, a.vel.z) > 0.3) t += DT; });
+    return { d: a.pos.x - x0, t, crashed: a.crashed };
+  };
+  const dry = stopDist(false), wet = stopDist(true);
+  check('wet runway: braking still stops the aircraft', !wet.crashed && wet.t < 29, `${wet.t.toFixed(1)} s`);
+  check('wet runway: stopping distance 1.2-2x dry', wet.d > dry.d * 1.2 && wet.d < dry.d * 2,
+    `dry ${dry.d.toFixed(0)} m / wet ${wet.d.toFixed(0)} m`);
+  check('wet flag is inert when absent (dry == undefined)', (() => {
+    const a = createAircraft({ pos: v3(0, 2, 0) }), b = createAircraft({ pos: v3(0, 2, 0) });
+    resetOnRunway(a, { x: 0, z: 0, y: 0, headingRad: 0 }); resetOnRunway(b, { x: 0, z: 0, y: 0, headingRad: 0 });
+    a.vel.x = b.vel.x = 20;
+    fly(a, ctl({ brakes: true }), 3, flat); fly(b, ctl({ brakes: true }), 3, { ...flat, wet: false });
+    return a.pos.x === b.pos.x;
+  })());
 }
 
 // ---- Study-level C172 start/electrical (v5-R3) ----

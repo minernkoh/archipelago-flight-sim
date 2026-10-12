@@ -20,7 +20,15 @@ export const WEATHER = {
   calm:   { kts: 0,  gustKts: 0,  turb: 0 },
   breezy: { kts: 8,  gustKts: 5,  turb: 0.35 },
   gusty:  { kts: 16, gustKts: 12, turb: 1.0 },
+  // Precipitation presets: the wind half of them. The sky half (overcast deck,
+  // rain, lightning, visibility, wet runway) lives in src/weather.js. Storm air
+  // stays inside the 'gusty' envelope the physics tests prove flyable.
+  rain:   { kts: 10, gustKts: 6,  turb: 0.45 },
+  storm:  { kts: 18, gustKts: 12, turb: 1.0 },
 };
+
+// Runway surface for each preset (groundContact reads env.wet).
+export const WET_WEATHER = new Set(['rain', 'storm']);
 
 export function createWind() {
   let dirDeg = 270, kts = 0, gustKts = 0, turb = 0;

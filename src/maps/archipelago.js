@@ -10,6 +10,8 @@ import * as THREE from 'three';
 import { makeNoise, woodland } from './noise.js';
 import { PAL, seabed, beach, facetJitter } from './palette.js';
 import { runwayDressing, reciprocal } from './runwayPaint.js';
+import { apron, hangar, tower, fuelTruck } from './airfieldKit.js';
+import { clubPlaneGeometry } from '../traffic.js';
 
 /**
  * The map contract. Every world (archipelago, singapore, …) exports one object
@@ -207,23 +209,28 @@ export function createAirfield(scene) {
 
   const mat = (c) => new THREE.MeshLambertMaterial({ color: c, flatShading: true });
 
-  const hangar = new THREE.Group();
-  const shed = new THREE.Mesh(new THREE.BoxGeometry(26, 8, 18), mat(0x9aa2ab));
-  shed.position.y = 4;
-  const roof = new THREE.Mesh(new THREE.CylinderGeometry(9, 9, 26, 3, 1, false, 0, Math.PI), mat(0x77502e));
-  roof.rotation.z = Math.PI / 2; roof.rotation.y = Math.PI / 2; roof.position.y = 8; roof.scale.set(1, 1, 0.6);
-  hangar.add(shed, roof);
-  hangar.position.set(120, RUNWAY.y, 60);
-  g.add(hangar);
-
-  const tower = new THREE.Group();
-  const shaft = new THREE.Mesh(new THREE.BoxGeometry(4, 14, 4), mat(0xb8bdc4));
-  shaft.position.y = 7;
-  const cab = new THREE.Mesh(new THREE.BoxGeometry(7, 3.4, 7), mat(0x2c3844));
-  cab.position.y = 15.5;
-  tower.add(shaft, cab);
-  tower.position.set(210, RUNWAY.y, 55);
-  g.add(tower);
+  // Apron, taxiway, hangar, tower, parked club aircraft, fuel truck (airfieldKit.js).
+  const field = new THREE.Group();
+  field.position.set(0, RUNWAY.y, 0);
+  field.add(apron({ x0: 92, x1: 172, z0: 24, z1: 50, runwayHalfWidth: RUNWAY.halfWidth, taxiX: 132 }));
+  const hg = hangar({ w: 30, d: 22, h: 7 });
+  hg.position.set(132, 0, 62);
+  const tw = tower({ h: 16 });
+  tw.position.set(212, 0, 56);
+  const parked = clubPlaneGeometry();
+  const parkMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide });
+  for (const [x, z, yaw] of [[104, 38, 2.2], [158, 36, -2.3]]) {
+    const pm = new THREE.Mesh(parked, parkMat);
+    pm.position.set(x, 1.23, z);
+    pm.rotation.set(0, yaw, 0.0);
+    pm.castShadow = true;
+    field.add(pm);
+  }
+  const truck = fuelTruck();
+  truck.position.set(170, 0, 44); truck.rotation.y = 0.5;
+  field.add(hg, tw, truck);
+  g.add(field);
+  g.userData.towerBeacon = tw.userData.beacon;
 
   const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 7), mat(0xcccccc));
   pole.position.set(30, RUNWAY.y + 3.5, 40);

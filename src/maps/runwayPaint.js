@@ -15,6 +15,10 @@
 import * as THREE from 'three';
 
 const PAINT = 0xe9ebee;
+
+// Shared by every runway slab: weather.js sets how wet the surface is and the
+// sky colour the standing water reflects.
+export const RUNWAY_WX = { wet: { value: 0 }, sky: { value: new THREE.Color(0x9aa3ab) } };
 let _paintMat = null;
 function paintMat() {
   // Stacked above the slab, which is itself polygon-offset above the ground.
@@ -29,12 +33,14 @@ function asphaltMaterial(length, width, tone) {
   });
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.rwySize = { value: new THREE.Vector2(length, width) };
+    sh.uniforms.rwyWet = RUNWAY_WX.wet;
+    sh.uniforms.rwySky = RUNWAY_WX.sky;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec2 vRwyUv;')
       .replace('#include <uv_vertex>', '#include <uv_vertex>\nvRwyUv = uv;');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        varying vec2 vRwyUv; uniform vec2 rwySize;
+        varying vec2 vRwyUv; uniform vec2 rwySize; uniform float rwyWet; uniform vec3 rwySky;
         float rh(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
         float rn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
           return mix(mix(rh(i), rh(i + vec2(1, 0)), f.x), mix(rh(i + vec2(0, 1)), rh(i + vec2(1, 1)), f.x), f.y); }`)
@@ -64,9 +70,18 @@ function asphaltMaterial(length, width, tone) {
           float streak = rn(vec2(m.x * 0.08, m.y * 2.2));
           float rubber = tz * track * (0.35 + 0.65 * streak);
           diffuseColor.rgb *= (1.0 + k) * (1.0 - 0.6 * clamp(rubber, 0.0, 1.0));
+          diffuseColor.rgb *= 1.0 - 0.38 * rwyWet;                  // wet asphalt goes dark
           // shoulders a little lighter and dustier
           diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 1.35 + vec3(0.02),
             smoothstep(rwySize.y * 0.5 - 2.6, rwySize.y * 0.5 - 2.4, across));
+        }`)
+      .replace('#include <opaque_fragment>', `#include <opaque_fragment>
+        if (rwyWet > 0.0) {
+          // standing water: a fresnel sheet of sky, strongest in the puddles
+          vec2 m = vRwyUv * rwySize;
+          float puddle = smoothstep(0.45, 0.7, rn(m * vec2(0.06, 0.16) + 41.0));
+          float fres = pow(1.0 - clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0), 5.0);
+          gl_FragColor.rgb += rwySky * rwyWet * (0.06 + fres * (0.35 + 0.65 * puddle));
         }`);
   };
   mat.customProgramCacheKey = () => 'rwy-asphalt';

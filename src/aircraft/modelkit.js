@@ -283,6 +283,26 @@ export function wingHalf(stations, { hingeC = 0.74, surfaces = [], camber = 0, t
   return out;
 }
 
+/** Concatenate non-indexed position+colour geometries into one (one draw call). */
+export function mergeGeos(geos) {
+  let n = 0;
+  for (const g of geos) n += g.attributes.position.count;
+  const pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+  let o = 0;
+  for (const g of geos) {
+    pos.set(g.attributes.position.array, o);
+    col.set(g.attributes.color.array, o);
+    o += g.attributes.position.array.length;
+    g.dispose();
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  out.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  out.computeVertexNormals();
+  out.computeBoundingSphere();
+  return out;
+}
+
 // Mirror a list of right-side stations to the left (z -> -z).
 export const mirrorZ = (sts) => sts.map(s => ({ ...s, z: -s.z }));
 

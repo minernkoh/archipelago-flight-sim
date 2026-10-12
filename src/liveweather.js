@@ -21,16 +21,22 @@ export function mapWeather(cur = {}) {
   const gustKts = Math.min(Math.round(gustAbove), GUST_CAP);
   const dirDeg = Math.round(((cur.wind_direction_10m || 0) % 360 + 360) % 360);
   const turb = Math.max(0, Math.min(TURB_CAP, gustKts / 12)); // gustier air => more mechanical turbulence
+  // WMO weather code -> the sim's precipitation sky (weather.js presets).
+  // 95-99 thunderstorm; 51-67 drizzle/rain/freezing rain; 80-82 showers.
+  const code = cur.weather_code ?? -1;
+  const sky = code >= 95 ? 'storm'
+    : (code >= 51 && code <= 67) || (code >= 80 && code <= 82) || (cur.precipitation ?? 0) > 0.2 ? 'rain' : 'clear';
   return {
     wind: { kts, gustKts, turb, dirDeg },
     vis: { visibilityM: cur.visibility, cloudCover: cur.cloud_cover },
+    sky,
     clamped: Math.round(steadyKt) > STEADY_CAP || Math.round(gustAbove) > GUST_CAP,
   };
 }
 
 export async function fetchLiveWeather(lat, lon) {
   const q = `?latitude=${lat}&longitude=${lon}` +
-    '&current=wind_speed_10m,wind_direction_10m,wind_gusts_10m,visibility,cloud_cover&wind_speed_unit=ms';
+    '&current=wind_speed_10m,wind_direction_10m,wind_gusts_10m,visibility,cloud_cover,weather_code,precipitation&wind_speed_unit=ms';
   const res = await fetch(API + q, { mode: 'cors' });
   if (!res.ok) throw new Error('weather ' + res.status);
   const j = await res.json();

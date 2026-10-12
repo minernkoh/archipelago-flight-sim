@@ -35,6 +35,9 @@ export function createAudio() {
   let viewFilter, viewGain;
   let buffetSrc, buffetFilter, buffetGain;
   let flapOsc, flapGain, gearOsc, gearGain;
+  // weather: rain hiss (outside) / drumming (on the canopy), thunder one-shots
+  let rainSrc, rainFilter, rainGain, drumFilter, drumGain, brownBuf = null;
+  let rainLevel = 0, rainCockpit = false;
   // per-frame scratch (plain numbers, no allocation)
   let camPX = 0, camPY = 0, camPZ = 0, camT = -1, camVX = 0, camVY = 0, camVZ = 0;
   let dop = 1, lastFlaps = null, lastGear = null, flapUntil = 0, gearUntil = 0;
@@ -151,6 +154,25 @@ export function createAudio() {
     gearGain = ctx.createGain(); gearGain.gain.value = 0;
     gearOsc.connect(gearBp).connect(gearGain).connect(view);
     gearOsc.start();
+
+    // rain: the pink buffer through a bright bandpass (hiss) plus a low,
+    // lumpy band for drops drumming on the airframe when heard from inside
+    brownBuf = noiseBuf;
+    rainSrc = ctx.createBufferSource(); rainSrc.buffer = pinkBuf; rainSrc.loop = true;
+    rainFilter = ctx.createBiquadFilter(); rainFilter.type = 'bandpass'; rainFilter.frequency.value = 3200; rainFilter.Q.value = 0.4;
+    rainGain = ctx.createGain(); rainGain.gain.value = 0;
+    drumFilter = ctx.createBiquadFilter(); drumFilter.type = 'bandpass'; drumFilter.frequency.value = 900; drumFilter.Q.value = 0.8;
+    drumGain = ctx.createGain(); drumGain.gain.value = 0;
+    rainSrc.connect(rainFilter).connect(rainGain).connect(sfx);
+    rainSrc.connect(drumFilter).connect(drumGain).connect(sfx);
+    rainSrc.start();
+    applyRain();
+  }
+  function applyRain() {
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    rainGain.gain.setTargetAtTime(rainLevel * (rainCockpit ? 0.09 : 0.22), t, 0.4);
+    drumGain.gain.setTargetAtTime(rainLevel * (rainCockpit ? 0.26 : 0.04), t, 0.4);
   }
 
   return {
@@ -204,6 +226,35 @@ export function createAudio() {
       g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
       src.connect(f).connect(g).connect(viewFilter);
       src.start(0, Math.random() * 1.5); src.stop(ctx.currentTime + dur + 0.03);
+    },
+    /** Rain bed: k 0..1, cockpit = heard through the canopy (drumming). */
+    setRain(k, cockpit) {
+      const nk = Math.max(0, Math.min(1, k || 0));
+      if (Math.abs(nk - rainLevel) < 0.02 && !!cockpit === rainCockpit) return;
+      rainLevel = nk; rainCockpit = !!cockpit;
+      applyRain();
+    },
+    /** Thunder after `delay` s (distance / speed of sound); k 0..1 = closeness. */
+    thunder(delay, k = 0.6) {
+      if (!ctx || !brownBuf) return;
+      const t0 = ctx.currentTime + Math.max(0, delay);
+      const src = ctx.createBufferSource(); src.buffer = brownBuf; src.loop = true;
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(260 + 900 * k, t0);
+      lp.frequency.exponentialRampToValueAtTime(90, t0 + 4);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, ctx.currentTime);
+      g.gain.setValueAtTime(0.0001, t0);
+      // a crack when close, then a long rolling rumble with a few swells
+      g.gain.exponentialRampToValueAtTime(0.25 + 0.6 * k * k, t0 + 0.03 + 0.25 * (1 - k));
+      let tt = t0 + 0.4;
+      for (let i = 0; i < 4; i++) {
+        tt += 0.4 + Math.random() * 0.7;
+        g.gain.exponentialRampToValueAtTime((0.12 + 0.3 * Math.random()) * (0.4 + 0.6 * k), tt);
+      }
+      g.gain.exponentialRampToValueAtTime(0.0001, tt + 2.2);
+      src.connect(lp).connect(g).connect(sfx);
+      src.start(t0, Math.random()); src.stop(tt + 2.4);
     },
     thud() {
       if (!ctx) return;

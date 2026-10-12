@@ -61,6 +61,8 @@ const WEATHERS = [
   { id: 'calm', label: 'CALM', hint: 'still air' },
   { id: 'breezy', label: 'BREEZY', hint: '8 kt, light gusts' },
   { id: 'gusty', label: 'GUSTY', hint: '16 kt gusting 28 — hold on' },
+  { id: 'rain', label: 'RAIN', hint: 'overcast at 2100 ft, showers, wet runway' },
+  { id: 'storm', label: 'STORM', hint: 'thunderstorm: low ceiling, heavy rain, lightning' },
   { id: 'live', label: 'LIVE', hint: 'real current weather at this field' },
 ];
 
@@ -111,9 +113,10 @@ function crashWhy(snap, reason) {
   }
 }
 
-export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, autopilot, panel }) {
+export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, autopilot, panel, replay }) {
   let crashT = null; // delay before the crash screen so the debris burst reads
-  let state = 'menu';           // menu | flying | paused | crash | results
+  let state = 'menu';           // menu | flying | paused | crash | results | replay
+  let replayFrom = null;        // the state an instant replay returns to
   let sel = { mode: 'free', map: 'archipelago', aircraft: 'c172', weather: 'calm', time: 'day' };
   try { sel = { ...sel, ...JSON.parse(localStorage.getItem(SEL_KEY) || '{}') }; } catch { /* fresh defaults */ }
   let map = null, rings = null;  // live handles, set by begin()
@@ -362,6 +365,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
   window.addEventListener('keydown', menuKey);
 
   function resetFlight() {
+    replay?.clear();
     const r = map.runway;
     resetOnRunway(ac, { x: r.spawn.x, z: r.spawn.z, y: r.y, headingRad: r.headingRad });
     controls.resetFlaps();
@@ -474,6 +478,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
   }
 
   function toMenu() {
+    if (state === 'replay') replay.close();
     commitFlight();
     trainer?.stop();
     lessonId = null;
@@ -577,7 +582,32 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
   paintMenuCursor();
   $('#btn-start').addEventListener('click', () => { audio.resume(); begin(); });
 
+  // Instant replay: from flight, pause, crash or results; returns to where it
+  // was opened. The physics state is never touched (replay.js plays a ghost).
+  const SCREEN_OF = { paused: 'pause', crash: 'crash', results: 'results' };
+  function openReplay() {
+    if (!replay || !['flying', 'paused', 'crash', 'results'].includes(state)) return;
+    if (!replay.open(ac)) { hud.message('Nothing recorded yet — fly a little first.', 2200); return; }
+    replayFrom = state;
+    state = 'replay';
+    showScreen(null);
+    hud.show(false);
+    instrEl.classList.remove('show');
+    panel?.setVisible?.(false);
+    audio.resume();
+  }
+  function closeReplay() {
+    if (state !== 'replay') return;
+    replay.close();
+    state = replayFrom || 'paused';
+    if (state === 'flying') { showScreen(null); audio.resume(); }
+    else { showScreen(SCREEN_OF[state] || 'pause'); if (state === 'paused') audio.suspend(); }
+    if (lessonId && state === 'flying') instrEl.classList.add('show');
+    panel?.setVisible?.(camRig.modeName === 'COCKPIT');
+  }
+
   const actions = {
+    replay: openReplay,
     resume: () => { state = 'flying'; showScreen(null); audio.resume(); },
     restart: () => (lessonId ? beginLesson(lessonId) : begin()),
     menu: toMenu,
@@ -610,7 +640,9 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
   document.querySelectorAll('[data-act]').forEach(b =>
     b.addEventListener('click', () => actions[b.dataset.act]()));
 
+  controls.on('replay', () => { if (state === 'replay') closeReplay(); else openReplay(); });
   controls.on('pause', () => {
+    if (state === 'replay') { closeReplay(); return; }
     if (state === 'flying') {
       state = 'paused'; showScreen('pause'); audio.suspend();
       // "restart from last gate" only makes sense mid-race past gate 1
@@ -619,7 +651,10 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
     } else if (state === 'paused') actions.resume();
   });
   controls.on('reset', () => { if (state === 'flying' || state === 'crash') actions.restart(); });
-  controls.on('camera', () => { camRig.cycle(); hud.setCamera(camRig.modeName); });
+  controls.on('camera', () => {
+    if (state === 'replay') { replay.nextCam(); return; }
+    camRig.cycle(); hud.setCamera(camRig.modeName);
+  });
   controls.on('flyby', () => {
     if (state !== 'flying') return;
     camRig.toggleFlyby(); hud.setCamera(camRig.modeName);
@@ -630,6 +665,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
 
   return {
     get state() { return state; },
+    openReplay, closeReplay,
     get mode() { return sel.mode; },
     get maneuver() { return maneuver; }, // freestyle detector (null otherwise)
     get selection() { return { ...sel }; },

@@ -6,6 +6,7 @@
 import { v3, vAdd, vScale, vCross, qRot, qRotInv, clamp } from './vecmath.js';
 
 const MU_ROLL = 0.02, MU_BRAKE = 0.5, MU_SIDE = 0.75;
+const WET_BRAKE = 0.6;              // wet runway: braking friction falls to ~60%
 const HARD_LANDING = 2.0;           // m/s — survivable but rated "hard"
 
 export function gearForces(ac, controls, env, dt) {
@@ -66,7 +67,7 @@ export function gearForces(ac, controls, env, dt) {
 
     // Viscous below saturation (kills jitter at rest), Coulomb-capped above.
     const braking = g.brake && controls.brakes;
-    const muLong = braking ? MU_BRAKE : MU_ROLL;
+    const muLong = braking ? MU_BRAKE * (env.wet ? WET_BRAKE : 1) : MU_ROLL;
     const slopeLong = (braking ? 900 : 30) * massScale;
     const fLong = -clamp(slopeLong * vLong, -muLong * N, muLong * N);
     const fLat = -clamp(20000 * massScale * vLat, -MU_SIDE * N, MU_SIDE * N);

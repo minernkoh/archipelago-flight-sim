@@ -208,12 +208,12 @@ export function createEnvironment(scene, renderer) {
       horizon: { value: tod.skyHorizon.clone() }, zenith: { value: tod.skyZenith.clone() },
       sunDir: { value: tod.sunDir.clone() }, sunI: { value: 1.0 },
       sunColor: { value: tod.sunColor.clone() }, haze: { value: tod.fog.clone() },
-      night: { value: 0 }, time: { value: 0 },
+      night: { value: 0 }, time: { value: 0 }, flash: { value: 0 },
     },
     vertexShader: `varying vec3 vDir; void main(){ vDir=normalize(position);
       gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
     fragmentShader: `varying vec3 vDir;
-      uniform vec3 horizon,zenith,sunDir,sunColor,haze; uniform float sunI,night,time;
+      uniform vec3 horizon,zenith,sunDir,sunColor,haze; uniform float sunI,night,time,flash;
       float h31(vec3 p){ p=fract(p*0.3183099+0.1); p*=17.0; return fract(p.x*p.y*p.z*(p.x+p.y+p.z)); }
       void main(){
         vec3 d=normalize(vDir);
@@ -241,6 +241,7 @@ export function createEnvironment(scene, renderer) {
         }
         // haze floor: below/at the horizon the sky becomes the fog colour
         c=mix(c,haze,smoothstep(0.10,-0.02,y));
+        c+=vec3(0.75,0.8,1.0)*flash*0.9;                              // lightning
         gl_FragColor=vec4(c,1.0);
       }`,
   });
@@ -443,7 +444,7 @@ export function createEnvironment(scene, renderer) {
   }
   function lightLevel() {
     const todK = tod.night ? 1 : tod === TIMES.day ? 0 : 0.75;
-    return Math.max(todK, wx.visF < 0.75 ? 0.8 : 0);
+    return Math.max(todK, wx.visF * wxSky.vis < 0.75 || wxSky.overcast > 0.5 ? 0.8 : 0);
   }
 
   // Re-apply night content (glow, beacons, runway lights, landing light gate)
@@ -457,52 +458,80 @@ export function createEnvironment(scene, renderer) {
     }
   }
 
+  // Precipitation sky (weather.js drives it per frame): `overcast` greys and
+  // darkens the whole palette, `vis` multiplies visibility, `inCloud` is the
+  // whiteout while the camera is inside the deck, `flash` a lightning flash.
+  const wxSky = { overcast: 0, vis: 1, inCloud: 0, flash: 0, cloudCol: new THREE.Color(0x8d949c) };
+  const _c = new THREE.Color(), _hsl = { h: 0, s: 0, l: 0 };
+  // Grey a colour toward a storm tone: desaturate and darken by k.
+  function storm(out, src, k, dark = 0.3) {
+    src.getHSL(_hsl);
+    out.setHSL(_hsl.h, _hsl.s * (1 - 0.85 * k), _hsl.l * (1 - dark * k));
+    return out;
+  }
+
   function setTimeOfDay(name) {
     tod = TIMES[name] || TIMES.day;
-    if (renderer) renderer.toneMappingExposure = tod.exposure;
-    scene.fog.color.copy(tod.fog);
-    scene.fog.near = tod.fogNear; scene.fog.far = tod.fogFar;
-    scene.background.copy(tod.fog);
-    hemi.color.copy(tod.hemiSky); hemi.groundColor.copy(tod.hemiGround); hemi.intensity = tod.hemiI;
-    sun.color.copy(tod.sunColor); sun.intensity = tod.sunI;
+    applyPalette();
+  }
+  function applyPalette() {
+    const k = wxSky.overcast;
+    if (renderer) renderer.toneMappingExposure = tod.exposure * (1 - 0.08 * k);
+    storm(scene.fog.color, tod.fog, k, 0.32);
+    scene.background.copy(scene.fog.color);
+    storm(hemi.color, tod.hemiSky, k, 0.2); storm(hemi.groundColor, tod.hemiGround, k, 0.2);
+    hemi.intensity = tod.hemiI * (1 - 0.15 * k) + wxSky.flash * 2.5;
+    sun.color.copy(tod.sunColor); sun.intensity = tod.sunI * (1 - 0.82 * k);
     sun.position.copy(tod.sunDir).multiplyScalar(1000);
-    ambient.color.copy(tod.ambient); ambient.intensity = tod.ambientI;
-    skyMat.uniforms.horizon.value.copy(tod.skyHorizon);
-    skyMat.uniforms.zenith.value.copy(tod.skyZenith);
+    ambient.color.copy(tod.ambient); ambient.intensity = tod.ambientI + wxSky.flash * 1.5;
+    storm(skyMat.uniforms.horizon.value, tod.skyHorizon, k, 0.3);
+    storm(skyMat.uniforms.zenith.value, tod.skyZenith, k, 0.15);
     skyMat.uniforms.sunDir.value.copy(tod.sunDir);
-    skyMat.uniforms.sunI.value = tod.night ? 1.0 : tod.sunI / 1.9;
+    skyMat.uniforms.sunI.value = (tod.night ? 1.0 : tod.sunI / 1.9) * (1 - k);
     skyMat.uniforms.sunColor.value.copy(tod.sunColor);
-    skyMat.uniforms.haze.value.copy(tod.fog);
+    skyMat.uniforms.haze.value.copy(scene.fog.color);
     skyMat.uniforms.night.value = tod.night ? 1 : 0;
+    skyMat.uniforms.flash.value = wxSky.flash;
     oceanMat.uniforms.sunDir.value.copy(tod.sunDir);
-    oceanMat.uniforms.deep.value.copy(tod.oceanDeep);
-    oceanMat.uniforms.shallow.value.copy(tod.oceanShallow);
-    oceanMat.uniforms.skyCol.value.copy(tod.skyHorizon);
+    storm(oceanMat.uniforms.deep.value, tod.oceanDeep, k, 0.25);
+    storm(oceanMat.uniforms.shallow.value, tod.oceanShallow, k, 0.3);
+    oceanMat.uniforms.skyCol.value.copy(skyMat.uniforms.horizon.value);
     oceanMat.uniforms.sunColor.value.copy(tod.sunColor);
-    oceanMat.uniforms.fogColor.value.copy(tod.fog);
-    oceanMat.uniforms.fogNear.value = tod.fogNear;
-    oceanMat.uniforms.fogFar.value = tod.fogFar;
-    oceanMat.uniforms.glint.value = tod.night ? 0.3 : 1.0;
+    oceanMat.uniforms.fogColor.value.copy(scene.fog.color);
+    oceanMat.uniforms.glint.value = (tod.night ? 0.3 : 1.0) * (1 - 0.9 * k);
     const cu = cloudMat.uniforms;
-    cu.lit.value.copy(tod.cloud); cu.sunDir.value.copy(tod.sunDir); cu.sunColor.value.copy(tod.sunColor);
-    cu.fogColor.value.copy(tod.fog); cu.night.value = tod.night ? 1 : 0;
+    storm(cu.lit.value, tod.cloud, k, 0.35); cu.sunDir.value.copy(tod.sunDir); cu.sunColor.value.copy(tod.sunColor);
+    cu.fogColor.value.copy(scene.fog.color); cu.night.value = tod.night ? 1 : 0;
     applyWeather();
     applyNightContent();
   }
 
   // Live-weather modifiers layered on top of the time-of-day palette: haze
   // pulls the fog in with falling visibility, cloud cover scales the overcast.
+  // The precipitation sky multiplies in, and inside the cloud deck the fog
+  // closes to a whiteout.
   let wx = { visF: 1, cloudF: 1 };
   function applyWeather() {
-    scene.fog.near = tod.fogNear * Math.min(1, wx.visF);
-    scene.fog.far = tod.fogFar * wx.visF;
-    oceanMat.uniforms.fogNear.value = scene.fog.near;
-    oceanMat.uniforms.fogFar.value = scene.fog.far;
-    setCover(wx.cloudF);
-    cloudMat.uniforms.fogNear.value = scene.fog.near;
-    cloudMat.uniforms.fogFar.value = scene.fog.far;
-    clouds.visible = wx.cloudF > 0.06;
-    if (rwyLights) { rwyLights.setMode(lightLevel()); rwyLights.setFog(scene.fog.far); }
+    const visF = wx.visF * wxSky.vis;
+    let near = tod.fogNear * Math.min(1, visF), far = tod.fogFar * visF;
+    const ic = wxSky.inCloud;
+    if (ic > 0) {
+      near = near * (1 - ic) + 4 * ic;
+      far = far * (1 - ic) + 140 * ic;
+      _c.copy(wxSky.cloudCol);
+      scene.fog.color.lerp(_c, ic);
+      scene.background.copy(scene.fog.color);
+      oceanMat.uniforms.fogColor.value.copy(scene.fog.color);
+      cloudMat.uniforms.fogColor.value.copy(scene.fog.color);
+    }
+    scene.fog.near = near; scene.fog.far = far;
+    oceanMat.uniforms.fogNear.value = near;
+    oceanMat.uniforms.fogFar.value = far;
+    setCover(wxSky.overcast > 0.3 ? 0 : wx.cloudF);
+    cloudMat.uniforms.fogNear.value = near;
+    cloudMat.uniforms.fogFar.value = far;
+    clouds.visible = wx.cloudF > 0.06 && wxSky.overcast <= 0.3;
+    if (rwyLights) { rwyLights.setMode(lightLevel()); rwyLights.setFog(far); }
   }
 
   return {
@@ -513,6 +542,20 @@ export function createEnvironment(scene, renderer) {
       applyWeather();
     },
     resetWeather() { wx = { visF: 1, cloudF: 1 }; applyWeather(); },
+    /**
+     * Precipitation sky from weather.js. Cheap to call every frame: the
+     * palette is only rewritten when something moved noticeably.
+     */
+    setSky({ overcast = wxSky.overcast, vis = wxSky.vis, inCloud = wxSky.inCloud, flash = wxSky.flash, cloudCol } = {}) {
+      if (cloudCol) wxSky.cloudCol.copy(cloudCol);
+      const changed = Math.abs(overcast - wxSky.overcast) > 0.01 || Math.abs(vis - wxSky.vis) > 0.01
+        || Math.abs(inCloud - wxSky.inCloud) > 0.01 || Math.abs(flash - wxSky.flash) > 0.01
+        || (flash === 0 && wxSky.flash !== 0) || (inCloud === 0 && wxSky.inCloud !== 0);
+      if (!changed) return;
+      wxSky.overcast = overcast; wxSky.vis = vis; wxSky.inCloud = inCloud; wxSky.flash = flash;
+      applyPalette();
+    },
+    get skyState() { return { ...wxSky, cloudCol: undefined }; },
     // Swap the heightfield used for the blob shadow (called on map change).
     setGround(fn) { groundFn = fn; },
     // Called after a map's scenery is (re)built: rebuild runway lights and grab

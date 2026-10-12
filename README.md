@@ -18,6 +18,24 @@ A browser flight simulator built with **Three.js**
 - **Eye candy**: bloom and lens flare, ocean swell with coastal foam and spray, nav lights and strobes, retracting gear.
 - **A living world**: villages, lighthouses, boats, circuit traffic and birds.
 - **Dynamic resolution** — keeps the frame rate up on weaker GPUs.
+- **Lofted airframes**: every aircraft is built from lofted fuselage sections and
+  real airfoil-section wings, with working flaps, ailerons, rudders, spinning
+  wheels, airliner ground spoilers and turning fan faces.
+- **Real airfields**: runway markings to the ICAO pattern (piano keys,
+  designators, touchdown zone, aiming points) over a procedural asphalt with
+  rubber deposits, plus edge and centreline lights, approach lights with
+  sequenced flashers, and a PAPI that actually reads your glidepath.
+- **Weather**: RAIN and STORM put an overcast deck over the field. Below it
+  you get rain streaks, beads on the windscreen in the cockpit, a wet,
+  reflective runway with longer braking distances, and lightning with
+  thunder that arrives late from far-off strikes. Climb through the deck and
+  you break out into sunshine on top. LIVE weather maps real rain and
+  thunderstorms onto the same presets.
+- **Instant replay** (`X`, or from the pause, crash and results screens):
+  letterboxed playback of the last 150 s, with chase, tower telephoto, fly-by,
+  onboard and orbit cameras plus an AUTO director that cuts between them.
+  Scrub with the arrows, change speed, and touchdowns and crashes replay with
+  their effects.
 
 ## Getting started
 
@@ -31,6 +49,10 @@ npm run serve      # → http://localhost:8123
 ```bash
 npm test           # physics tests
 npm run e2e        # end-to-end test (needs npm run serve)
+node test/showroom.mjs <dir>              # aircraft art review screenshots
+node test/shots.mjs <dir> [map] [time] [weather]   # in-flight review shots
+node test/wxshots.mjs <dir>               # weather: cockpit rain, lightning, in-cloud
+node test/replayshots.mjs <dir>           # instant replay cameras
 ```
 
 ## Layout

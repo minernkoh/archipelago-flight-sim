@@ -20,7 +20,9 @@ import { createTrainingSystem } from './training.js';
 import { createEffects } from './effects.js';
 import { createTrails } from './trails.js';
 import { createTraffic } from './traffic.js';
-import { createWind, WEATHER } from './physics/wind.js';
+import { createWind, WEATHER, WET_WEATHER } from './physics/wind.js';
+import { createWeatherFX } from './weather.js';
+import { createReplay } from './replay.js';
 import { fetchLiveWeather } from './liveweather.js';
 import { loadPlan } from './planner.js';
 import { createPost } from './post.js';
@@ -206,6 +208,14 @@ const hud = createHUD();
 const camRig = createCameraRig(camera);
 camRig.setGround((x, z) => collisionHeight(x, z));
 const audio = createAudio();
+// Precipitation sky: overcast deck, rain, lightning (weather.js). The wind
+// half of a preset goes to windField; the wet runway to physEnv.wet.
+const weatherFx = createWeatherFX(scene, env, audio, (p) => windField.at(p.x, p.y, p.z));
+const skyId = (w) => (w === 'rain' || w === 'storm') ? w : 'clear';
+function setSkyWeather(id) {
+  weatherFx.set(skyId(id), currentMap);
+  physEnv.wet = WET_WEATHER.has(id);
+}
 const audioView = { x: 0, y: 0, z: 0, mode: 'CHASE' }; // reused each frame for Doppler/distance
 const minimap = createMinimap();
 const panel = createPanel();
@@ -252,10 +262,12 @@ async function applyLiveWeather(map) {
     const w = await fetchLiveWeather(ll.lat, ll.lon);
     windField.set(w.wind);
     env.setWeather(w.vis);
+    setSkyWeather(w.sky || 'clear');
     hud.message(`Live weather · ${w.wind.kts} kt from ${String(w.wind.dirDeg).padStart(3, '0')}°${w.clamped ? ' (capped for flyability)' : ''}.`, 5200);
   } catch {
     windField.set({ ...WEATHER.calm, dirDeg: Math.round(Math.random() * 360) });
     env.resetWeather();
+    setSkyWeather('clear');
     hud.message('Live weather unavailable — calm winds.', 4500);
   }
 }
@@ -288,11 +300,13 @@ const world = {
       // Neutral until the async fetch resolves — never block flight start on it.
       windField.set({ kts: 0, gustKts: 0, turb: 0, dirDeg: Math.round(Math.random() * 360) });
       env.resetWeather();
+      setSkyWeather('clear');
       applyLiveWeather(currentMap);
     } else {
       // fresh preset wind each flight: preset strength, semi-random direction
       windField.set({ ...(WEATHER[sel.weather] || WEATHER.calm), dirDeg: Math.round(Math.random() * 360) });
       env.resetWeather();
+      setSkyWeather(sel.weather);
     }
     if (sel.mode === 'gauntlet') {
       gauntletRings?.dispose();
@@ -314,6 +328,7 @@ const world = {
   preview(sel) {
     setAircraft(byId(sel.aircraft));
     setTimeOfDay(sel.time || 'day');
+    if (weatherFx.preset !== skyId(sel.weather)) setSkyWeather(sel.weather);   // the backdrop shows rain/storm too
     const r = currentMap.runway;
     resetOnRunway(ac, { x: r.spawn.x, z: r.spawn.z, y: r.y, headingRad: r.headingRad });
   },
@@ -324,12 +339,21 @@ const world = {
 };
 
 const fx = createEffects(scene);
+// Instant replay (X): records the flight, plays it back as a ghost with
+// cinematic cameras. Touchdowns and the crash replay as one-shot effects.
+const replay = createReplay({
+  camera, ground: (x, z) => collisionHeight(x, z),
+  events: {
+    touchdown: (g) => { fx.touchdown(g.pos, g.groundSpeed, Math.max(0, -g.vel.y * 196.85)); audio.chirp(); },
+    crash: (g) => { fx.crash(g.pos, g.vel); audio.thud(); },
+  },
+});
 const trails = createTrails(scene);
 controls.on('smoke', () => {
   if (game.state !== 'flying') return;
   hud.message(trails.toggleSmoke() ? 'Smoke on.' : 'Smoke off.', 1200);
 });
-const game = createGameFlow({ ac, hud, audio, controls, camRig, world, fx, autopilot, panel });
+const game = createGameFlow({ ac, hud, audio, controls, camRig, world, fx, autopilot, panel, replay });
 setAircraft(byId('c172'));
 hud.setCamera(camRig.modeName);
 
@@ -359,7 +383,7 @@ controls.on('ap-ias', () => { if (flying()) autopilot.toggleIas(ac, controls); }
 controls.on('ap-nav', () => { if (flying()) autopilot.toggleNav(ac); });
 controls.on('ap-wing', () => { if (flying()) autopilot.toggleWing(ac); });
 
-window.__sim = { ac, controls, game, world, autopilot, env, windField, minimap, camRig, camera,
+window.__sim = { ac, controls, game, world, autopilot, env, windField, minimap, camRig, camera, weatherFx, physEnv, replay,
   terrainCounts: () => terrain.counts(),
   get rings() { return gauntletRings || rings; }, get map() { return currentMap; },
   get camName() { return camRig.modeName; }, get trails() { return trails; }, get traffic() { return traffic; }, scene, renderer };
@@ -436,16 +460,22 @@ function frame(now) {
       step(ac, c, physEnv, PHYS_DT);
       acc -= PHYS_DT;
     }
+    replay.record(dt, ac, c);
   }
+  // Instant replay renders a recorded ghost instead of the physics state.
+  const replaying = replay.active;
+  if (replaying) replay.update(dt);
+  const view = replaying ? replay.ghost : ac;
+  const vc = replaying ? replay.controls : c;
 
-  plane.group.position.set(ac.pos.x, ac.pos.y, ac.pos.z);
-  plane.group.quaternion.set(ac.q.x, ac.q.y, ac.q.z, ac.q.w);
-  plane.animate(c, ac.rpmNorm, dt, ac);
-  plane.group.visible = camRig.modeName !== 'COCKPIT';
+  plane.group.position.set(view.pos.x, view.pos.y, view.pos.z);
+  plane.group.quaternion.set(view.q.x, view.q.y, view.q.z, view.q.w);
+  plane.animate(vc, view.rpmNorm, dt, view);
+  plane.group.visible = replaying || camRig.modeName !== 'COCKPIT';
   // Six-pack auto-shows in the cockpit, auto-hides otherwise — but only on a
   // camera-mode transition, so it never flickers per frame and the manual `i`
   // toggle stays honoured within the current view until the next mode change.
-  if (camRig.modeName !== lastCamMode) {
+  if (camRig.modeName !== lastCamMode && !replaying) {
     lastCamMode = camRig.modeName;
     panel.setVisible(camRig.modeName === 'COCKPIT');
   }
@@ -477,23 +507,29 @@ function frame(now) {
     sock.scale.setScalar(0.6 + 0.4 * Math.min(1, w.kts / 15));
   }
 
-  if (!mapLoading) terrain.update(ac.pos.x, ac.pos.z);
+  if (!mapLoading) terrain.update(view.pos.x, view.pos.z);
   // v6: the coarse terrain tier samples out to COARSE_TILE_RADIUS (~9.9 km,
   // see terrain.js), so tiles must be fetched that far ahead or distant real
   // terrain bakes as flat sea. Cheap: at z12 a tile spans ~7-10 km, so this is
   // single digits of tiles (TILE_CAP is 220).
-  if (!mapLoading && currentMap.prefetch) currentMap.prefetch(ac.pos.x, ac.pos.z, COARSE_TILE_RADIUS);
-  env.update(ac, dt, elapsed, camera.position, camera);
+  if (!mapLoading && currentMap.prefetch) currentMap.prefetch(view.pos.x, view.pos.z, COARSE_TILE_RADIUS);
+  env.update(view, dt, elapsed, camera.position, camera);
   traffic.update(dt, camera.position, elapsed);
   camRig.setInput(isFlying);
   if (game.state === 'menu') camRig.updateMenu(ac, dt);
-  else camRig.update(ac, dt);
+  else if (!replaying) camRig.update(ac, dt);
+  weatherFx.update(dt, elapsed, view, camera, replaying ? 'REPLAY' : camRig.modeName);
   if (isFlying) {
     hud.update(ac, c, dt, ringBearing ?? null);
     hud.setAP(autopilot.status(ac));
     audioView.x = camera.position.x; audioView.y = camera.position.y; audioView.z = camera.position.z;
     audioView.mode = camRig.modeName;
     audio.update(ac, c, audioView);
+  } else if (replaying) {
+    // engine + Doppler from the ghost: flybys and tower shots sound right
+    audioView.x = camera.position.x; audioView.y = camera.position.y; audioView.z = camera.position.z;
+    audioView.mode = 'REPLAY';
+    audio.update(view, vc, audioView);
   }
 
   if (postWanted && qualityHigh && !(post && post.disabled)) {

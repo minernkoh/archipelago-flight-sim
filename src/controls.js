@@ -81,6 +81,7 @@ export function createControls() {
     if (k === 'm') emit('minimap');
     if (k === 'i') emit('panel');
     if (k === 'r') emit('reset');
+    if (k === 'x') emit('replay');     // instant replay
     if (k === 'Escape') emit('pause');
     if (k === '?' || k === '/') emit('help');
     // Autopilot toggles (see autopilot.js). Free keys — none clash with the

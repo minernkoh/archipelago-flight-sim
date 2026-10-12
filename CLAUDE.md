@@ -8,6 +8,9 @@ wingtip vortices / airshow smoke, live 3D menu backdrop, dynamic resolution.
 v8: spring chase cam + shake, control expo / Shift fine control, noise-based prop audio with Doppler,
 post FX (bloom/grade/flare), ocean swell + coastal foam + spray, nav lights/strobes + retracting gear,
 archipelago villages/lighthouses, and visual-only traffic (boats, circuit planes, birds).
+v9 (AAA pass): lofted airframes (modelkit.js), ICAO runway markings + procedural asphalt on every map,
+airfield lighting with approach lights and a live PAPI, RAIN/STORM weather (overcast deck, rain,
+lightning, wet runway braking), and instant replay with cinematic cameras.
 
 ## Run / test
 
@@ -22,6 +25,7 @@ archipelago villages/lighthouses, and visual-only traffic (boats, circuit planes
 - `src/physics/envelope.js` — Vne/Vfe/Mach/g limits, the damage accumulator and `vSpeeds()`. THREE-free; `modes.js`, `panel.js` and the tests all read V-speeds from here so the menu card, the ASI arcs and the airframe limits cannot disagree.
 - `src/physics/wind.js` — THREE-free wind field (steady/gusts/turbulence); aero uses air-relative velocity, gear stays inertial; trim rides on `controls.trim`; trainer can set `ac.engineFailed`.
 - `src/aircraft/params.js` — per-aircraft physics presets, also THREE-free. catalog.js joins params + mesh builder + HUD/camera meta. meshes.js = the 5 low-poly builders.
+- `src/aircraft/modelkit.js` — the airframe kit: `loft()` (fuselage sections through a profile), `surface()`/`wingHalf()` (NACA-section wings, tails, fins; control surfaces split off at `hingeC` and hinged on their real hinge line), all non-indexed with ONE colour per facet painted by a callback at the face centroid (that is the livery: stripes/windows land on facet rows). Materials are DoubleSide + flatShading so loft winding never matters. Gear is placed from `params.gear` contact points (`wheelY`) — keep it that way, or the airframe floats/sinks.
 - `src/maps/` — map modules implementing the FlightMap contract (typedef in archipelago.js). Render height (`map.height`) is separate from collision height (`max(height, obstacleTop)`); ground effect/AGL use terrain only.
 - `src/terrain.js` — generic chunk streamer, plus instanced trees on a ±1.5 km ring of fine chunks (optional `map.forest(x,z,h,slope)` → 0..1 and `map.conifer(h)`; a map without `forest` grows none; LOW quality turns them off). `src/maps/noise.js` is shared noise for COSMETIC layers only (forest, meadow) — never feed it into `map.height`, the state hashes depend on heights.
 - **Art direction: crisp faceted low-poly.** terrain.js builds the fine tier non-indexed with ONE colour per triangle (map `color()` is called per face at its centroid with the face's own slope); the coarse tier stays smooth and is sunk ~250 m wherever the fine tier covers it (vertex shader), or its 200 m interpolation pokes through valleys. All maps paint from `src/maps/palette.js` (`PAL`, `seabed()`, `beach()`, `facetJitter()`, `decalMaterial()` — runway slabs need its polygon offset or they z-fight with the flat apron at range).
@@ -29,6 +33,10 @@ archipelago villages/lighthouses, and visual-only traffic (boats, circuit planes
 - `src/camera.js`: chase cam is a critically damped spring on the offset from the aircraft (no steady-state lag). `C` cycles CHASE/COCKPIT/ORBIT (tests rely on exactly that cycle), `V` toggles FLYBY, wheel zoom, left-drag free-look, per-aircraft cockpit frame (`catalog camera.cockpit.frame`: cabin/canopy/airliner), `updateMenu()` = the slow showcase orbit behind the menu. The menu backdrop is fed by `world.preview(sel)` (aircraft + time of day only; maps still load on START).
 - `src/post.js`: EffectComposer (half-res bloom, grade/vignette/flare, OutputPass). HIGH quality + POST FX setting only, and it switches itself off for the session when dynamic res is pinned at 0.6 with fps < 30, so headless e2e ends up on the plain `renderer.render` path within seconds. Nav lights and lights meant to bloom use `toneMapped: false`.
 - `src/traffic.js`: visual-only boats, pattern traffic and bird flocks; pooled, never collides, off on LOW. Archipelago villages/piers/lighthouses live in `createScenery` and never touch `map.height`.
+- `src/maps/runwayPaint.js` — `runwayDressing()` builds every map's runway in runway-local metres: asphalt slab shaded in its fragment shader (lanes, patches, grain, rubber, wet sheen via the shared `RUNWAY_WX` uniforms) plus ICAO markings as real quads and designator text planes. `src/runwayLights.js` — point-sprite lights from `map.runway` (x0..x1 along heading from the origin, so real-world maps report x0 = -halfLen): edge/centreline/threshold, approach lights + sequenced flashers off the x0 end, and a PAPI at spawn+300 m (the same aim point as training.js) whose units switch red/white from the camera's angle.
+- `src/maps/airfieldKit.js` — apron/taxiway with taxi markings, arched hangar, control tower, fuel truck (archipelago field). Visual only, no obstacles; parked aircraft reuse `clubPlaneGeometry()` from traffic.js (one merged draw call).
+- `src/weather.js` — the SKY half of the RAIN/STORM presets (the wind half is `WEATHER` in wind.js; `WET_WEATHER` drives `physEnv.wet`, which only scales brake friction). Overcast deck that follows the camera, rain streaks (one LineSegments, all motion in the vertex shader), cockpit windscreen beads, lightning + thunder. It drives `env.setSky({ overcast, vis, inCloud, flash })`; environment.js re-greys the whole palette from the time-of-day table, so never write palette uniforms anywhere else.
+- `src/replay.js` — instant replay. `createRecorder()` is THREE-free (Float32Array ring, 30 Hz of sim time, 150 s). Playback fills a ghost shaped like `ac`; main.js renders from `view = replaying ? ghost : ac` and NEVER writes the physics state. Game state `replay` (modes.js) returns to whatever it was opened from. Replay keys are taken in the capture phase so flight controls never see them; `C`/`X`/`Esc` route through modes.js.
 - `src/rings.js` — parameterized gates (race + training themes); `src/modes.js` — menu/state machine; `src/main.js` — swap lifecycle + frame loop.
 - Body frame: +x forward, +y up, +z right. Body rate r about +y: **positive = nose LEFT** (sign mistakes here are the #1 physics bug source).
 
@@ -51,6 +59,7 @@ archipelago villages/lighthouses, and visual-only traffic (boats, circuit planes
 
 ## Conventions
 
+- Art review: `test/showroom.mjs`, `test/shots.mjs`, `test/wxshots.mjs`, `test/replayshots.mjs` write screenshots (they pin settings: no tour, no ATC, autoRes off). Use them before and after any visual change.
 - Verify with the scripts above, not by eyeballing — extend test/physics.test.js for physics changes, test/e2e.mjs for flow changes.
 - localStorage keys: `archipelago.best.{map}.{aircraft}` (+ `.splits`), `archipelago.training`, `archipelago.sel`, `archipelago.settings`, `archipelago.logbook`, `archipelago.plan.{map}`.
 - Menu/pause/crash/results screens are translucent over the live scene — keep new overlay screens legible with a left-weighted scrim rather than an opaque background.

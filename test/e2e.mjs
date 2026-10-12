@@ -783,6 +783,61 @@ check('dynamic resolution keeps the render scale in 0.6..1', res >= 0.6 && res <
 await page.evaluate(() => window.__sim.game.toMenu());
 await settle(300);
 
+// --- v9: AAA pass — airframes on their gear, airfield lights, weather, replay ---
+console.log('v9 airframes, lights, weather, replay…');
+for (const id of ['c172', 'extra300', 'hornet', 'heavy', 'spirit']) {
+  await page.evaluate((id) => window.__sim.world.preview({ aircraft: id, time: 'day' }), id);
+  await settle(250);
+}
+const parked = await sim(`(() => {
+  const s = __sim, ac = s.ac;
+  return { pitch: Math.abs(ac.q.z) < 0.2, ground: ac.pos.y - s.map.runway.y };
+})()`);
+check('heavy/jet previews sit parked on the runway', parked.pitch && parked.ground > 0 && parked.ground < 9, JSON.stringify(parked));
+await page.evaluate(() => window.__sim.game.select({ mode: 'free', map: 'archipelago', aircraft: 'c172', time: 'day', weather: 'storm' }));
+await click('#btn-start');
+await page.waitForFunction('window.__sim.game.state === "flying"', { timeout: 120000, polling: 500 });
+await settle(1500);
+const wx9 = await sim(`({ preset: __sim.weatherFx.preset, wet: __sim.physEnv.wet, deck: __sim.weatherFx.deckBase,
+  overcast: __sim.env.skyState.overcast, vis: __sim.env.skyState.vis, papi: __sim.env.papiWhites() })`);
+check('STORM: overcast deck, wet runway, visibility pulled in',
+  wx9.preset === 'storm' && wx9.wet === true && wx9.deck > 0 && wx9.overcast > 0.5 && wx9.vis < 0.6, JSON.stringify(wx9));
+check('PAPI reports what the camera sees (0..4 white)', wx9.papi >= 0 && wx9.papi <= 4, String(wx9.papi));
+await page.evaluate(() => window.__sim.weatherFx.strike());
+await settle(1200);
+check('STORM: lightning strikes on demand', await sim('__sim.weatherFx.strikes') >= 1);
+// climb into the deck: whiteout
+await page.evaluate(() => {
+  const s = window.__sim, ac = s.ac;
+  ac.pos.y = s.weatherFx.deckBase + 180; ac.vel.x = 55; ac.vel.y = 0; ac.vel.z = 0;
+  ac.q = { x: 0, y: 0, z: 0, w: 1 }; ac.omega = { x: 0, y: 0, z: 0 }; ac.onGround = false;
+});
+await settle(1500);
+const inCloud = await sim('__sim.env.skyState.inCloud');
+check('flying into the deck whites the world out', inCloud > 0.5, String(inCloud));
+// Instant replay: X opens it, cameras cycle, ESC returns to where it was opened
+const rpFrom = await sim('__sim.game.state');
+await press('x');
+await settle(800);
+const rp = await sim(`({ state: __sim.game.state, active: __sim.replay.active, dur: __sim.replay.duration,
+  bar: getComputedStyle(document.querySelector('#replay-ui')).display })`);
+check('X opens the instant replay with its bar', rp.state === 'replay' && rp.active && rp.bar !== 'none' && rp.dur > 0.5, JSON.stringify(rp));
+const before = await sim('__sim.replay.camName');
+await press('c');
+const after = await sim('__sim.replay.camName');
+check('C cycles replay cameras (not the flight camera)', before !== after && (await sim('__sim.camName')) === 'CHASE', `${before} -> ${after}`);
+const acY = await sim('__sim.ac.pos.y');
+await settle(600);
+check('replay never moves the real aircraft', Math.abs((await sim('__sim.ac.pos.y')) - acY) < 1e-6);
+await press('Escape');
+await settle(500);
+const rpBack = await sim(`({ state: __sim.game.state, active: __sim.replay.active, crashed: __sim.ac.crashed })`);
+check('ESC closes the replay back to the state it was opened from', rpBack.state === rpFrom && !rpBack.active,
+  `${rpFrom} -> ${JSON.stringify(rpBack)}`);
+await page.evaluate(() => window.__sim.game.toMenu());
+await page.evaluate(() => window.__sim.game.select({ weather: 'calm' }));
+await settle(300);
+
 check('no console errors', errors.length === 0, errors.slice(0, 4).join(' | '));
 
 await browser.close();

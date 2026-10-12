@@ -11,6 +11,7 @@
 // allocation and no Math.random.
 
 import * as THREE from 'three';
+import { loft, surface, mergeGeos, PROFILE } from './aircraft/modelkit.js';
 
 const CELL = 2000;
 const BOAT_RANGE = 3;            // cells (6 km) around the camera
@@ -95,16 +96,49 @@ function wakeGeometry() {
   g.setAttribute('normal', new THREE.Float32BufferAttribute(n, 3));
   return g;
 }
-function lightPlane() {
-  const W = 0xf1f1ee, R = 0xc8372d;
-  return mergeParts([
-    { geo: new THREE.CylinderGeometry(0.55, 0.75, 6.4, 6), color: W, pos: [0, 0, 0], rot: [0, 0, -Math.PI / 2] },
-    { geo: new THREE.ConeGeometry(0.58, 1.3, 6), color: R, pos: [3.8, -0.02, 0], rot: [0, 0, -Math.PI / 2] },
-    { geo: new THREE.BoxGeometry(1.6, 0.14, 10.4), color: W, pos: [0.4, 0.75, 0] },
-    { geo: new THREE.BoxGeometry(0.9, 0.14, 3.8), color: W, pos: [-3.0, 0.15, 0] },
-    { geo: new THREE.BoxGeometry(1.0, 1.5, 0.12), color: R, pos: [-3.1, 0.9, 0] },
-    { geo: new THREE.BoxGeometry(1.1, 0.5, 1.15), color: 0x28323c, pos: [0.7, 0.5, 0] },
-    { geo: new THREE.BoxGeometry(0.1, 2.0, 0.14), color: 0x333333, pos: [4.5, 0, 0] },
+// High-wing single in a blue club livery: the same lofted kit as the player's
+// airframes (aircraft/modelkit.js), merged into one geometry = one draw call.
+export function clubPlaneGeometry() {
+  const W = 0xf1f1ee, B = 0x2b5f9e, G = 0x223040, D = 0x2a2d31;
+  const fus = loft([
+    { x: 2.8, y: -0.1, w: 0.2, t: 0.19, b: 0.21 }, { x: 2.2, y: -0.05, w: 0.52, t: 0.47, b: 0.56 },
+    { x: 1.35, y: 0.02, w: 0.59, t: 0.7, b: 0.64 }, { x: 1.0, y: 0.05, w: 0.6, t: 0.82, b: 0.65 },
+    { x: -0.75, y: 0.1, w: 0.56, t: 0.78, b: 0.53 }, { x: -1.4, y: 0.16, w: 0.46, t: 0.62, b: 0.42 },
+    { x: -3.1, y: 0.27, w: 0.22, t: 0.3, b: 0.22 }, { x: -4.4, y: 0.34, w: 0.03, t: 0.09, b: 0.05 },
+  ], {
+    profile: PROFILE.cabin,
+    paint: ({ x, row, cap }) => cap ? D : x > 2.5 ? B : (x > 1.0 && x < 1.72 && row <= 3) ? G
+      : (row >= 2 && row <= 3 && x > -0.75 && x < 1.0) ? G : row === 5 ? B : W,
+  });
+  const wst = [{ x: 0.98, y: 0.93, z: 0.0, chord: 1.62, t: 0.12 }, { x: 0.98, y: 0.99, z: 2.55, chord: 1.62, t: 0.12 },
+    { x: 0.8, y: 1.07, z: 5.05, chord: 1.26, t: 0.11 }, { x: 0.72, y: 1.09, z: 5.45, chord: 1.06, t: 0.07 }];
+  const wp = ({ z }) => Math.abs(z) > 5.05 ? B : W;
+  const hst = [{ x: -3.3, y: 0.38, z: 0.0, chord: 1.18, t: 0.09 }, { x: -3.5, y: 0.38, z: 1.72, chord: 0.86, t: 0.08 }];
+  const fin = [{ x: -2.95, y: 0.48, z: 0, chord: 1.45, t: 0.1 }, { x: -3.72, y: 1.88, z: 0, chord: 0.78, t: 0.09 }];
+  const mir = (st) => st.map(q => ({ ...q, z: -q.z }));
+  // fixed tricycle gear: tyres and legs, coloured non-indexed so they merge
+  const colored = (geo, hex) => {
+    const g = geo.toNonIndexed(); geo.dispose();
+    const c = new THREE.Color(hex), n = g.attributes.position.count, a = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { a[i * 3] = c.r; a[i * 3 + 1] = c.g; a[i * 3 + 2] = c.b; }
+    g.setAttribute('color', new THREE.BufferAttribute(a, 3));
+    g.deleteAttribute('uv'); g.deleteAttribute('normal');
+    return g;
+  };
+  const gear = [];
+  for (const [x, z, r] of [[1.7, 0, 0.22], [-0.35, -1.15, 0.27], [-0.35, 1.15, 0.27]]) {
+    const t = new THREE.CylinderGeometry(r, r, 0.16, 10); t.rotateX(Math.PI / 2); t.translate(x, -1.25 + r, z);
+    gear.push(colored(t, 0x17181a));
+    const l = new THREE.CylinderGeometry(0.04, 0.04, 0.75, 4);
+    l.rotateX(z === 0 ? 0 : -Math.sign(z) * 0.95); l.translate(x, -0.68, z * 0.62);
+    gear.push(colored(l, z === 0 ? 0x2a2d31 : W));
+  }
+  return mergeGeos([
+    ...gear,
+    fus,
+    surface(wst, { camber: 0.02, paint: wp }), surface(mir(wst), { camber: 0.02, paint: wp }),
+    surface(hst, { paint: () => W }), surface(mir(hst), { paint: () => W }),
+    surface(fin, { tdir: [0, 0, 1], paint: ({ y }) => y > 1.4 ? B : W }),
   ]);
 }
 function birdGeometry() {
@@ -244,13 +278,12 @@ export function createTraffic(scene, map, opts = {}) {
     return pose;
   }
 
-  const planeGeo = hasRunway ? lightPlane() : null;
-  const planeMat = flat();
+  const planeGeo = hasRunway ? clubPlaneGeometry() : null;
+  const planeMat = flat({ side: THREE.DoubleSide });
   const planeMeshes = [];
   if (hasRunway) {
     for (let i = 0; i < 2; i++) {
       const mesh = new THREE.Mesh(planeGeo, planeMat);
-      mesh.scale.setScalar(1.35);
       mesh.rotation.order = 'YXZ';
       mesh.frustumCulled = false;
       group.add(mesh);
