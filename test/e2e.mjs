@@ -280,7 +280,9 @@ check('cockpit view shows the 3D interior and hides the exterior hull',
 // v12 clickable cockpit: the switches live on the instrument panel (always in
 // view); a real click on the HDG button engages heading hold
 const ckClick = await page.evaluate(async () => {
-  const s = window.__sim, cv = document.querySelector('canvas');
+  const s = window.__sim;
+  // the WebGL canvas (the first <canvas> in the page is the hidden minimap)
+  const cv = [...document.querySelectorAll('body > canvas')].find(c => c.getBoundingClientRect().width > 300);
   const fire = (t, x, y, el = window) => el.dispatchEvent(new MouseEvent(t, { clientX: x, clientY: y, button: 0, bubbles: true }));
   s.camera.updateMatrixWorld();
   const p = s.cockpit.buttonWorld('ap-hdg');
