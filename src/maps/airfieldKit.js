@@ -176,3 +176,94 @@ export function fuelTruck() {
   g.traverse(o => { if (o.isMesh) o.castShadow = true; });
   return g;
 }
+
+/**
+ * Taxiway pavement for a taxinet.js layout (v12): asphalt ribbons along every
+ * centreline with a pad at each junction (the AI airliner's filleted turns
+ * stay on it), the yellow centreline with curved lead-on lines wherever two
+ * taxiways meet, hold-short bars and a stand with its stop bar. World-space
+ * geometry at height `y`; three draw calls.
+ */
+export function taxiwayDressing(layout, y, { fillet, buildTaxiGraph }) {
+  const g = new THREE.Group();
+  const hw = layout.width / 2;
+  const asphalt = [], paint = [];
+  const quad = (arr, a, b, c, d, lift) => arr.push(
+    a[0], y + lift, a[1], b[0], y + lift, b[1], c[0], y + lift, c[1],
+    a[0], y + lift, a[1], c[0], y + lift, c[1], d[0], y + lift, d[1]);
+  function ribbon(arr, pts, half, lift) {
+    for (let i = 0; i < pts.length - 1; i++) {
+      const A = pts[i], B = pts[i + 1];
+      const L = Math.hypot(B[0] - A[0], B[1] - A[1]) || 1;
+      const nx = -(B[1] - A[1]) / L * half, nz = (B[0] - A[0]) / L * half;
+      // overlap a little into the next segment so mitre gaps never show
+      const ex = (B[0] - A[0]) / L * Math.min(half, 0.5 * L), ez = (B[1] - A[1]) / L * Math.min(half, 0.5 * L);
+      quad(arr, [A[0] + nx, A[1] + nz], [B[0] + nx + ex, B[1] + nz + ez], [B[0] - nx + ex, B[1] - nz + ez], [A[0] - nx, A[1] - nz], lift);
+    }
+  }
+  function disk(arr, c, r, lift) {
+    const n = 20;
+    for (let k = 0; k < n; k++) {
+      const a0 = (k / n) * Math.PI * 2, a1 = ((k + 1) / n) * Math.PI * 2;
+      arr.push(c[0], y + lift, c[1], c[0] + Math.cos(a1) * r, y + lift, c[1] + Math.sin(a1) * r, c[0] + Math.cos(a0) * r, y + lift, c[1] + Math.sin(a0) * r);
+    }
+  }
+  for (const line of layout.lines) ribbon(asphalt, line, hw, 0.03);
+  const graph = buildTaxiGraph(layout.lines);
+  for (let i = 0; i < graph.nodes.length; i++) {
+    if (graph.adj[i].length >= 3 || graph.adj[i].length === 1) disk(asphalt, [graph.nodes[i].x, graph.nodes[i].z], hw + (graph.adj[i].length >= 3 ? 9 : 0), 0.03);
+  }
+  // centreline, plus a curved lead-on between every pair of edges at a junction
+  for (const line of layout.lines) ribbon(paint, line, 0.15, 0.06);
+  for (let i = 0; i < graph.nodes.length; i++) {
+    const e = graph.adj[i];
+    if (e.length < 3) continue;
+    const B = [graph.nodes[i].x, graph.nodes[i].z];
+    for (let p = 0; p < e.length; p++) for (let q = p + 1; q < e.length; q++) {
+      const A = [graph.nodes[e[p].to].x, graph.nodes[e[p].to].z], C = [graph.nodes[e[q].to].x, graph.nodes[e[q].to].z];
+      const a1 = Math.atan2(A[1] - B[1], A[0] - B[0]), a2 = Math.atan2(C[1] - B[1], C[0] - B[0]);
+      let d = Math.abs(a1 - a2); if (d > Math.PI) d = 2 * Math.PI - d;
+      if (d > 2.6) continue;                                   // straight through: already drawn
+      ribbon(paint, fillet([A, B, C], 35), 0.15, 0.06);
+    }
+  }
+  // hold short: two solid and two dashed bars across the taxiway
+  for (const h of layout.holds || []) {
+    // across = perpendicular to the connector there: find the nearest line segment
+    let dir = [1, 0], best = Infinity;
+    for (const line of layout.lines) for (let i = 0; i < line.length - 1; i++) {
+      const A = line[i], B = line[i + 1];
+      const mx = (A[0] + B[0]) / 2, mz = (A[1] + B[1]) / 2, d = Math.hypot(mx - h[0], mz - h[1]);
+      const L = Math.hypot(B[0] - A[0], B[1] - A[1]);
+      if (d < best && L > 1) { best = d; dir = [(B[0] - A[0]) / L, (B[1] - A[1]) / L]; }
+    }
+    const nx = -dir[1], nz = dir[0];
+    for (let k = 0; k < 4; k++) {
+      const off = (k - 1.5) * 0.9;
+      const cx = h[0] + dir[0] * off, cz = h[1] + dir[1] * off;
+      const seg = k < 2 ? [[-hw, hw]] : Array.from({ length: 8 }, (_, j) => [-hw + j * (2 * hw / 8), -hw + j * (2 * hw / 8) + hw / 8]);
+      for (const [s0, s1] of seg) quad(paint,
+        [cx + nx * s0 - dir[0] * 0.15, cz + nz * s0 - dir[1] * 0.15], [cx + nx * s1 - dir[0] * 0.15, cz + nz * s1 - dir[1] * 0.15],
+        [cx + nx * s1 + dir[0] * 0.15, cz + nz * s1 + dir[1] * 0.15], [cx + nx * s0 + dir[0] * 0.15, cz + nz * s0 + dir[1] * 0.15], 0.07);
+    }
+  }
+  // stand: a widened pad and a stop bar ahead of the parked nose
+  if (layout.stand) {
+    const s = layout.stand, fx = Math.cos(s.yaw), fz = -Math.sin(s.yaw);
+    const px = -fz, pz = fx;
+    const P = (a, b) => [s.x + fx * a + px * b, s.z + fz * a + pz * b];
+    quad(asphalt, P(-45, -hw - 6), P(35, -hw - 6), P(35, hw + 6), P(-45, hw + 6), 0.025);
+    quad(paint, P(30, -4), P(30, 4), P(30.5, 4), P(30.5, -4), 0.07);
+  }
+  const mk = (arr, color, units) => {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3));
+    geo.computeVertexNormals();
+    const m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: units }));
+    m.receiveShadow = true;
+    return m;
+  };
+  g.add(mk(asphalt, 0x55585b, -6), mk(paint, 0xe0b021, -14));
+  g.userData.taxiways = layout.lines.length;
+  return g;
+}

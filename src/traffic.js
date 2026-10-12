@@ -12,6 +12,7 @@
 
 import * as THREE from 'three';
 import { createCircuitTraffic, slotStraightIn } from './aitraffic.js';
+import { planGround } from './taxinet.js';
 import { MESH_BUILDERS } from './aircraft/meshes.js';
 import { loft, surface, mergeGeos, PROFILE } from './aircraft/modelkit.js';
 
@@ -282,15 +283,28 @@ export function createTraffic(scene, map, opts = {}) {
 
   // the second pattern aircraft flies real touch-and-goes (aitraffic.js) so
   // the tower has traffic to sequence you with; the first keeps orbiting
-  const ai = hasRunway ? createCircuitTraffic(rwy) : null;
-  const AI_SPACING = ai ? ai.total / ai.speed / 2 : 0;   // seconds between the two aircraft
+  const aiNominal = hasRunway ? createCircuitTraffic(rwy) : null;
+  const AI_SPACING = aiNominal ? aiNominal.total / aiNominal.speed / 2 : 0;   // seconds between the two aircraft
   let aiT = 0;
   const aiOut = [{}, {}, {}];
   // An airliner on a straight-in ILS arrival, timed so its last 2.5 km and
   // rollout fall in a gap where neither club aircraft is on short final or
   // the runway (both cycles repeat every two circuit laps).
   let jet = null, jetMesh = null;
-  if (ai) jet = slotStraightIn(rwy, ai, AI_SPACING);
+  if (aiNominal) {
+    // its ground movements follow the map's taxiway network (taxinet.js):
+    // the synthetic parallel taxiway on the fictional maps, OSM taxiways on
+    // the real ones; none (or one that does not serve the runway) keeps the
+    // simple turn-off
+    let ground = null;
+    try {
+      const spawnU = rwy.spawn.x * Math.cos(rwy.headingRad) - rwy.spawn.z * Math.sin(rwy.headingRad);
+      ground = planGround(rwy, map.taxiLayout ? map.taxiLayout() : null, { aim: spawnU + 300, vapp: 72 });
+    } catch { ground = null; }
+    jet = slotStraightIn(rwy, aiNominal, AI_SPACING, { ground });
+  }
+  // the club aircraft go around if the airliner is still on the runway
+  const ai = jet ? createCircuitTraffic(rwy, { occupied: (tt) => jet.occupies(tt) }) : aiNominal;
   const planeGeo = hasRunway ? clubPlaneGeometry() : null;
   const planeMat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.45, metalness: 0.05, envMapIntensity: 0.4 });
   const planeMeshes = [];
@@ -420,6 +434,7 @@ export function createTraffic(scene, map, opts = {}) {
 
   // ------------------------------------------------------------------ API --
   const avoidY = [0, 0];
+  const jetAir = { on: false, x: 0, y: 0, z: 0 };
   function update(dt, camPos, t, playerPos = null) {
     if (!enabled) return;
     const ix = Math.floor(camPos.x / CELL), iz = Math.floor(camPos.z / CELL);
@@ -432,16 +447,19 @@ export function createTraffic(scene, map, opts = {}) {
     }
     writeBoats(t);
     writeBirds(t);
+    jetAir.on = false;
     if (jet && jetMesh) {
       const j = jet.at(t);
+      if (j.visible && j.agl > 20) { jetAir.on = true; jetAir.x = j.x; jetAir.y = j.y; jetAir.z = j.z; }
       const near = Math.hypot(camPos.x - j.x, camPos.z - j.z) < 20000;
       jetMesh.visible = j.visible && near;
       if (jetMesh.visible) {
         jetMesh.position.set(j.x, j.y + 5.5, j.z);
         jetMesh.rotation.set(0, j.yaw, j.pitch);
-        const ground = j.phase === 'runway' || j.phase === 'taxi' || j.phase === 'departure';
+        const ground = j.agl < 1;
         jetSt.onGround = ground; jetSt.agl = j.agl; jetSt.airspeed = jetSt.groundSpeed = j.speed;
-        jetCtl.throttle = j.departing ? 1 : j.phase === 'runway' || j.phase === 'taxi' ? 0.05 : 0.35;
+        jetCtl.throttle = j.departing ? 1 : ground ? (j.phase === 'taxi' || j.phase === 'lineup' ? 0.12 : 0.03) : 0.35;
+        jetCtl.brakes = j.phase === 'parked' || j.phase === 'holding';
         jetCtl.flaps = j.phase === 'climb' ? 0.33 : j.departing ? 0.33 : 1;
         try { jetAnim.animate(jetCtl, j.departing ? 0.95 : ground ? 0.3 : 0.55, dt, jetSt); } catch { /* cosmetic only */ }
       }
@@ -455,13 +473,17 @@ export function createTraffic(scene, map, opts = {}) {
         if (ai) {
           // both club aircraft fly the touch-and-go circuit, half a lap apart
           aiT = t;
-          const a = ai.at(t + i * AI_SPACING);
-          // collision avoidance: step up or down away from the player when
-          // close (within 600 m and 150 m vertically), then rejoin
+          const a = ai.at(t + i * AI_SPACING, -i * AI_SPACING);
+          // collision avoidance: step up or down away from the player, or
+          // the airliner, when close (within 600 m and 150 m vertically),
+          // then rejoin
           let target = 0;
-          if (playerPos && a.y - (rwy.y || 0) > 60) {
-            const dx = a.x - playerPos.x, dz = a.z - playerPos.z, dy = a.y - playerPos.y;
-            if (dx * dx + dz * dz < 600 * 600 && Math.abs(dy) < 150) target = dy >= 0 || a.y - (rwy.y || 0) < 200 ? 150 : -150;
+          if (a.y - (rwy.y || 0) > 60) {
+            for (const th of [playerPos, jetAir.on ? jetAir : null]) {
+              if (!th || target) continue;
+              const dx = a.x - th.x, dz = a.z - th.z, dy = a.y - th.y;
+              if (dx * dx + dz * dz < 600 * 600 && Math.abs(dy) < 150) target = dy >= 0 || a.y - (rwy.y || 0) < 200 ? 150 : -150;
+            }
           }
           avoidY[i] += Math.max(-6 * dt, Math.min(6 * dt, target - avoidY[i]));
           mesh.position.set(a.x, a.y + 1.1 + avoidY[i], a.z);
@@ -488,7 +510,7 @@ export function createTraffic(scene, map, opts = {}) {
     /** Both circuit aircraft (copies), for the tower to pick the one that matters. */
     aiStates(t = aiT) {
       if (!enabled || !ai) return [];
-      const list = [0, 1].map(i => { const o = Object.assign(aiOut[i], ai.at(t + i * AI_SPACING), { id: i }); o.y += avoidY[i]; o.avoiding = Math.abs(avoidY[i]) > 1; return o; });
+      const list = [0, 1].map(i => { const o = Object.assign(aiOut[i], ai.at(t + i * AI_SPACING, -i * AI_SPACING), { id: i }); o.y += avoidY[i]; o.avoiding = Math.abs(avoidY[i]) > 1; return o; });
       if (jet) { const j = jet.at(t); if (j.visible) list.push(Object.assign(aiOut[2], j, { id: 2 })); }
       return list;
     },

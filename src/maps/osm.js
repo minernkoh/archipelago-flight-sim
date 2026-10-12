@@ -198,7 +198,7 @@ export function parseOverpass(json, ll) {
           roof: t['roof:shape'] || (height < 9 && (t.building === 'house' || t.building === 'detached') ? 'gabled' : 'flat') });
         continue;
       }
-      if (t.aeroway === 'apron' || t.aeroway === 'taxiway' || t.aeroway === 'runway') { areas.push({ cls: LC.PAVED, ring, area: Math.abs(a), id: el.id }); continue; }
+      if (t.aeroway === 'apron' || t.aeroway === 'taxiway' || t.aeroway === 'runway') { areas.push({ cls: LC.PAVED, ring, area: Math.abs(a), id: el.id, aeroway: t.aeroway }); continue; }
       const cls = t.landuse != null ? LANDUSE[t.landuse] : t.natural != null ? NATURAL[t.natural] : t.leisure != null ? LEISURE[t.leisure] : undefined;
       if (cls === undefined || cls === LC.NONE) continue;
       areas.push({ cls, ring, area: Math.abs(a), id: el.id });

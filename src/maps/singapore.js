@@ -7,6 +7,8 @@ import * as THREE from 'three';
 import { makeNoise, woodland } from './noise.js';
 import { PAL, seabed, beach, facetJitter } from './palette.js';
 import { runwayDressing, reciprocal } from './runwayPaint.js';
+import { taxiwayDressing } from './airfieldKit.js';
+import * as taxinet from '../taxinet.js';
 import {
   addMBS, addFlyer, addEsplanade, addCBD, addHDBEstate, addPort, addShips, addChangi,
   setNightGlow, addBeacon,
@@ -186,6 +188,7 @@ export const runway = {
 };
 
 const RWY2_V = -800; // parallel 02C, decorative but landable
+export const TAXI = taxinet.defaultTaxiLayout(runway);
 export function isRunway(x, z) {
   const { u, v } = toRunwayFrame(x, z);
   if (u > -30 && u < RWY_LEN + 30) {
@@ -246,6 +249,7 @@ export function createScenery(scene) {
 
   runwayStrip(g, 0, '02L', '20R');
   runwayStrip(g, RWY2_V, '02C', '20C');
+  g.add(taxiwayDressing(TAXI, RWY_Y, taxinet));
   addChangi(g, reg, RWY_Y, FWD);
 
   const gy = (x, z) => height(x, z);
@@ -286,6 +290,7 @@ export const singaporeMap = {
   color,
   isRunway,
   runway,
+  taxiLayout: () => TAXI,
   createScenery,
   raceCourse,
   finalGateDir: { x: FWD.x, z: FWD.z },  // last gate faces down 02L

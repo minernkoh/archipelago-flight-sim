@@ -355,6 +355,25 @@ export function createRealWorldMap(preset) {
       return b && b.top !== undefined ? b.top : -Infinity;
     },
     loadScenery, commitScenery,
+    /** The airliner's taxiway network (taxinet.js) from the OSM taxiways, parked
+     *  on the biggest apron near the runway; null without scenery. */
+    taxiLayout() {
+      if (!osm.data) return null;
+      const lines = osm.data.lines.filter(l => l.kind === 'taxiway' && l.pts.length >= 2).map(l => l.pts);
+      if (!lines.length) return null;
+      let best = null;
+      for (const a of osm.data.areas) {
+        if (a.aeroway !== 'apron') continue;
+        let cx = 0, cz = 0;
+        for (const p of a.ring) { cx += p[0]; cz += p[1]; }
+        cx /= a.ring.length; cz /= a.ring.length;
+        const m = toRunway(cx, cz);
+        if (Math.abs(m.u) > halfLen + 1500 || Math.abs(m.v) > 3000) continue;
+        if (!best || a.area > best.area) best = { area: a.area, x: cx, z: cz };
+      }
+      if (!best) return null;
+      return { kind: 'osm', width: 23, lines, stand: { x: best.x, z: best.z, yaw: 0 }, holds: [] };
+    },
     get osmStatus() { return osm.status; },
     get attribution() { return osm.data ? 'Elevation: Mapzen Terrain Tiles · Scenery ' + OSM_ATTRIBUTION : 'Elevation: Mapzen Terrain Tiles'; },
     // real-world extras used by main.js / modes.js

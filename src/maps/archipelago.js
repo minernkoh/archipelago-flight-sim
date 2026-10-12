@@ -10,7 +10,8 @@ import * as THREE from 'three';
 import { makeNoise, woodland } from './noise.js';
 import { PAL, seabed, beach, facetJitter } from './palette.js';
 import { runwayDressing, reciprocal } from './runwayPaint.js';
-import { apron, hangar, tower, fuelTruck } from './airfieldKit.js';
+import { apron, hangar, tower, fuelTruck, taxiwayDressing } from './airfieldKit.js';
+import * as taxinet from '../taxinet.js';
 import { clubPlaneGeometry } from '../traffic.js';
 
 /**
@@ -124,6 +125,9 @@ export const RUNWAY = {
   name: '09',
 };
 
+// the airliner's taxiway network (taxinet.js), on the left of the runway
+export const TAXI = taxinet.defaultTaxiLayout(RUNWAY);
+
 export function isRunway(x, z) {
   return x > RUNWAY.x0 - 20 && x < RUNWAY.x1 + 20 && Math.abs(z) < RUNWAY.halfWidth + 6;
 }
@@ -206,6 +210,7 @@ export function createAirfield(scene) {
   const strip = runwayDressing({ length: RUNWAY.x1 - RUNWAY.x0, halfWidth: RUNWAY.halfWidth, labels: ['09', '27'] });
   strip.position.set(RUNWAY.x0, RUNWAY.y + 0.06, 0);
   g.add(strip);
+  g.add(taxiwayDressing(TAXI, RUNWAY.y, taxinet));   // the airliner's parallel taxiway and stand
 
   const mat = (c) => new THREE.MeshLambertMaterial({ color: c });
 
@@ -536,6 +541,7 @@ export const archipelagoMap = {
   color: vertexColor,
   isRunway,
   runway: RUNWAY,
+  taxiLayout: () => TAXI,
   createScenery: createArchipelagoScenery,
   raceCourse,
   obstacleTop() { return -Infinity; },  // no solid obstacles on this map

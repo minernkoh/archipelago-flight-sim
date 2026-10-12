@@ -1486,6 +1486,18 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
     retail ? `${retail.ring.length} corners, area ${Math.abs(osm.ringArea(retail.ring)).toFixed(0)} m2` : 'missing');
   check('osm: every ring comes out counter-clockwise', [...data.buildings.map(b => b.ring), ...data.areas.map(a => a.ring)].every(r => osm.ringArea(r) > 0));
   const world = osm.buildOsmWorld(data);
+  { // the airliner's taxi network straight from the OSM taxiways (taxinet.js)
+    const tn = await import('../src/taxinet.js');
+    const H0 = bearingToHeadingRad(23), f0 = [Math.cos(H0), -Math.sin(H0)];
+    const apronA = data.areas.find(a => a.aeroway === 'apron');
+    const c = apronA ? apronA.ring.reduce((m, p) => [m[0] + p[0] / apronA.ring.length, m[1] + p[1] / apronA.ring.length], [0, 0]) : [0, 0];
+    const lay = { kind: 'osm', width: 23, lines: data.lines.filter(l => l.kind === 'taxiway').map(l => l.pts), stand: { x: c[0], z: c[1], yaw: 0 }, holds: [] };
+    const rw = { spawn: { x: f0[0] * -1940, z: f0[1] * -1940 }, headingRad: H0, y: 0, x0: -2000, x1: 2000, halfWidth: 30 };
+    const gp = tn.planGround(rw, lay, { aim: -1640, vapp: 72 });
+    check('osm: the airliner routes over the OSM taxiways to the apron, turned on the stand for the taxi out',
+      !!apronA && !!gp && Math.abs(gp.exitU) < 5 && gp.taxiIn.length > 400 && gp.pushback > 0,
+      gp ? `exit u ${gp.exitU.toFixed(0)}, in ${gp.taxiIn.length.toFixed(0)} m, out ${gp.toHold.length.toFixed(0)} m, pushback ${gp.pushback} s` : 'no plan');
+  }
   const H = bearingToHeadingRad(23), fwd = [Math.cos(H), -Math.sin(H)], right = [Math.sin(H), Math.cos(H)];
   const rf = (u, v) => [fwd[0] * u + right[0] * v, fwd[1] * u + right[1] * v];
   const lc = (u, v) => world.landCover(...rf(u, v));
@@ -1638,9 +1650,9 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
 
 // ---- v12: AI circuit traffic + the tower working it (aitraffic.js, atc.js) ----
 {
-  const { createCircuitTraffic, clockOf } = await import('../src/aitraffic.js');
+  const { createCircuitTraffic, clockOf, slotStraightIn } = await import('../src/aitraffic.js');
   const { createAtc: mkTower } = await import('../src/atc.js');
-  const rwy = { spawn: { x: -1500, z: 0 }, headingRad: 0, y: 5, x0: -1600, x1: 600 };
+  const rwy = { spawn: { x: -1500, z: 0 }, headingRad: 0, y: 5, x0: -1600, x1: 600, halfWidth: 22 };
   const ai = createCircuitTraffic(rwy);
   const period = ai.total / ai.speed, seen = new Set();
   let groundOk = true, minAir = 1e9, tdU = null;
@@ -1660,8 +1672,7 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
       if ((p1.onRunway || p1.phase === 'final') && (p2.onRunway || p2.phase === 'final')) clash++; }
     check('AI traffic: two aircraft half a lap apart never share final or the runway', clash === 0, `${clash} clashes`); }
   // the airliner: straight-in on the glideslope, slotted between the club aircraft
-  { const { slotStraightIn } = await import('../src/aitraffic.js');
-    const jet = slotStraightIn(rwy, ai, period / 2);
+  { const jet = slotStraightIn(rwy, ai, period / 2);
     let clash = 0, onGs = true, seenRoll = false;
     for (let t = 0; t < 2 * period; t += 0.5) {
       const j = { ...jet.at(t) };
@@ -1678,6 +1689,66 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
     check('AI airliner: turns off and taxis clear after landing, then departs and climbs out',
       ['final', 'runway', 'taxi', 'departure', 'climb'].every(p => ph.has(p)) && taxiEndV > 150 && climbTop > 400, `${[...ph].join(',')} taxi v ${taxiEndV.toFixed(0)} climb ${climbTop.toFixed(0)}`);
     check('AI airliner: slotted so it never shares short final (1.5 km) or the runway with the circuit traffic', clash === 0 && jet.slotted === true, `${clash} clashes, slotted ${jet.slotted}`);
+  }
+  // ---- v12: taxiway network (taxinet.js) and AI-to-AI separation ----
+  { const tn = await import('../src/taxinet.js');
+    const { createStraightInTraffic } = await import('../src/aitraffic.js');
+    // a T junction where one way's end lands mid-segment on another splits it
+    const g = tn.buildTaxiGraph([[[0, 0], [0, 100]], [[-200, 100], [200, 100]], [[200, 100], [200, 300]]]);
+    const r = tn.route(g, tn.nearestNode(g, 0, 0), tn.nearestNode(g, 200, 300));
+    check('taxinet: T junctions split, Dijkstra routes across them', !!r && r.length === 4 && g.nodes.length === 5, r && r.map(i => `${g.nodes[i].x},${g.nodes[i].z}`).join(' > '));
+    const tp = tn.timedPath(tn.fillet([[0, 0], [0, 200], [200, 200]], 35), { vmax: 9 });
+    const mid = { ...tp.at(tp.duration / 2) }, cruise = { speed: Math.max(...Array.from({ length: 50 }, (_, i) => tp.at(tp.duration * i / 100).speed)) };
+    check('taxinet: filleted corner, slower in the turn, starts and ends at rest',
+      tp.at(0).speed === 0 && tp.at(1e9).speed === 0 && mid.speed < 6.5 && cruise.speed > 8 && Math.hypot(mid.x - 0, mid.z - 200) > 5,
+      `turn ${mid.speed.toFixed(1)} m/s, straight ${cruise.speed.toFixed(1)} m/s, length ${tp.length.toFixed(0)} m`);
+
+    const lay = tn.defaultTaxiLayout(rwy);
+    const gp = tn.planGround(rwy, lay, { aim: -1200, vapp: 72 });
+    const jet = slotStraightIn(rwy, ai, period / 2, { ground: gp });
+    const segDist = (x, z) => { let d = Infinity; for (const L of lay.lines) for (let i = 0; i < L.length - 1; i++) {
+      const [ax, az] = L[i], [bx, bz] = L[i + 1], dx = bx - ax, dz = bz - az, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz)));
+      d = Math.min(d, Math.hypot(ax + dx * t - x, az + dz * t - z)); } return d; };
+    const seq = []; let jump = 0, offPave = 0, clash = 0, prev = null;
+    for (let t = 0; t < jet.period; t += 0.5) {
+      const j = { ...jet.at(t) };
+      if (seq.at(-1) !== j.phase) seq.push(j.phase);
+      if (prev && prev.visible && j.visible && Math.hypot(j.x - prev.x, j.y - prev.y, j.z - prev.z) > Math.max(prev.speed, j.speed) * 0.5 + 3) jump++;
+      if (['taxi', 'parked', 'pushback', 'holding'].includes(j.phase) && Math.abs(j.v) > rwy.halfWidth + 5 && segDist(j.x, j.z) > lay.width / 2 + 10) offPave++;
+      const club = [0, period / 2].some(o => { const a = ai.at(t + o); return a.onRunway || (a.phase === 'final' && a.toAim < 1500); });
+      if (jet.occupies(t) && club) clash++;
+      prev = j;
+    }
+    const want = ['final', 'runway', 'taxi', 'parked', 'taxi', 'holding', 'lineup', 'departure', 'climb', 'gone'];
+    check('AI airliner: lands, taxis to the stand, parks, taxis out, holds short, lines up and departs',
+      !!jet.ground && want.every((p, i) => seq.indexOf(p, i ? seq.indexOf(want[i - 1]) + (want[i - 1] === p ? 1 : 0) : 0) >= 0) && seq.includes('parked'),
+      seq.join(' > '));
+    check('AI airliner: moves continuously and stays on the taxiways', jump === 0 && offPave === 0, `${jump} jumps, ${offPave} samples off the pavement`);
+    check('AI airliner: slotted clear of the circuit traffic for its whole runway use', jet.slotted && clash === 0, `${clash} clashes`);
+    { let nose = Infinity; for (let t = 0; t < jet.period; t += 1) { const j = jet.at(t); if (j.phase !== 'holding') continue;
+        nose = Math.min(nose, Math.abs(j.z - Math.sin(j.yaw) * 32)); }       // heading 0 runway: v = z, nose 32 m ahead
+      check('AI airliner: holds short with its nose behind the hold bar', nose >= lay.holdDist - 1 && nose < 1e9, `nose |v| ${nose.toFixed(1)} m, bar ${lay.holdDist} m`); }
+
+    // a jet deliberately mistimed onto the club traffic: the club aircraft go around
+    const bad = createStraightInTraffic(rwy, { period: 2 * period, ground: gp, offset: 0 });
+    let worst = null;
+    for (let off = 0; off < 2 * period; off += 4) {
+      const b = createStraightInTraffic(rwy, { period: 2 * period, ground: gp, offset: off });
+      let n = 0; for (let t = 0; t < 2 * period; t += 1) if (b.occupies(t) && [0, period / 2].some(o => { const a = ai.at(t + o); return a.onRunway; })) n++;
+      if (!worst || n > worst.n) worst = { n, b };
+    }
+    const clubs = createCircuitTraffic(rwy, { occupied: (t) => worst.b.occupies(t) });
+    let both = 0, gas = 0, gaLow = 1e9;
+    const wasGa = [false, false];
+    for (let t = 0; t < 2 * period; t += 0.5) [0, period / 2].forEach((o, i) => {
+      const a = clubs.at(t + o, -o);
+      if (a.onRunway && worst.b.occupies(t)) both++;
+      if (a.goAround) { if (!wasGa[i]) gas++; if (Math.abs(a.u - (-1200)) < 300) gaLow = Math.min(gaLow, a.y - 5); }
+      wasGa[i] = a.goAround;
+    });
+    check('AI-to-AI: club traffic goes around instead of landing on an occupied runway',
+      worst.n > 0 && both === 0 && gas > 0 && gaLow > 40, `${worst.n} s of conflict unseparated -> ${both} with go-arounds (${gas}), lowest over the aim point ${gaLow.toFixed(0)} m`);
+    void bad;
   }
   check('clock positions', clockOf(0, 100, 0) === 12 && clockOf(0, 0, 100) === 3 && clockOf(0, -100, 0) === 6 && clockOf(0, 0, -100) === 9);
 

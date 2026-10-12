@@ -7,6 +7,8 @@ import * as THREE from 'three';
 import { makeNoise, woodland } from './noise.js';
 import { PAL, facetJitter } from './palette.js';
 import { runwayDressing, reciprocal } from './runwayPaint.js';
+import { taxiwayDressing } from './airfieldKit.js';
+import * as taxinet from '../taxinet.js';
 
 const SEED = 20260709;
 
@@ -52,6 +54,8 @@ export const RUNWAY = {
   spawn: { x: 60, z: 0 },
   name: '15',
 };
+
+export const TAXI = taxinet.defaultTaxiLayout(RUNWAY);
 
 export function isRunway(x, z) {
   return x > RUNWAY.x0 - 20 && x < RUNWAY.x1 + 20 && Math.abs(z) < RUNWAY.halfWidth + 6;
@@ -174,6 +178,7 @@ export function createAirfield(scene) {
   const strip = runwayDressing({ length: RUNWAY.x1 - RUNWAY.x0, halfWidth: RUNWAY.halfWidth, labels: ['15', '33'], tone: 0x484b46 });
   strip.position.set(RUNWAY.x0, RUNWAY.y + 0.06, 0);
   g.add(strip);
+  g.add(taxiwayDressing(TAXI, RUNWAY.y, taxinet));
 
   const mat = (c) => new THREE.MeshLambertMaterial({ color: c });
 
@@ -220,6 +225,7 @@ export const alpineMap = {
   conifer: () => 0.92,
   isRunway,
   runway: RUNWAY,
+  taxiLayout: () => TAXI,
   createScenery: createAirfield,
   raceCourse,
   obstacleTop() { return -Infinity; }, // no solid obstacles, mountains are terrain
