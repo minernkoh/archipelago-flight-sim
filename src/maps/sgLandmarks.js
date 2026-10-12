@@ -201,6 +201,16 @@ export function addHDBEstate(g, reg, cx, cz, groundY, rng) {
   reg(cx - span, cx + span, cz - span, cz + span, groundY + maxH);
 }
 
+// Materials for the autogen city fill (autogen.js): housing-board pastels and
+// condo glass with the facade shader (lit windows at night), plain low-rise.
+export function autogenMaterials() {
+  return {
+    slab: HDB_COLORS.map(c => facade(lam(c), 1)),
+    tower: [M.glassBlue, M.glassTeal, M.glassDark, M.white],
+    low: [facade(lam(0xd6d0c4), 1), facade(lam(0xc9c2b4), 1), facade(lam(0xb7aea0), 1), facade(lam(0xe0dccf), 1)],
+  };
+}
+
 // --- Port: gantry cranes + container stacks ---
 export function addPort(g, reg, cx, cz, groundY, rng) {
   for (let i = 0; i < 6; i++) {

@@ -8,11 +8,11 @@ import { makeNoise, woodland } from './noise.js';
 import { PAL, seabed, beach, facetJitter } from './palette.js';
 import { runwayDressing, reciprocal } from './runwayPaint.js';
 import { taxiwayDressing } from './airfieldKit.js';
+import { buildAutogen } from './autogen.js';
 import * as taxinet from '../taxinet.js';
 import {
   addMBS, addFlyer, addEsplanade, addCBD, addHDBEstate, addPort, addShips, addChangi,
-  setNightGlow, addBeacon,
-} from './sgLandmarks.js';
+  setNightGlow, addBeacon, autogenMaterials } from './sgLandmarks.js';
 
 const RWY_Y = 7;
 const RWY_HEADING = (90 - 20) * Math.PI / 180;   // compass 020
@@ -267,6 +267,44 @@ export function createScenery(scene) {
   addPort(g, reg, -10600, 4050, gy(-10600, 4050), rng);
   for (const [dx, dz] of DISTRICTS.slice(0, 7)) addHDBEstate(g, reg, dx, dz, gy(dx, dz), rng);
   addShips(g, reg, rng, 0, [[-7300, 5600, 7], [-4500, 5500, 5]]);
+
+  // Autogen (autogen.js): fill the urban land with housing-board slabs, condo
+  // towers and low-rise blocks, clear of the water, forest, airfield,
+  // approaches, landmarks, the hand-placed estates and the race course.
+  const slopeAt = (x, z) => Math.hypot(height(x + 15, z) - height(x - 15, z), height(x, z + 15) - height(x, z - 15)) / 30;
+  const raceD = (x, z) => {
+    let d = Infinity;
+    for (let i = 0; i < raceCourse.length; i++) {
+      const [ax, az] = raceCourse[i], [bx, bz] = raceCourse[(i + 1) % raceCourse.length];   // gates are [x, z, y]
+      const dx = bx - ax, dz = bz - az, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz)));
+      d = Math.min(d, Math.hypot(ax + dx * t - x, az + dz * t - z));
+    }
+    return d;
+  };
+  const city = buildAutogen({
+    bounds: [-19000, 1500, -5500, 7000], cell: 130, ground: gy, rng,
+    density: (x, z) => {
+      const h = height(x, z);
+      if (h < 2.5) return 0;
+      const sl = slopeAt(x, z);
+      if (sl > 0.18) return 0;
+      const f = forestDensity(x, z, h, sl);
+      const suburb = smoothstep(0.44, 0.62, fbm(x * 0.0007 + 3.1, z * 0.0007 - 7.3, 3)) * 0.58;
+      return Math.min(1, Math.max(urbanAt(x, z) * 1.25, suburb)) * Math.max(0, 1 - f * 2.2);
+    },
+    excluded: (x, z, r) => {
+      const { u, v } = toRunwayFrame(x, z);
+      if (u > -1600 && u < RWY_LEN + 1600 && v > RWY2_V - 900 - r && v < 900 + r) return true;          // Changi
+      if (u > -6500 && u < RWY_LEN + 6500 && (Math.abs(v) < 520 + r || Math.abs(v - RWY2_V) < 520 + r)) return true;   // approaches
+      if (Math.hypot(x + 6000, z - 4300) < 1150 || Math.hypot(x + 10600, z - 4050) < 1000) return true;            // Marina / CBD, port
+      for (const [dx, dz] of DISTRICTS.slice(0, 7)) if (Math.hypot(x - dx, z - dz) < 560) return true;            // hand-placed estates
+      if (height(x, z) < 2.5) return true;
+      return raceD(x, z) < 300 + r;                                                                              // race gates and legs
+    },
+    reg, mats: autogenMaterials(),
+  });
+  g.add(city);
+  g.userData.autogen = city.userData.autogen;
 
   // Night content: red obstruction beacons atop the three MBS towers + the
   // Changi control tower. The environment shows/blinks them after dark.

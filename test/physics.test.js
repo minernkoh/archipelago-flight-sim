@@ -1975,6 +1975,33 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   check('tcas: an intruder climbing into our level from 1300 ft below still alerts', climbInto.ev.some(e => e.e === 'TA'), JSON.stringify(climbInto.ev));
 }
 
+// ---- v12: Singapore autogen city (autogen.js) ----
+{
+  const sg = await import('../src/maps/singapore.js');
+  const THREE = await import('three');
+  const t0 = Date.now();
+  const g = sg.createScenery(new THREE.Scene());
+  const ms = Date.now() - t0;
+  const course = sg.singaporeMap.raceCourse;
+  let blocked = 0;
+  for (let i = 0; i < course.length; i++) {
+    const [ax, az, ay] = course[i], [bx, bz, by] = course[(i + 1) % course.length];   // gates are [x, z, y]
+    for (let k = 0; k <= 40; k++) {                               // along each leg, at the leg's height
+      const t = k / 40, x = ax + (bx - ax) * t, z = az + (bz - az) * t, y = ay + (by - ay) * t;
+      if (sg.obstacleTop(x, z) > y) blocked++;                    // (the city legs thread close over the CBD roofs by design)
+    }
+  }
+  let approach = 0;
+  const h = sg.runway.headingRad, fx = Math.cos(h), fz = -Math.sin(h), rx = Math.sin(h), rz = Math.cos(h);
+  for (const v of [0, -800]) for (let u = -6000; u <= 2000 + 6000; u += 50) {
+    const x = fx * u + rx * v, z = fz * u + rz * v;
+    if (sg.obstacleTop(x, z) > -Infinity && !(u > -1600 && u < 3600)) approach++;   // the airfield has its own buildings
+  }
+  check('Singapore autogen: thousands of solid buildings, fast, and every race leg and both approaches stay clear',
+    g.userData.autogen > 2000 && ms < 1500 && blocked === 0 && approach === 0,
+    `${g.userData.autogen} buildings in ${ms} ms, ${blocked} race samples blocked, ${approach} approach samples blocked`);
+}
+
 // ---- v12: every cockpit panel draws without throwing (stub 2D context) ----
 // The panels are canvas code that only runs in a browser; a stub context that
 // accepts any call lets Node execute every line of them, so a reference to an
