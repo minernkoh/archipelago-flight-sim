@@ -81,7 +81,7 @@ export function createAircraft(opts = {}) {
     altIndicated: opts.pos ? opts.pos.y : 1000, vsIndicated: 0,   // static-port instruments
     gyro: null,            // drifting gyro attitude after a vacuum failure, else null
     // circuit breakers the pilot can pull (cockpit.js): avionics bus, autopilot, flap motor
-    breakers: { avn: true, ap: true, flap: true, lts: true, com: true, xpdr: true, tc: true },
+    breakers: { avn: true, ap: true, flap: true, lts: true, com: true, xpdr: true, tc: true, pitot: true },
     // v5-R3: piston start/electrical state (only exercised for p.startup aircraft).
     // Defaults are ready-to-fly so every existing caller spawns hot.
     // player switch positions (v12: fuel selector and light switches)
@@ -133,11 +133,12 @@ export function resetSystems(ac) {
   ac.systems.oil = true;
   ac._flapJam = null; ac.gyro = null;
   ac.oilQty = 1; ac.oilT = null; ac.oilLowT = 0;      // oil warms up again from the next update
-  ac.cht = null; ac.chtRate = 0; ac.shockCooling = false; ac.engineWear = 0;   // a fresh engine on every respawn
-  ac.breakers = { avn: true, ap: true, flap: true, lts: true, com: true, xpdr: true, tc: true };
+  ac.cht = null; ac.chtRate = 0; ac.shockCooling = false; ac.engineWear = 0; ac.pitotIce = 0; ac.screenMist = 0;   // a fresh engine on every respawn
+  ac.breakers = { avn: true, ap: true, flap: true, lts: true, com: true, xpdr: true, tc: true, pitot: true };
   // Ready-to-fly: master on, mags BOTH, mixture rich, engine turning, full battery.
   ac.sys = { battery: true, mags: 'BOTH', mixture: 1, fuel: 'BOTH', lights: { land: true, nav: true, strobe: true, beacon: true },
-    carbHeat: false, primes: 2, xpdr: 1200, altStatic: false, cabinHeat: false };
+    carbHeat: false, primes: 2, xpdr: 1200, altStatic: false, cabinHeat: false, vent: false,
+    pitotHeat: !(ac.p && ac.p.startup) };   // transport/fighter probes are always heated
   ac.fuelStarveT = 0; ac.carbIce = 0;
   ac.engineRunning = true; ac.batteryCharge = 1; ac.crankT = 0; ac.avionics = true;
 }
@@ -146,7 +147,7 @@ export function resetSystems(ac) {
 // player must run the start sequence. Battery is charged — it's just switched off.
 export function setColdStart(ac) {
   ac.sys = { battery: false, mags: 'OFF', mixture: 0, fuel: 'BOTH', lights: { land: false, nav: false, strobe: false, beacon: false },
-    carbHeat: false, primes: 0, xpdr: 1200, altStatic: false, cabinHeat: false };   // a cold engine wants priming
+    carbHeat: false, primes: 0, xpdr: 1200, altStatic: false, cabinHeat: false, vent: false, pitotHeat: false };   // a cold engine wants priming
   ac.engineRunning = false; ac.spool = 0; ac.crankT = 0;
   ac.batteryCharge = 1; ac.avionics = false;
   ac.oilT = 59; ac.oilP = 0; ac.oilQty = 1; ac.oilLowT = 0;   // a cold engine: oil at ambient
@@ -255,7 +256,7 @@ export function updateEngineSystems(ac, dt, env = null, throttle = 0) {
   // glass over a few minutes; CABIN HT (the defrost) clears it in ~30 s, and
   // dry air slowly does too. Cosmetic: weather.js draws it in the cockpit.
   ac.screenMist = Math.max(0, Math.min(1, (ac.screenMist || 0) + dt * (
-    s.cabinHeat ? -1 / 25 : risk > 0 ? risk / 200 : -1 / 120)));
+    s.cabinHeat ? -1 / 25 : s.vent ? -1 / 60 : risk > 0 ? risk / 200 : -1 / 120)));
   if (ac.engineRunning && (risk > 0 || ac.carbIce > 0 || s.carbHeat)) {
     if (s.carbHeat) ac.carbIce = Math.max(0, ac.carbIce - 0.02 * dt);
     else ac.carbIce = Math.min(1, ac.carbIce + risk * 0.0045 * (1.15 - 0.75 * throttle) * dt);
@@ -636,7 +637,16 @@ export function step(ac, controls, env, dt) {
   ac.alpha = alpha; ac.beta = beta; ac.airspeed = V;
   // Indicated airspeed (EAS ~ TAS * sqrt(rho/rho0)). A failed pitot freezes the
   // gauge at its last value while true airspeed keeps updating.
-  if (ac.systems.pitot !== false) ac.iasIndicated = V * Math.sqrt(densityRatio);
+  // Pitot icing (v12): visible moisture (in cloud, or rain) below +5 C OAT
+  // (ISA) ices the pitot tube in about a minute and freezes the airspeed
+  // indicator, as a blocked pitot does; PITOT HT prevents and clears it
+  // (dead with its breaker out). Never happens in dry or warm air.
+  const oat = 15 - 0.0065 * ac.pos.y;
+  const moist = Math.max(env.inCloud || 0, 0.35 * (env.carbIceRisk || 0));
+  const heat = ac.sys?.pitotHeat && ac.breakers?.pitot !== false;
+  if (heat) ac.pitotIce = Math.max(0, (ac.pitotIce || 0) - dt / 15);
+  else if (moist > 0 && oat < 5) ac.pitotIce = Math.min(1, (ac.pitotIce || 0) + moist * dt / 60);
+  if (ac.systems.pitot !== false && !((ac.pitotIce || 0) > 0.9)) ac.iasIndicated = V * Math.sqrt(densityRatio);
   // Static port: a blocked one freezes the altimeter and zeroes the VSI.
   if (ac.systems.static !== false) { ac.altIndicated = ac.pos.y; ac.vsIndicated = ac.vel.y; }
   else if (ac.sys?.altStatic) {

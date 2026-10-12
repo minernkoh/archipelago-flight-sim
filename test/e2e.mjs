@@ -305,15 +305,15 @@ check('clicking the HDG+ knob steps the heading bug 5 deg', ckClick.bugStep === 
 const sw = await page.evaluate(() => {
   const s = window.__sim, t0 = s.controls.state.trim;
   s.cockpitAction('trim-up'); s.cockpitAction('lt-strb'); s.cockpitAction('fuel'); s.cockpitAction('carb'); s.cockpitAction('xpdr');
-  s.cockpitAction('mix-ln'); s.cockpitAction('mix-ln'); s.cockpitAction('altstat'); s.cockpitAction('cabin');
-  const r = { trim: +(s.controls.state.trim - t0).toFixed(3), strobe: s.ac.sys.lights.strobe, fuel: s.ac.sys.fuel, carb: s.ac.sys.carbHeat, xpdr: s.ac.sys.xpdr, mix: s.ac.sys.mixture, alt: s.ac.sys.altStatic, cabin: s.ac.sys.cabinHeat }; s.cockpitAction('cabin');
+  s.cockpitAction('mix-ln'); s.cockpitAction('mix-ln'); s.cockpitAction('altstat'); s.cockpitAction('cabin'); s.cockpitAction('pitot'); s.cockpitAction('vent');
+  const r = { trim: +(s.controls.state.trim - t0).toFixed(3), strobe: s.ac.sys.lights.strobe, fuel: s.ac.sys.fuel, carb: s.ac.sys.carbHeat, xpdr: s.ac.sys.xpdr, mix: s.ac.sys.mixture, alt: s.ac.sys.altStatic, cabin: s.ac.sys.cabinHeat, pitot: s.ac.sys.pitotHeat, vent: s.ac.sys.vent }; s.cockpitAction('cabin'); s.cockpitAction('pitot'); s.cockpitAction('vent');
   s.cockpitAction('mix-rc'); s.cockpitAction('mix-rc'); s.cockpitAction('mix-rc'); r.rich = s.ac.sys.mixture; s.cockpitAction('altstat');
   s.cockpitAction('trim-dn'); s.cockpitAction('lt-strb'); for (let i = 0; i < 3; i++) s.cockpitAction('fuel');   // put them back
   s.cockpitAction('carb'); for (let i = 0; i < 3; i++) s.cockpitAction('xpdr');
   return r;
 });
 check('cockpit trim, light, fuel, carb heat, transponder and mixture leaning switches act',
-  sw.trim === 0.03 && sw.strobe === false && sw.fuel === 'L' && sw.carb === true && sw.xpdr === 7000 && sw.mix === 0.94 && sw.rich === 1 && sw.alt === true && sw.cabin === true, JSON.stringify(sw));
+  sw.trim === 0.03 && sw.strobe === false && sw.fuel === 'L' && sw.carb === true && sw.xpdr === 7000 && sw.mix === 0.94 && sw.rich === 1 && sw.alt === true && sw.cabin === true && sw.pitot === true && sw.vent === true, JSON.stringify(sw));
 // v12: transponder code knobs (octal digits) and the extra breakers
 const xp = await page.evaluate(() => {
   const s = window.__sim, x0 = s.ac.sys.xpdr;
@@ -913,7 +913,11 @@ const avoid0 = await page.evaluate(() => {
   const s = window.__sim, list = s.traffic.aiStates().filter(a => !a.heavy && a.y - s.map.runway.y > 120);
   if (!list.length) return null;
   const a = list[0];
-  s.ac.pos = { x: a.x + 150, y: a.y, z: a.z }; s.ac.vel = { x: 0, y: 0, z: 0 }; s.ac.onGround = false;
+  // fly alongside it (a dead-stopped aircraft would fall, and since the tower
+  // sequences the traffic round you it can be low in a go-around)
+  const fx = Math.cos(a.yaw), fz = -Math.sin(a.yaw);
+  s.ac.pos = { x: a.x + 150 * -fz, y: a.y, z: a.z + 150 * fx }; s.ac.vel = { x: 40 * fx, y: 0, z: 40 * fz }; s.ac.onGround = false;
+  s.ac.q = { x: 0, y: Math.sin(a.yaw / 2), z: 0, w: Math.cos(a.yaw / 2) }; s.ac.omega = { x: 0, y: 0, z: 0 };
   return { id: a.id, y: Math.round(a.y) };
 });
 if (avoid0) {

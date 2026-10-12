@@ -89,13 +89,15 @@ function cockpitAction(id) {
     }
     case 'page': cockpit?.togglePage?.(); break;
     case 'cabin': if (s) s.cabinHeat = !s.cabinHeat; break;
+    case 'vent': if (s) s.vent = !s.vent; break;
+    case 'pitot': if (s) s.pitotHeat = !s.pitotHeat; break;
     case 'altstat': if (s) s.altStatic = !s.altStatic; break;
     case 'carb': if (s) s.carbHeat = !s.carbHeat; break;
     case 'prime': if (s && !ac.engineRunning) s.primes = Math.min(9, (s.primes || 0) + 1); break;
     case 'xpdr': if (s) { const X = [1200, 7000, 7600, 7700]; s.xpdr = X[(X.indexOf(s.xpdr ?? 1200) + 1) % X.length]; } break;
     case 'fuel': if (s) { const F = ['BOTH', 'L', 'R', 'OFF']; s.fuel = F[(F.indexOf(s.fuel || 'BOTH') + 1) % F.length]; } break;
     case 'trim-dn': case 'trim-up': controls.state.trim = Math.max(-0.3, Math.min(0.3, (controls.state.trim || 0) + (id === 'trim-up' ? 0.03 : -0.03))); break;
-    case 'cb-avn': case 'cb-ap': case 'cb-flap': case 'cb-lts': case 'cb-com': case 'cb-xpdr': case 'cb-tc': { const k = id.slice(3); if (ac.breakers) ac.breakers[k] = !ac.breakers[k]; break; }
+    case 'cb-avn': case 'cb-ap': case 'cb-flap': case 'cb-lts': case 'cb-com': case 'cb-xpdr': case 'cb-tc': case 'cb-pitot': { const k = id.slice(3); if (ac.breakers) ac.breakers[k] = !ac.breakers[k]; break; }
     // transponder code knobs: each digit steps 0-7 (squawk codes are octal)
     case 'xp-1': case 'xp-2': case 'xp-3': case 'xp-4': if (s) {
       const d = String(s.xpdr ?? 1200).padStart(4, '0').split(''), i = +id.slice(3) - 1;
@@ -701,7 +703,8 @@ function frame(now) {
       fuel: ac.sys?.fuel === 'OFF' ? false : 'F ' + (ac.sys?.fuel || 'BOTH'),
       carb: !!ac.sys?.carbHeat, prime: ac.sys?.primes ? 'PR ' + ac.sys.primes : false,
       xpdr: String(ac.sys?.xpdr ?? 1200),
-      altstat: !!ac.sys?.altStatic, cabin: !!ac.sys?.cabinHeat,
+      altstat: !!ac.sys?.altStatic, cabin: !!ac.sys?.cabinHeat, vent: !!ac.sys?.vent, pitot: !!ac.sys?.pitotHeat,
+      'cb-pitot': ac.breakers?.pitot !== false,
       'trim-up': (controls.state.trim || 0) > 0.005 ? 'T ' + Math.round(controls.state.trim * 100) : false,
       'trim-dn': (controls.state.trim || 0) < -0.005 ? 'T ' + Math.round(controls.state.trim * 100) : false,
       'cb-avn': ac.breakers?.avn !== false, 'cb-ap': ac.breakers?.ap !== false, 'cb-flap': ac.breakers?.flap !== false,
@@ -759,6 +762,7 @@ function frame(now) {
   if (game.state === 'menu') camRig.updateMenu(ac, dt);
   else if (!replaying) camRig.update(ac, dt);
   weatherFx.update(dt, elapsed, view, camera, replaying ? 'REPLAY' : camRig.modeName);
+  physEnv.inCloud = env.skyState?.inCloud || 0;          // visible moisture for pitot icing
   if (isFlying) {
     hud.update(ac, c, dt, ringBearing ?? null);
     const apS = autopilot.status(ac);

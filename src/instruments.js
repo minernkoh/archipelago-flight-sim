@@ -256,7 +256,7 @@ export function engineAux(ac) {
   if (batt) {
     if (ac.sys?.mags === 'START' && !ac.engineRunning) amps = -60;
     else if (running && ac.systems?.electrical !== false) amps = Math.min(30, 2 + 28 * (1 - num(ac.batteryCharge, 1)));
-    else amps = -(8 + (ac.avionics ? 6 : 0));
+    else amps = -(8 + (ac.avionics ? 6 : 0) + (ac.sys?.pitotHeat ? 10 : 0));   // pitot heat draws ~10 A
   }
   return { vac, amps };
 }

@@ -168,11 +168,12 @@ export function createCockpit(cfg, hud, p = null) {
     // circuit breakers (lit = in): avionics bus, autopilot, flap motor
     { id: 'cb-avn', label: 'CB AVN' }, { id: 'cb-ap', label: 'CB AP' }, { id: 'cb-flap', label: 'CB FLP' },
     { id: 'cb-lts', label: 'CB LTS' }, { id: 'cb-com', label: 'CB COM' }, { id: 'cb-xpdr', label: 'CB XPD' },
-    ...(glass ? [] : [{ id: 'cb-tc', label: 'CB TC' }]),
+    ...(glass ? [] : [{ id: 'cb-tc', label: 'CB TC' }, { id: 'cb-pitot', label: 'CB PITOT' }]),
     // steam cockpits: light switches, fuel selector (start-up aircraft) and the trim wheel
     ...(glass ? [] : [
       { id: 'lt-land', label: 'LAND' }, { id: 'lt-nav', label: 'NAV' }, { id: 'lt-strb', label: 'STRB' }, { id: 'lt-bcn', label: 'BCN' },
-      ...(p?.startup ? [{ id: 'fuel', label: 'FUEL' }, { id: 'carb', label: 'CARB' }, { id: 'prime', label: 'PRIME' }, { id: 'cabin', label: 'CABIN HT' }] : []),
+      ...(p?.startup ? [{ id: 'fuel', label: 'FUEL' }, { id: 'carb', label: 'CARB' }, { id: 'prime', label: 'PRIME' }, { id: 'cabin', label: 'CABIN HT' }, { id: 'vent', label: 'VENT' }] : []),
+      { id: 'pitot', label: 'PITOT HT' },
       { id: 'xpdr', label: 'XPDR' }, { id: 'altstat', label: 'ALT STC' },
       { id: 'trim-dn', label: 'TRM ▼' }, { id: 'trim-up', label: 'TRM ▲' },
     ]),

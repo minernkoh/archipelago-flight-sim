@@ -1604,6 +1604,25 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
     check('alternate static: the altimeter and VSI come back, reading ~50 ft high',
       Math.abs(ac.altIndicated - ac.pos.y - 15) < 0.01 && Math.abs(ac.vsIndicated - ac.vel.y) < 1e-9 && Math.abs(ac.altIndicated - frozen) > 10,
       `frozen ${frozen.toFixed(0)} -> ${ac.altIndicated.toFixed(0)} (true ${ac.pos.y.toFixed(0)})`); }
+  // pitot icing: in cloud below +5 C the airspeed freezes in about a minute; pitot heat prevents and clears it
+  { const envCloud = { ...env, inCloud: 1 };
+    const flyE = (ac, c, secs, e) => { for (let i = 0; i < secs * 120; i++) step(ac, c, e, 1 / 120); };
+    const pinAt = (ac, y) => { ac.q = { x: 0, y: 0, z: 0, w: 1 }; ac.omega = { x: 0, y: 0, z: 0 }; ac.pos.y = y; };
+    const iced = mk('c172'); iced.pos.y = 2000; const c = cs({ throttle: 0.6 });
+    for (let k = 0; k < 90; k++) { flyE(iced, c, 1, envCloud); pinAt(iced, 2000); }
+    const frozenIas = iced.iasIndicated; iced.vel = { x: 40, y: 0, z: 0 }; flyE(iced, c, 2, envCloud);
+    const stillFrozen = iced.iasIndicated === frozenIas;
+    iced.sys.pitotHeat = true; for (let k = 0; k < 25; k++) { flyE(iced, c, 1, envCloud); pinAt(iced, 2000); }
+    const clearedIce = iced.pitotIce;
+    const heated = mk('c172'); heated.pos.y = 2000; heated.sys.pitotHeat = true;
+    for (let k = 0; k < 90; k++) { flyE(heated, c, 1, envCloud); pinAt(heated, 2000); }
+    const warm = mk('c172'); warm.pos.y = 300;
+    for (let k = 0; k < 90; k++) { flyE(warm, c, 1, envCloud); pinAt(warm, 300); }
+    const pulled = mk('c172'); pulled.pos.y = 2000; pulled.sys.pitotHeat = true; pulled.breakers.pitot = false;
+    for (let k = 0; k < 90; k++) { flyE(pulled, c, 1, envCloud); pinAt(pulled, 2000); }
+    check('pitot icing: in cloud at 2000 m the ASI freezes; pitot heat clears it and prevents it; warm air never ices; heat is dead with its breaker out',
+      stillFrozen && clearedIce < 0.05 && (heated.pitotIce || 0) === 0 && (warm.pitotIce || 0) === 0 && pulled.pitotIce > 0.9,
+      `frozen ${stillFrozen}, after heat ${clearedIce.toFixed(2)}, heated ${heated.pitotIce}, warm ${warm.pitotIce}, breaker out ${pulled.pitotIce.toFixed(2)}`); }
   // power: half thrust, engine still turning
   { const a = mk('c172'), b = mk('c172'); const c = cs({ throttle: 1 }); fly(a, c, 3); fly(b, c, 1);
     (await import('../src/physics/flightModel.js')).failSystem(b, 'power'); fly(b, c, 2);
