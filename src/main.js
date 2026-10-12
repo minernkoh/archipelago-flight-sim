@@ -23,6 +23,7 @@ import { createTraffic } from './traffic.js';
 import { createWind, WEATHER, WET_WEATHER } from './physics/wind.js';
 import { createWeatherFX } from './weather.js';
 import { createReplay } from './replay.js';
+import { createCockpit } from './cockpit.js';
 import { fetchLiveWeather } from './liveweather.js';
 import { loadPlan } from './planner.js';
 import { createPost } from './post.js';
@@ -103,6 +104,7 @@ function setTimeOfDay(name) {
   postSunDir = env.sunDirection();            // cached: post reads it every frame
   postSunK = name === 'night' ? 0.25 : 1;     // the "sun" is the moon at night
   post?.setSun(postSunDir, postSunK);
+  cockpit?.setNight(name === 'night');        // instrument backlighting
 }
 env.setHeightFn(archipelagoMap.height);
 let currentMap = archipelagoMap;
@@ -204,6 +206,7 @@ async function loadMap(map) {
 const ac = createAircraft({ pos: { x: archipelagoMap.runway.spawn.x, y: archipelagoMap.runway.y + 1.3, z: 0 } });
 let currentCraft = null;
 let plane = null;
+let cockpit = null, hull = [], cockpitDirty = true;   // 3D interior + the exterior meshes it replaces
 
 function setAircraft(craft) {
   if (craft === currentCraft) return;
@@ -213,6 +216,14 @@ function setAircraft(craft) {
   plane.group.traverse(o => { if (o.isMesh) o.castShadow = true; });   // v6 shadows
   scene.add(plane.group);
   env.applyEnv(plane.group, 'aircraft');   // PBR paint + glass reflect the sky
+  hull = [];
+  plane.group.traverse(o => { if (o.userData.hull) hull.push(o); });
+  if (cockpit) { scene.remove(cockpit.group); cockpit.dispose(); }
+  cockpit = createCockpit(craft.camera, craft.hud);
+  cockpit.setNight(env.state().night);
+  scene.add(cockpit.group);
+  env.applyEnv(cockpit.group, 'cockpit');
+  cockpitDirty = true;
   ac.p = { ...craft.params };
   controls.setRates(craft.params);
   hud.configure(craft.hud);
@@ -401,7 +412,7 @@ controls.on('ap-ias', () => { if (flying()) autopilot.toggleIas(ac, controls); }
 controls.on('ap-nav', () => { if (flying()) autopilot.toggleNav(ac); });
 controls.on('ap-wing', () => { if (flying()) autopilot.toggleWing(ac); });
 
-window.__sim = { ac, controls, game, world, autopilot, env, windField, minimap, camRig, camera, weatherFx, physEnv, replay,
+window.__sim = { ac, controls, game, world, autopilot, env, windField, minimap, camRig, camera, weatherFx, physEnv, replay, get cockpit() { return cockpit; }, get plane() { return plane; },
   terrainCounts: () => terrain.counts(),
   get rings() { return gauntletRings || rings; }, get map() { return currentMap; },
   get camName() { return camRig.modeName; }, get trails() { return trails; }, get traffic() { return traffic; }, scene, renderer };
@@ -454,7 +465,7 @@ document.addEventListener('visibilitychange', () => {
 // --- main loop ---
 let last = performance.now();
 let acc = 0, elapsed = 0;
-let lastCamMode = camRig.modeName;
+let lastCamMode = null;   // last cockpit-view state (true/false)
 const lastPos = { x: ac.pos.x, y: ac.pos.y, z: ac.pos.z };
 
 function frame(now) {
@@ -489,14 +500,16 @@ function frame(now) {
   plane.group.position.set(view.pos.x, view.pos.y, view.pos.z);
   plane.group.quaternion.set(view.q.x, view.q.y, view.q.z, view.q.w);
   plane.animate(vc, view.rpmNorm, dt, view);
-  plane.group.visible = replaying || camRig.modeName !== 'COCKPIT';
-  // Six-pack auto-shows in the cockpit, auto-hides otherwise — but only on a
-  // camera-mode transition, so it never flickers per frame and the manual `i`
-  // toggle stays honoured within the current view until the next mode change.
-  if (camRig.modeName !== lastCamMode && !replaying) {
-    lastCamMode = camRig.modeName;
-    panel.setVisible(camRig.modeName === 'COCKPIT');
+  // Cockpit view: the 3D interior replaces the exterior hull; wings, struts,
+  // props and engines stay visible through the glass.
+  const inCockpit = !replaying && camRig.modeName === 'COCKPIT';
+  if (inCockpit !== lastCamMode || cockpitDirty) {
+    lastCamMode = inCockpit; cockpitDirty = false;
+    for (const h of hull) h.visible = !inCockpit;
+    cockpit.group.visible = inCockpit;
+    if (inCockpit) cockpit.setNight(env.state().night);
   }
+  if (inCockpit) cockpit.update(ac, c, dt);
 
   const ringBearing = game.tick(dt);
   if (trainGates) trainGates.update(dt);

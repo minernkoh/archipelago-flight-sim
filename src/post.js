@@ -54,9 +54,12 @@ export function createPost(renderer, scene, camera) {
   const target = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: 4 });
   const composer = new EffectComposer(renderer, target);
   composer.addPass(new RenderPass(scene, camera));
-  // Threshold is above anything diffuse: only the sun/moon disc, ocean glints and
-  // emissive lights reach it. Strength stays low on purpose.
-  const bloom = new UnrealBloomPass(new THREE.Vector2(size.x / 2, size.y / 2), 0.35, 0.55, 1.15);
+  // Threshold in SCENE-linear units, above anything lit. Through ACES (at the
+  // usual ~1.05 exposure) scene 8 is display white; sunlit white paint sits at
+  // 2-3, sea foam ~2, pale sky <1. 6 keeps bloom for what is brighter than
+  // white: the sun disc, sea glitter, and the HDR light sources (runway
+  // lights via display.js headroom, nav-light cores at 12x).
+  const bloom = new UnrealBloomPass(new THREE.Vector2(size.x / 2, size.y / 2), 0.45, 0.5, 6.0);
   const bloomSetSize = bloom.setSize.bind(bloom);
   bloom.setSize = (w, h) => bloomSetSize(Math.max(2, w >> 1), Math.max(2, h >> 1));   // half resolution
   composer.addPass(bloom);

@@ -399,14 +399,17 @@ export function createTerrain(scene, map = archipelagoMap) {
     }
     pending.length = 0;
     for (const key of need) if (!chunks.has(key)) pending.push(key);
-    // Fine tier first, then nearest-first inside each tier: the ground under
-    // the aircraft must never be the thing that is still missing.
+    // The ground under the aircraft first (fine ring of radius 2), then the
+    // whole coarse tier — 24 cheap 18x18 meshes that fill the horizon, so a
+    // teleport never shows bare fog where the world should be — then the rest
+    // of the fine tier, nearest first.
     const rank = (k) => {
       const fine = k.startsWith('n:');
       const [ax, az] = k.slice(2).split(',').map(Number);
       const scale = fine ? 1 : FAR_CHUNK / CHUNK;
       const d = Math.abs(ax * scale - cx) + Math.abs(az * scale - cz);
-      return (fine ? 0 : 10000) + d;
+      if (fine) return (Math.max(Math.abs(ax - cx), Math.abs(az - cz)) <= 2 ? 0 : 20000) + d;
+      return 10000 + d;
     };
     pending.sort((a, b) => rank(a) - rank(b));
   }

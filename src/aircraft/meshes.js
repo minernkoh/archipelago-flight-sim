@@ -95,7 +95,8 @@ const _navCol = { red: 0xff2a1a, green: 0x1aff5a, white: 0xfff4e0 };
 const _navCoreMat = {}, _navGlowMat = {};
 function navMats(col) {
   if (!_navCoreMat[col]) {
-    _navCoreMat[col] = new THREE.MeshBasicMaterial({ color: _navCol[col], toneMapped: false });
+    // HDR core (x12) so the bloom pass (threshold 6, scene-linear) picks it up
+    _navCoreMat[col] = new THREE.MeshBasicMaterial({ color: new THREE.Color(_navCol[col]).multiplyScalar(12), toneMapped: false });
     _navGlowMat[col] = new THREE.SpriteMaterial({
       map: glowTex(), color: _navCol[col], blending: THREE.AdditiveBlending,
       transparent: true, depthWrite: false, toneMapped: false, opacity: 0.55,
@@ -171,15 +172,21 @@ function legGroup(x, y, z) {
 // (scene.environment, see environment.js). Per-face vertex colours carry the
 // livery. Double-sided so loft winding never matters (three flips the normal
 // for back faces).
-function paintMat({ roughness = 0.42, metalness = 0.05, clearcoat = 0.7 } = {}) {
+function paintMat({ roughness = 0.5, metalness = 0.05, clearcoat = 0.45 } = {}) {
   return new THREE.MeshPhysicalMaterial({
     vertexColors: true, side: THREE.DoubleSide,
-    roughness, metalness, clearcoat, clearcoatRoughness: 0.12,
+    roughness, metalness, clearcoat, clearcoatRoughness: 0.22,
+    // the hemisphere light already supplies sky fill: the env map is here for
+    // reflections, so keep its diffuse share down or white paint over-exposes
+    envMapIntensity: 0.4,
   });
 }
 // Unpainted parts: tyres, struts, hubs, gear legs.
-const lam = (color, roughness = 0.7, metalness = 0.1) => new THREE.MeshStandardMaterial({ color, roughness, metalness });
+const lam = (color, roughness = 0.7, metalness = 0.1) => new THREE.MeshStandardMaterial({ color, roughness, metalness, envMapIntensity: 0.4 });
 const neg = (surfs) => surfs.map(s => ({ ...s, from: -s.from, to: -s.to }));
+// Exterior hull: hidden in the cockpit view (cockpit.js draws the interior),
+// so the wings, struts, props and engines stay visible through the glass.
+const H = (o) => { o.userData.hull = true; return o; };
 
 // Spinning wheel set: a tyre/hub pair with a couple of hub spokes so the
 // rotation reads. Returns the wheel group (rotate about z).
@@ -253,7 +260,7 @@ function c172() {
     { x: -3.90, y: 0.31, w: 0.12, t: 0.20, b: 0.13 },
     { x: -4.40, y: 0.34, w: 0.03, t: 0.09, b: 0.05 },
   ];
-  g.add(new THREE.Mesh(loft(fus, {
+  g.add(H(new THREE.Mesh(loft(fus, {
     profile: PROFILE.cabin,
     paint({ x, row, cap }) {
       if (cap) return C.dark;
@@ -265,7 +272,7 @@ function c172() {
       if (row >= 7) return C.belly;
       return C.white;
     },
-  }), mat));
+  }), mat)));
 
   // Wing: rectangular inboard, tapered outboard, 1.7 deg dihedral.
   const wst = [
@@ -398,7 +405,7 @@ function extra300() {
     { x: -3.20, y: 0.16, w: 0.12, t: 0.18, b: 0.14 },
     { x: -3.75, y: 0.18, w: 0.03, t: 0.08, b: 0.05 },
   ];
-  g.add(new THREE.Mesh(loft(fus, {
+  g.add(H(new THREE.Mesh(loft(fus, {
     profile: PROFILE.cabin,
     paint({ x, row, k, cap }) {
       if (cap) return C.dark;
@@ -409,15 +416,15 @@ function extra300() {
       if (row >= 7) return C.belly;
       return C.white;
     },
-  }), mat));
+  }), mat)));
   // Bubble canopy
-  g.add(new THREE.Mesh(loft([
+  g.add(H(new THREE.Mesh(loft([
     { x: 1.72, y: 0.46, w: 0.04, t: 0.03, b: 0.02 },
     { x: 1.35, y: 0.46, w: 0.33, t: 0.24, b: 0.02 },
     { x: 0.70, y: 0.46, w: 0.37, t: 0.36, b: 0.02 },
     { x: 0.00, y: 0.48, w: 0.31, t: 0.27, b: 0.02 },
     { x: -0.45, y: 0.50, w: 0.06, t: 0.05, b: 0.02 },
-  ], { profile: roundProfile(6) }), glass));
+  ], { profile: roundProfile(6) }), glass)));
 
   // Symmetric low wing, red tips and a red chevron band on top.
   const wst = [
@@ -532,7 +539,7 @@ function hornet() {
   const g = new THREE.Group();
 
   const skin = ({ row, up }) => (row != null ? row <= 3 : up) ? C.top : (row != null && row >= 7 ? C.belly : C.side);
-  g.add(new THREE.Mesh(loft([
+  g.add(H(new THREE.Mesh(loft([
     { x: 9.30, y: -0.05, w: 0.03, t: 0.03, b: 0.03 },
     { x: 8.70, y: -0.02, w: 0.26, t: 0.26, b: 0.27 },
     { x: 7.70, y: 0.04, w: 0.44, t: 0.44, b: 0.46 },
@@ -552,22 +559,22 @@ function hornet() {
       if (x > 7.7) return C.radome;
       return skin({ row });
     },
-  }), mat));
+  }), mat)));
   // Canopy
-  g.add(new THREE.Mesh(loft([
+  g.add(H(new THREE.Mesh(loft([
     { x: 7.30, y: 0.55, w: 0.05, t: 0.03, b: 0.02 },
     { x: 6.60, y: 0.58, w: 0.42, t: 0.30, b: 0.02 },
     { x: 5.50, y: 0.66, w: 0.47, t: 0.44, b: 0.02 },
     { x: 4.30, y: 0.68, w: 0.40, t: 0.32, b: 0.02 },
     { x: 3.50, y: 0.66, w: 0.10, t: 0.05, b: 0.02 },
-  ], { profile: roundProfile(6) }), glass));
+  ], { profile: roundProfile(6) }), glass)));
   // Intakes under the LEX
   for (const s of [-1, 1]) {
-    g.add(new THREE.Mesh(loft([
+    g.add(H(new THREE.Mesh(loft([
       { x: 3.40, y: -0.32, z: s * 0.98, w: 0.30, t: 0.27, b: 0.27 },
       { x: 2.20, y: -0.30, z: s * 0.92, w: 0.30, t: 0.28, b: 0.28 },
       { x: 0.20, y: -0.25, z: s * 0.80, w: 0.18, t: 0.18, b: 0.18 },
-    ], { profile: PROFILE.cabin, paint: ({ cap, x }) => cap && x > 3 ? 0x101114 : C.belly }), mat));
+    ], { profile: PROFILE.cabin, paint: ({ cap, x }) => cap && x > 3 ? 0x101114 : C.belly }), mat)));
   }
   // LEX strakes
   const lex = [{ x: 6.6, y: 0.12, z: 0.5, chord: 6.2, t: 0.03 }, { x: 2.0, y: 0.10, z: 1.38, chord: 1.8, t: 0.03 }];
@@ -725,7 +732,7 @@ function heavy() {
   // Fuselage (round profile, 15 degree facets). Rows: 0-3 crown, 4 windows,
   // 5 white, 6 cheatline, 7 white, 8-11 belly.
   const doors = [21.0, 9.5, -6.0, -15.5];
-  g.add(new THREE.Mesh(loft([
+  g.add(H(new THREE.Mesh(loft([
     { x: 29.7, y: -0.70, w: 0.05, t: 0.05, b: 0.05 },
     { x: 29.2, y: -0.50, w: 1.00, t: 0.95, b: 0.90 },
     { x: 28.0, y: -0.25, w: 1.95, t: 1.90, b: 1.95 },
@@ -751,14 +758,14 @@ function heavy() {
       if (x < -22 && row <= 5) return C.navy;                           // tail cone wrap
       return C.white;
     },
-  }), mat));
+  }), mat)));
   // Wing-root belly fairing
-  g.add(new THREE.Mesh(loft([
+  g.add(H(new THREE.Mesh(loft([
     { x: 12.0, y: -2.2, w: 0.5, t: 0.6, b: 0.4 },
     { x: 8.0, y: -2.3, w: 2.9, t: 0.9, b: 0.75 },
     { x: -4.0, y: -2.3, w: 3.0, t: 0.9, b: 0.8 },
     { x: -8.0, y: -2.1, w: 1.0, t: 0.6, b: 0.4 },
-  ], { profile: roundProfile(6), paint: () => C.grey }), mat));
+  ], { profile: roundProfile(6), paint: () => C.grey }), mat)));
 
   // Wings: kinked trailing edge, 6 deg dihedral, winglets.
   const wst = [
@@ -965,15 +972,16 @@ function spirit() {
   };
   const RW = build(sts, 1), LW = build(mirrorZ(sts), -1);
   g.add(RW.group, LW.group);
+  H(RW.group); H(LW.group);
 
   // Engine intake humps and the cockpit hump
   for (const s of [-1, 1]) {
-    g.add(new THREE.Mesh(loft([
+    g.add(H(new THREE.Mesh(loft([
       { x: 5.6, y: 1.35, z: s * 4.2, w: 0.05, t: 0.02, b: 0.02 },
       { x: 4.6, y: 1.3, z: s * 4.2, w: 1.5, t: 0.35, b: 0.1 },
       { x: 1.5, y: 1.15, z: s * 4.2, w: 1.4, t: 0.3, b: 0.1 },
       { x: -1.5, y: 0.95, z: s * 4.2, w: 0.2, t: 0.05, b: 0.05 },
-    ], { profile: PROFILE.cabin, paint: ({ x }) => x > 4.6 ? 0x0c0d0f : C.top }), mat));
+    ], { profile: PROFILE.cabin, paint: ({ x }) => x > 4.6 ? 0x0c0d0f : C.top }), mat)));
   }
 
   // Retractable gear on the physics contact points.

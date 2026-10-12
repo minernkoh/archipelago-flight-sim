@@ -9,6 +9,7 @@
 // toneMapped:false so the bloom pass (post.js) can halo them.
 
 import * as THREE from 'three';
+import { displayMatch } from './display.js';
 
 const VERT = `
   attribute vec3 lcolor; attribute float phase;
@@ -34,18 +35,18 @@ const FRAG = `
     float r2 = dot(d, d) * 4.0;
     float a = exp(-r2 * 6.0) + 0.35 * exp(-r2 * 1.5);
     if (a * vA < 0.01) discard;
-    gl_FragColor = vec4(vC * a * vA * 1.6, 1.0);
+    gl_FragColor = vec4(vC * a * vA * 2.6, 1.0);   // > bloom threshold (post.js)
   }`;
 
 function lightMaterial(size, minPx) {
-  return new THREE.ShaderMaterial({
+  return displayMatch(new THREE.ShaderMaterial({
     vertexShader: VERT, fragmentShader: FRAG,
     uniforms: {
       time: { value: 0 }, scale: { value: 400 }, size: { value: size }, minPx: { value: minPx },
       fogFar: { value: 5000 }, dayK: { value: 1 },
     },
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false, fog: false,
-  });
+  }));
 }
 
 const COL = {

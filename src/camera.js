@@ -15,36 +15,9 @@ const CYCLE = 3;   // C cycles the first three; FLYBY is its own toggle
 const ALIGN = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -Math.PI / 2);
 const damp = (rate, dt) => 1 - Math.exp(-rate * dt);   // frame-rate independent lerp factor
 
-// Cockpit frame, in camera space (-z forward, ~1 m out). Just enough structure
-// (glareshield, pillars, canopy bow) to put you IN the aircraft rather than
-// floating over the scenery; the HTML six-pack sits on the glareshield.
-function buildFrame(style) {
-  const g = new THREE.Group();
-  if (!style || style === 'none') return g;
-  const mat = new THREE.MeshLambertMaterial({ color: 0x1a1f24, flatShading: true });
-  const lip = new THREE.MeshLambertMaterial({ color: 0x2a3138, flatShading: true });
-  const box = (w, h, d, x, y, z, rz = 0, m = mat) => {
-    const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
-    b.position.set(x, y, z); b.rotation.z = rz; g.add(b); return b;
-  };
-  const top = style === 'canopy' ? -0.3 : -0.22;          // glareshield top edge (y at z = -1)
-  box(3.4, 0.9, 0.5, 0, top - 0.45, -1.05);              // dash
-  const curve = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 3.4, 8), lip);
-  curve.rotation.z = Math.PI / 2; curve.position.set(0, top, -0.85); g.add(curve);  // padded lip
-  if (style === 'cabin' || style === 'airliner') {
-    const inset = style === 'airliner' ? 0.92 : 1.06;
-    box(0.06, 1.25, 0.06, -inset, top + 0.55, -0.98, -0.32);   // A-pillars, raked
-    box(0.06, 1.25, 0.06, inset, top + 0.55, -0.98, 0.32);
-    box(3.2, 0.2, 0.08, 0, 0.8, -0.98);                       // header
-    if (style === 'airliner') box(0.06, 1.1, 0.06, 0, top + 0.5, -1.0);   // centre post
-  } else {
-    const bow = new THREE.Mesh(new THREE.TorusGeometry(1.15, 0.025, 4, 24, Math.PI), mat);
-    bow.position.set(0, top + 0.05, -1.05); g.add(bow);       // canopy bow
-  }
-  g.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; o.renderOrder = 10; } });
-  return g;
-}
-
+// v11: the cockpit interior is a real 3D model riding with the aircraft
+// (cockpit.js). The old camera-space frame is gone; `frame` stays an empty
+// group so camera-attached extras (windscreen rain) have a stable parent.
 export function createCameraRig(camera) {
   let mode = 0;
   const look = new THREE.Vector3();
@@ -75,7 +48,7 @@ export function createCameraRig(camera) {
   // Per-aircraft offsets (a 200 t airliner needs a much longer leash)
   let cfg = { chaseDist: 14, chaseHeight: 4.2, orbitR: 26, cockpit: { fwd: 0.55, up: 0.42 } };
   let inputOn = false;                    // only while flying: menus own the mouse otherwise
-  let frame = buildFrame('cabin');
+  const frame = new THREE.Group();
   frame.visible = false;
   camera.add(frame);                      // main.js adds the camera to the scene
 
@@ -148,11 +121,6 @@ export function createCameraRig(camera) {
     configure(c) {
       cfg = { ...cfg, ...c };
       initialized = false;
-      camera.remove(frame);
-      frame.traverse(o => { o.geometry?.dispose(); o.material?.dispose(); });
-      frame = buildFrame(cfg.cockpit?.frame);
-      frame.visible = false;
-      camera.add(frame);
     },
     setGround(fn) { groundFn = fn; },
     setInput(on) { inputOn = !!on; if (!on) dragging = false; },

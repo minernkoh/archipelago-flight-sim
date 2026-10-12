@@ -18,6 +18,7 @@
 
 import * as THREE from 'three';
 import { RUNWAY_WX } from './maps/runwayPaint.js';
+import { displayMatch } from './display.js';
 
 export const SKY_PRESETS = {
   clear: { overcast: 0, rain: 0, lightning: 0, deck: 0, vis: 1 },
@@ -28,7 +29,7 @@ const DECK_THICK = 380;
 
 // ------------------------------------------------------------------ deck --
 function deckMaterial(top) {
-  return new THREE.ShaderMaterial({
+  return displayMatch(new THREE.ShaderMaterial({
     side: THREE.DoubleSide, fog: false,
     uniforms: {
       base: { value: 500 }, col: { value: new THREE.Color() }, fogColor: { value: new THREE.Color() },
@@ -63,7 +64,7 @@ function deckMaterial(top) {
         c = mix(c, fogColor, smoothstep(fogNear, fogFar, d));
         gl_FragColor = vec4(c, 1.0);
       }`,
-  });
+  }));
 }
 
 // ------------------------------------------------------------------ rain --
@@ -80,7 +81,7 @@ function buildRain() {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   g.setAttribute('seed', new THREE.BufferAttribute(seed, 4));
-  const mat = new THREE.ShaderMaterial({
+  const mat = displayMatch(new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, fog: false,
     uniforms: {
       camPos: { value: new THREE.Vector3() }, fall: { value: new THREE.Vector3(0, -9, 0) },
@@ -106,7 +107,7 @@ function buildRain() {
     fragmentShader: `
       uniform vec3 col; uniform float flash; varying float vA;
       void main(){ if (vA < 0.01) discard; gl_FragColor = vec4(col + flash, 0.22 * vA); }`,
-  });
+  }));
   const lines = new THREE.LineSegments(g, mat);
   lines.frustumCulled = false;
   lines.renderOrder = 5;
@@ -115,7 +116,7 @@ function buildRain() {
 
 // ---------------------------------------------------- windscreen beads --
 function buildScreenRain() {
-  const mat = new THREE.ShaderMaterial({
+  const mat = displayMatch(new THREE.ShaderMaterial({
     transparent: true, depthTest: false, depthWrite: false, fog: false,
     uniforms: { time: { value: 0 }, wet: { value: 0 }, speed: { value: 0 }, aspect: { value: 1.6 }, tint: { value: new THREE.Color(0xc8d2dc) } },
     vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
@@ -148,7 +149,7 @@ function buildScreenRain() {
         if (c.a < 0.01) discard;
         gl_FragColor = c;
       }`,
-  });
+  }));
   const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
   m.renderOrder = 999;
   m.frustumCulled = false;
@@ -329,7 +330,7 @@ export function createWeatherFX(scene, env, audio, windAt) {
         d.position.set(sx, 0, sz);
         const u = d.material.uniforms;
         u.time.value = elapsed; u.flash.value = flash;
-        u.fogColor.value.copy(scene.fog.color);
+        u.fogColor.value.copy(env.screenFog);
         u.fogNear.value = scene.fog.near;
         u.fogFar.value = inCloud > 0.3 ? scene.fog.far : Math.max(scene.fog.far, 600) * (d === deckTop ? 2.5 : 1.6);
       }

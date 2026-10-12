@@ -4,6 +4,7 @@
 // preallocated, so update() allocates nothing (same rule as effects.js).
 
 import * as THREE from 'three';
+import { displayMatch } from './display.js';
 
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 const smooth = (a, b, x) => { const t = clamp01((x - a) / (b - a)); return t * t * (3 - 2 * t); };
@@ -24,7 +25,7 @@ function createRibbon(scene, { points, life, color, opacity, widthFrom, widthTo,
   geo.setAttribute('alpha', new THREE.BufferAttribute(alpha, 1).setUsage(THREE.DynamicDrawUsage));
   geo.setAttribute('across', new THREE.BufferAttribute(across, 1));
   geo.setIndex(idx);
-  const mat = new THREE.ShaderMaterial({
+  const mat = displayMatch(new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, side: THREE.DoubleSide, fog: true,
     uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, { color: { value: new THREE.Color(color) } }]),
     vertexShader: `attribute float alpha; attribute float across; varying float vA; varying float vX;
@@ -42,7 +43,7 @@ function createRibbon(scene, { points, life, color, opacity, widthFrom, widthTo,
         gl_FragColor=vec4(color*(0.86+0.14*edge),a);
         #include <fog_fragment>
       }`,
-  });
+  }));
   const mesh = new THREE.Mesh(geo, mat);
   mesh.frustumCulled = false;
   mesh.renderOrder = 3;

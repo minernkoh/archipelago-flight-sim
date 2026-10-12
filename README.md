@@ -11,12 +11,18 @@ A browser flight simulator built with **Three.js**
 - **Living world** — smooth terrain with procedural grass, soil and rock detail,
   clear turquoise shallows, soft cumulus, streamed forests, a sky with stars at night, time-of-day
   lighting, and a live 3D scene behind the menu.
-- **Cameras** — chase (wheel zoom, drag to look around), cockpit with a framed
-  canopy, orbit, and a cinematic fly-by (`V`).
+- **Cameras** — chase (wheel zoom, drag to look around), a full 3D cockpit,
+  orbit, and a cinematic fly-by (`V`).
+- **3D cockpits**: every aircraft has a modelled interior with live
+  instruments: a steam six-pack with engine gauges and radios in the light
+  aircraft, glass PFD/ND/engine displays in the jets and airliner. Yokes,
+  sticks and throttles move with your inputs, and the panel is backlit at
+  night. The wings, struts and engines stay visible through the glass.
 - **Airshow touches** — wingtip vortices when you pull G, smoke trail on `K`.
 - **Feel**: spring-damped chase camera with buffet shake, control expo, Shift for fine control, prop audio with Doppler.
 - **Eye candy**: bloom and lens flare, ocean swell with coastal foam and spray, nav lights and strobes, retracting gear.
-- **A living world**: villages, lighthouses, boats, circuit traffic and birds.
+- **A living world**: villages, lighthouses, boats, circuit traffic and birds,
+  and a Singapore skyline with curtain-wall glass and window-by-window lights at night.
 - **Dynamic resolution** — keeps the frame rate up on weaker GPUs.
 - **Lofted PBR airframes**: every aircraft is built from smooth lofted fuselage
   sections and real airfoil-section wings, in clear-coated paint that reflects the sky, with working flaps, ailerons, rudders, spinning

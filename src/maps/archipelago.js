@@ -218,7 +218,7 @@ export function createAirfield(scene) {
   const tw = tower({ h: 16 });
   tw.position.set(212, 0, 56);
   const parked = clubPlaneGeometry();
-  const parkMat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.45, metalness: 0.05 });
+  const parkMat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.45, metalness: 0.05, envMapIntensity: 0.4 });
   for (const [x, z, yaw] of [[104, 38, 2.2], [158, 36, -2.3]]) {
     const pm = new THREE.Mesh(parked, parkMat);
     pm.position.set(x, 1.23, z);

@@ -279,7 +279,7 @@ export function createTraffic(scene, map, opts = {}) {
   }
 
   const planeGeo = hasRunway ? clubPlaneGeometry() : null;
-  const planeMat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.45, metalness: 0.05 });
+  const planeMat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.45, metalness: 0.05, envMapIntensity: 0.4 });
   const planeMeshes = [];
   if (hasRunway) {
     for (let i = 0; i < 2; i++) {

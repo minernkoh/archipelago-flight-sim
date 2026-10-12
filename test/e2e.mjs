@@ -247,8 +247,15 @@ const att2 = await sim(`document.querySelector(${JSON.stringify(attSel)}).getAtt
 check('attitude indicator transform changes with attitude', !!att1 && !!att2 && att1 !== att2, `${att1} -> ${att2}`);
 
 await press('c');
-await settle(400);
+await settle(600);
 await shot('4-cockpit');
+const pit = await sim(`(() => {
+  const s = __sim; let hullShown = 0, hull = 0;
+  s.plane.group.traverse(o => { if (o.userData.hull) { hull++; if (o.visible) hullShown++; } });
+  return { cam: s.camName, interior: s.cockpit.group.visible, style: s.cockpit.style, hull, hullShown };
+})()`);
+check('cockpit view shows the 3D interior and hides the exterior hull',
+  pit.cam === 'COCKPIT' && pit.interior && pit.hull > 0 && pit.hullShown === 0, JSON.stringify(pit));
 await press('c');
 await settle(400);
 await press('c');
@@ -667,10 +674,13 @@ check('cold & dark spawns engine-off with the panel + checklist up',
   !cold.running && cold.avionics === false && cold.mags === 'OFF' && cold.panelShown && cold.chk, JSON.stringify(cold));
 // run the real sequence through the switch state (battery, mixture, crank, release)
 await page.evaluate(() => { const s = window.__sim.ac.sys; s.battery = true; s.mixture = 1; s.mags = 'START'; });
+const f0 = await sim('__sim.frames');
 await settle(2600);
+const crankDiag = await sim('({ crank: __sim.ac.crankT, run: __sim.ac.engineRunning, state: __sim.game.state, cam: __sim.camName, res: __sim.world.resScale })');
 await page.evaluate(() => { window.__sim.ac.sys.mags = 'BOTH'; window.__sim.controls.state.throttle = 0.3; });
 await settle(1200);
 const hotNow = await sim('({ running: __sim.ac.engineRunning, avionics: __sim.ac.avionics, thrust: Math.round(__sim.ac.thrust) })');
+hotNow.diag = { ...crankDiag, frames: (await sim('__sim.frames')) - f0 };
 check('start sequence brings the engine to life', hotNow.running && hotNow.avionics && hotNow.thrust > 100, JSON.stringify(hotNow));
 // restore: cold & dark OFF for anything after
 await page.evaluate(() => { window.__sim.game.toMenu?.(); });
@@ -806,9 +816,11 @@ check('PAPI reports what the camera sees (0..4 white)', wx9.papi >= 0 && wx9.pap
 await page.evaluate(() => window.__sim.weatherFx.strike());
 await settle(1200);
 check('STORM: lightning strikes on demand', await sim('__sim.weatherFx.strikes') >= 1);
-// climb into the deck: whiteout
+// climb into the deck: whiteout. Pinned over open sea (x -1500..0, z 6000
+// is water for 1.7 km east), so the flight after the replay can't hit a hill.
 await page.evaluate(() => {
   const s = window.__sim, ac = s.ac;
+  ac.pos.x = -1500; ac.pos.z = 6000;
   ac.pos.y = s.weatherFx.deckBase + 180; ac.vel.x = 55; ac.vel.y = 0; ac.vel.z = 0;
   ac.q = { x: 0, y: 0, z: 0, w: 1 }; ac.omega = { x: 0, y: 0, z: 0 }; ac.onGround = false;
 });

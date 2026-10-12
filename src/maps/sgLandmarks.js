@@ -1,11 +1,64 @@
-// Stylized Singapore landmarks — low-poly primitive groups in the game's
-// flat-shaded style. Each builder adds meshes to a group and registers solid
+// Stylized Singapore landmarks — primitive groups dressed by a procedural
+// facade shader (window grids, floor bands, reflective glass, lit windows at
+// night). Each builder adds meshes to a group and registers solid
 // obstacle boxes via reg(x0, x1, z0, z1, topY) so towers are crash-able.
 // This is a 1:2-scale tribute, not survey data.
 
 import * as THREE from 'three';
 
 const lam = (c) => new THREE.MeshLambertMaterial({ color: c });
+
+// Procedural facade (v11): on vertical faces, a world-space grid of floors
+// (3.6 m) and window bays (glass: 3 m curtain-wall panels; concrete: punched
+// windows), with mullions, spandrel bands and a fresnel sky sheen on the
+// glass. At night a hashed subset of windows lights up warm. All analytic,
+// no textures; distance-faded so it never shimmers.
+const FACADE = { night: { value: 0 }, sky: { value: new THREE.Color(0x9fb4c8) } };
+function facade(mat, kind) {   // kind: 0 curtain-wall glass, 1 concrete with windows
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.fNight = FACADE.night;
+    sh.uniforms.fSky = FACADE.sky;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vFW; varying vec3 vFN;')
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        vFW = (modelMatrix * vec4(transformed, 1.0)).xyz;
+        vFN = normalize(mat3(modelMatrix) * objectNormal);`);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vFW; varying vec3 vFN; uniform float fNight; uniform vec3 fSky;
+        float fh(vec2 p){ return fract(sin(dot(p, vec2(41.7, 289.3))) * 15731.7); }`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        float fVert = 1.0 - smoothstep(0.3, 0.6, abs(vFN.y));
+        float fDist = length(vFW - cameraPosition);
+        float fFade = (1.0 - smoothstep(600.0, 2600.0, fDist)) * fVert;
+        // horizontal coordinate along the facade
+        vec2 fT = normalize(vec2(-vFN.z, vFN.x) + 1e-5);       // horizontal tangent of the face
+        float fu = dot(vFW.xz, fT);
+        vec2 cell = vec2(fu / ${kind === 0 ? '3.0' : '3.4'}, vFW.y / 3.6);
+        vec2 f = fract(cell), id = floor(cell);
+        float win = ${kind === 0
+          ? 'step(0.06, f.x) * step(f.x, 0.94) * step(0.12, f.y) * step(f.y, 0.96)'
+          : 'step(0.25, f.x) * step(f.x, 0.75) * step(0.3, f.y) * step(f.y, 0.82)'};
+        vec3 glassC = ${kind === 0 ? 'diffuseColor.rgb * 0.9' : 'vec3(0.16, 0.2, 0.24)'};
+        vec3 frameC = ${kind === 0 ? 'diffuseColor.rgb * 0.55' : 'diffuseColor.rgb'};
+        float shade = 0.9 + 0.2 * fh(id + 3.1);                // panel-to-panel tint
+        vec3 fc = mix(frameC, glassC * shade, win);
+        diffuseColor.rgb = mix(diffuseColor.rgb, fc, fFade);
+        float fWin = win * fFade;
+        float fLit = step(0.55, fh(id + floor(fT * 40.0) + floor(vFW.xz / 40.0))) * fWin;`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        totalEmissiveRadiance = vec3(0.0);
+        totalEmissiveRadiance += vec3(1.0, 0.78, 0.48) * fLit * fNight * (0.6 + 0.6 * fh(floor(vFW.xy) + 7.0));`)
+      .replace('#include <opaque_fragment>', `#include <opaque_fragment>
+        {
+          vec3 V = normalize(cameraPosition - vFW);
+          float fres = pow(1.0 - abs(dot(normalize(vFN), V)), 4.0);
+          gl_FragColor.rgb += fSky * fWin * (0.08 + 0.5 * fres) * (1.0 - fNight * 0.8) * ${kind === 0 ? '1.0' : '0.6'};
+        }`);
+  };
+  mat.customProgramCacheKey = () => 'facade' + kind;
+  return mat;
+}
 
 const M = {
   concrete: lam(0xb9bdc1), glassDark: lam(0x3a4a58), glassBlue: lam(0x5b7d94),
@@ -20,9 +73,14 @@ const M = {
 const WARM = new THREE.Color(0xffcf87), COOL = new THREE.Color(0x8fb4d6), BLACK = new THREE.Color(0x000000);
 const WARM_MATS = [M.glassDark, M.glassBlue, M.glassTeal];
 const COOL_MATS = [M.concrete, M.white, M.deck];
+for (const m of WARM_MATS) facade(m, 0);
+for (const m of [M.concrete, M.white, M.sand]) facade(m, 1);
+// Night: the facade shader lights individual windows (FACADE.night); the old
+// whole-building emissive stays as a faint wash so towers read at distance.
 export function setNightGlow(on) {
-  for (const m of WARM_MATS) { m.emissive.copy(on ? WARM : BLACK); m.emissiveIntensity = on ? 0.42 : 0; }
-  for (const m of COOL_MATS) { m.emissive.copy(on ? COOL : BLACK); m.emissiveIntensity = on ? 0.16 : 0; }
+  FACADE.night.value = on ? 1 : 0;
+  for (const m of WARM_MATS) { m.emissive.copy(on ? WARM : BLACK); m.emissiveIntensity = on ? 0.08 : 0; }
+  for (const m of COOL_MATS) { m.emissive.copy(on ? COOL : BLACK); m.emissiveIntensity = on ? 0.04 : 0; }
 }
 
 // A red obstruction beacon (aviation warning light) atop a tall tower. Hidden
@@ -120,7 +178,7 @@ export function addCBD(g, reg, cx, cz, groundY, rng) {
 const HDB_COLORS = [0xd8cfc4, 0xcfd8cf, 0xd7ccd8, 0xd8d5c4, 0xc4ccd8];
 export function addHDBEstate(g, reg, cx, cz, groundY, rng) {
   const rows = 3 + (rng() * 3 | 0), cols = 4 + (rng() * 4 | 0);
-  const mat = lam(HDB_COLORS[(rng() * HDB_COLORS.length) | 0]);
+  const mat = facade(lam(HDB_COLORS[(rng() * HDB_COLORS.length) | 0]), 1);
   const ry = rng() * Math.PI;
   const est = new THREE.Group();
   let maxH = 0;

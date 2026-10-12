@@ -115,10 +115,13 @@ export function height(x, z) {
   if (d <= 0) {
     h = Math.max(-38, d * 0.06);                      // shallow strait shelf
   } else {
+    // v11: a beach ramp instead of a 3 m step at the waterline. The step was
+    // what the 17 m terrain grid drew as a staircase coastline.
+    const beachK = smoothstep(0, 120, d);
     h = 3 + 9 * smoothstep(0, 500, d) + (fbm(x * 0.002 + 5, z * 0.002 + 11, 3) - 0.5) * 14;
     h += 300 * gauss(x, z, -10000, 800, 1250);        // Bukit Timah (2x vertical)
     h += 130 * gauss(x, z, -8800, -400, 2100);        // central catchment ridge
-    h = Math.max(h, 0.8);
+    h = Math.max(h, 0.8) * beachK + d * 0.025 * (1 - beachK);
   }
   // Changi flatten
   const { u, v } = toRunwayFrame(x, z);

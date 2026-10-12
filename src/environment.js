@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import { getTerrainHeight as archipelagoHeight } from './maps/archipelago.js';
 import { createRunwayLights } from './runwayLights.js';
+import { DISPLAY, displayMatch, displayOf } from './display.js';
 
 const D2R = Math.PI / 180;
 // Sun/moon direction from azimuth (deg, 0 = +x, increasing toward -z) and
@@ -135,7 +136,7 @@ function buildClouds(scene, tod) {
   geo.setAttribute('aCluster', new THREE.InstancedBufferAttribute(new Float32Array(clusterIdx), 1));
   geo.setAttribute('aRot', new THREE.InstancedBufferAttribute(new Float32Array(rots), 1));
   geo.instanceCount = sizes.length;
-  const mat = new THREE.ShaderMaterial({
+  const mat = displayMatch(new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, fog: false,
     uniforms: {
       lit: { value: tod.cloud.clone() }, sunDir: { value: tod.sunDir.clone() },
@@ -184,7 +185,7 @@ function buildClouds(scene, tod) {
         c = mix(c, fogColor, smoothstep(fogNear, fogFar * 1.2, d));
         gl_FragColor = vec4(c, a);
       }`,
-  });
+  }));
   const mesh = new THREE.Mesh(geo, mat);
   mesh.frustumCulled = false;
   mesh.renderOrder = 2;
@@ -250,7 +251,7 @@ export function createEnvironment(scene, renderer) {
   // dissolves into the sky instead of meeting it at a hard line. At night the
   // "sun" is the moon (pale disc, no halo warmth) and a procedural star field
   // fades in above the haze.
-  const skyMat = new THREE.ShaderMaterial({
+  const skyMat = displayMatch(new THREE.ShaderMaterial({
     side: THREE.BackSide, depthWrite: false, fog: false,
     uniforms: {
       horizon: { value: tod.skyHorizon.clone() }, zenith: { value: tod.skyZenith.clone() },
@@ -292,7 +293,7 @@ export function createEnvironment(scene, renderer) {
         c+=vec3(0.75,0.8,1.0)*flash*0.9;                              // lightning
         gl_FragColor=vec4(c,1.0);
       }`,
-  });
+  }));
   const sky = new THREE.Mesh(new THREE.SphereGeometry(9000, 48, 24), skyMat);
   sky.renderOrder = -1;
   scene.add(sky);
@@ -308,11 +309,21 @@ export function createEnvironment(scene, renderer) {
   const envGround = new THREE.Mesh(new THREE.CircleGeometry(49, 32), envGroundMat);
   envGround.rotation.x = -Math.PI / 2; envGround.position.y = -4;
   envScene.add(envGround);
-  let envRT = null, envDirty = true, envAt = -1;
+  let envRT = null, envDirty = true, envAt = -1, envMs = 0;
   function regenEnv(elapsed) {
     if (!pmrem) return;
     envGroundMat.color.copy(hemi.groundColor).multiplyScalar(0.55).lerp(scene.fog.color, 0.25);
-    const rt = pmrem.fromScene(envScene, 0.015, 0.1, 200);
+    // the sun itself is the directional light: keep the disc out of the
+    // reflections or every clear-coated panel facing it blooms to white
+    const sunI0 = skyMat.uniforms.sunI.value;
+    skyMat.uniforms.sunI.value = 0;
+    // 64 px cube: the sky is a smooth gradient and the paint is semi-rough;
+    // the default 256 costs ~16x more (PMREM filters with 256 GGX samples a
+    // texel), a visible stall on a software rasterizer at every palette change
+    const t0 = performance.now();
+    const rt = pmrem.fromScene(envScene, 0.015, 0.1, 200, { size: 64 });
+    envMs = performance.now() - t0;
+    skyMat.uniforms.sunI.value = sunI0;
     envRT?.dispose();
     envRT = rt;
     // NOT scene.environment: three applies that to Lambert/Phong too, which
@@ -370,7 +381,7 @@ export function createEnvironment(scene, renderer) {
     if (build) buildRows(depthValid ? DEPTH_ROWS : DEPTH_N); // first build is synchronous
   }
 
-  const oceanMat = new THREE.ShaderMaterial({
+  const oceanMat = displayMatch(new THREE.ShaderMaterial({
     fog: false, transparent: true, side: THREE.DoubleSide,
     uniforms: {
       time: { value: 0 }, sunDir: { value: tod.sunDir.clone() },
@@ -465,7 +476,7 @@ export function createEnvironment(scene, renderer) {
         c=mix(c,fogColor,fg);
         gl_FragColor=vec4(c,max(a,fg));
       }`,
-  });
+  }));
   // Radial grid in the xz plane: ring radii grow geometrically (~6 m spacing at
   // the centre, ~600 m at the 12 km rim), so a few thousand vertices cover it.
   function radialGrid(rings, segs, rMin, rMax) {
@@ -561,9 +572,11 @@ export function createEnvironment(scene, renderer) {
   let lastEnvKey = '';
   function applyPalette() {
     const k = wxSky.overcast;
-    const envKey = `${tod.label}|${k.toFixed(2)}|${wxSky.inCloud.toFixed(1)}`;
+    // in-cloud whiteout is fog, not sky: no env regen while crossing the deck
+    const envKey = `${tod.label}|${k.toFixed(1)}`;
     if (envKey !== lastEnvKey) { lastEnvKey = envKey; envDirty = true; }
     if (renderer) renderer.toneMappingExposure = tod.exposure * (1 - 0.08 * k);
+    DISPLAY.exposure.value = renderer ? renderer.toneMappingExposure : tod.exposure;
     storm(scene.fog.color, tod.fog, k, 0.32);
     scene.background.copy(scene.fog.color);
     storm(hemi.color, tod.hemiSky, k, 0.2); storm(hemi.groundColor, tod.hemiGround, k, 0.2);
@@ -598,6 +611,7 @@ export function createEnvironment(scene, renderer) {
   // The precipitation sky multiplies in, and inside the cloud deck the fog
   // closes to a whiteout.
   let wx = { visF: 1, cloudF: 1 };
+  const screenFog = new THREE.Color();
   function applyWeather() {
     const visF = wx.visF * wxSky.vis;
     let near = tod.fogNear * Math.min(1, visF), far = tod.fogFar * visF;
@@ -618,6 +632,12 @@ export function createEnvironment(scene, renderer) {
     cloudMat.uniforms.fogNear.value = near;
     cloudMat.uniforms.fogFar.value = far;
     clouds.visible = wx.cloudF > 0.06 && wxSky.overcast <= 0.3;
+    // Custom shaders fade toward the fog as it is DISPLAYED on built-in
+    // materials (display.js), so sky, sea and clouds meet the terrain haze.
+    displayOf(scene.fog.color, screenFog);
+    skyMat.uniforms.haze.value.copy(screenFog);
+    oceanMat.uniforms.fogColor.value.copy(screenFog);
+    cloudMat.uniforms.fogColor.value.copy(screenFog);
     if (rwyLights) { rwyLights.setMode(lightLevel()); rwyLights.setFog(far); }
   }
 
@@ -643,6 +663,10 @@ export function createEnvironment(scene, renderer) {
       applyPalette();
     },
     get skyState() { return { ...wxSky, cloudCol: undefined }; },
+    /** Milliseconds the last environment-map rebuild took (perf probe). */
+    get envMs() { return envMs; },
+    /** The fog colour as built-in materials display it (for custom shaders). */
+    get screenFog() { return screenFog; },
     // Swap the heightfield used for the blob shadow (called on map change).
     setGround(fn) { groundFn = fn; },
     // Called after a map's scenery is (re)built: rebuild runway lights and grab
