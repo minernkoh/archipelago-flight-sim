@@ -307,6 +307,8 @@ const world = {
   setAutoRes(on) { autoRes = on !== false; if (!autoRes) { resScale = 1; applyPixelRatio(); } },
   get resScale() { return resScale; },
   get detail() { return GROUND_DETAIL.value; },
+  // Tests/tools: force the full or lite shading path (overrides the auto drop).
+  forceDetail(k) { detailAuto = false; setDetail(k); },
   // v6 quality knob: HIGH = coarse terrain tier out to 9 km + real shadows.
   // LOW is the pre-v6 view for weaker GPUs.
   setQuality(q) {
@@ -317,6 +319,7 @@ const world = {
     env.setShadows(qualityHigh);
     renderer.shadowMap.enabled = qualityHigh;
     setDetail(qualityHigh && detailAuto ? 1 : 0);
+    env.setReflections(qualityHigh);
   },
   // POST FX setting: bloom + grade + sun flare. Still gated on HIGH quality and
   // on the session auto-disable in post.js.
@@ -567,6 +570,8 @@ function frame(now) {
     audio.update(view, vc, audioView);
   }
 
+  camera.updateMatrixWorld();
+  env.renderReflection(camera);          // planar water reflection (full detail only)
   if (postWanted && qualityHigh && !(post && post.disabled)) {
     if (!post) { post = createPost(renderer, scene, camera); if (postSunDir) post.setSun(postSunDir, postSunK); }
     post.render();

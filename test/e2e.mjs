@@ -20,7 +20,12 @@ const browser = await launch({
 const page = await browser.newPage();
 
 const errors = [];
-page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+page.on('console', (m) => {
+  if (m.type() === 'error') errors.push(m.text());
+  // GL errors arrive as warnings, not errors, and a failed draw is silent on
+  // screen; v11's reflection pass once broke every opaque draw this way.
+  else if (/GL_INVALID/.test(m.text())) errors.push(m.text());
+});
 page.on('pageerror', (e) => errors.push(String(e)));
 
 let failures = 0;
@@ -39,6 +44,18 @@ const shot = async (name) => {
   catch { console.log(`  (screenshot ${name} skipped — compositor stalled)`); }
 };
 const settle = (ms) => new Promise(r => setTimeout(r, ms));
+// Wait for SIM time, not wall time: headless frames clamp at 0.25 s, so at
+// ~3 fps wall time over-counts and "hold W for 0.7 s" or "brake for 10 s"
+// gave the aircraft half that. Capped at 4x wall so a stalled loop still ends.
+// `until` (optional page expression) ends the wait early once true.
+async function simSettle(ms, until = null) {
+  const t0 = await page.evaluate(() => window.__sim.simTime), w0 = Date.now();
+  while (Date.now() - w0 < ms * 4) {
+    await settle(100);
+    if ((await page.evaluate(() => window.__sim.simTime)) - t0 >= ms / 1000) return;
+    if (until && await page.evaluate(new Function(`return (${until});`))) return;
+  }
+}
 
 console.log('loading page…');
 await page.goto('http://localhost:8123/', { waitUntil: 'domcontentloaded' });
@@ -304,10 +321,12 @@ for (let i = 0; i < gates.length; i++) {
     ac.omega = { x: 0, y: 0, z: 0 };
     window.__sim.controls.state.throttle = 0.5;
   }, gates[i], i);
-  await settle(5000);
-  const st = await sim('({active: __sim.rings.active, crashed: __sim.ac.crashed})');
+  const leg0 = await sim('({ f: __sim.frames, t: __sim.simTime })');
+  await simSettle(5000, `__sim.rings.active >= ${i + 1} || __sim.ac.crashed`);
+  await settle(300);
+  const st = await sim('({active: __sim.rings.active, crashed: __sim.ac.crashed, f: __sim.frames, t: __sim.simTime, detail: __sim.world.detail, refl: __sim.env.reflecting, ap: __sim.autopilot.on, state: __sim.game.state, y: __sim.ac.pos.y})');
   if (st.crashed) { console.log(`  crashed during leg ${i + 1}`); break; }
-  if (st.active !== i + 1) console.log(`  gate ${i + 1} not yet registered (active=${st.active})`);
+  if (st.active !== i + 1) console.log(`  gate ${i + 1} not yet registered (active=${st.active}) frames=${st.f - leg0.f} sim=${(st.t - leg0.t).toFixed(1)}s detail=${st.detail} refl=${st.refl} ap=${st.ap} state=${st.state} dy=${(st.y - gates[i].y).toFixed(1)}`);
 }
 const coursed = await sim('({active: __sim.rings.active, done: __sim.rings.done})');
 check('all 12 gates registered', coursed.done, JSON.stringify(coursed));
@@ -367,15 +386,19 @@ await settle(1500);
 const instrOn = await page.evaluate(() => document.querySelector('#instructor').classList.contains('show'));
 check('instructor panel appears', instrOn);
 // taxi like a student, not a maniac: ~35% throttle, gentle rudder at taxi speed
-await hold('w'); await settle(700); await release('w');   // step 1: roll
-await settle(4000);
-for (let i = 0; i < 3; i++) {                              // step 2: rudder wander
-  await hold('a'); await settle(900); await release('a');
-  await hold('d'); await settle(900); await release('d');
+await hold('w'); await simSettle(2000, '__sim.controls.state.throttle >= 0.33'); await release('w');   // step 1: roll at ~35%
+await page.evaluate(() => { window.__sim.controls.state.throttle = 0.35; });   // the key ramp overshoots between polls
+await simSettle(4000);
+// step 2: rudder wander, until the instructor moves on (a student who keeps
+// swinging full rudder at 20 kt after being told to stop ground-loops it)
+const onBrakeStep = '/hold B/.test(document.querySelector("#instructor")?.textContent || "")';
+for (let i = 0; i < 3 && !(await sim(onBrakeStep)); i++) {
+  await hold('a'); await simSettle(900); await release('a');
+  await hold('d'); await simSettle(900); await release('d');
 }
 await page.evaluate(() => { window.__sim.controls.state.throttle = 0; });
 await hold('b');                                            // step 3: brake to a stop
-await settle(10000);
+await simSettle(10000, '/controls-taxi/.test(localStorage.getItem("archipelago.training") || "")');
 await release('b');
 const trainProg = await page.evaluate(() => localStorage.getItem('archipelago.training'));
 check('lesson 1 completes and persists', !!trainProg && /controls-taxi/.test(trainProg), trainProg || 'no progress saved');
@@ -848,6 +871,23 @@ check('ESC closes the replay back to the state it was opened from', rpBack.state
   `${rpFrom} -> ${JSON.stringify(rpBack)}`);
 await page.evaluate(() => window.__sim.game.toMenu());
 await page.evaluate(() => window.__sim.game.select({ weather: 'calm' }));
+await settle(300);
+
+// --- v11: full-detail path (ground shader, water reflection) renders cleanly ---
+await page.evaluate(() => window.__sim.game.select({ mode: 'free', map: 'archipelago', aircraft: 'c172', time: 'day', weather: 'calm' }));
+await click('#btn-start');
+await page.waitForFunction('window.__sim.game.state === "flying"', { timeout: 120000, polling: 500 });
+await page.evaluate(() => {
+  window.__sim.world.forceDetail(1);
+  const ac = window.__sim.ac;
+  ac.pos.x = -1500; ac.pos.z = 6000; ac.pos.y = 90; ac.vel.x = 50; ac.vel.y = 0; ac.vel.z = 0;
+  ac.q = { x: 0, y: 0, z: 0, w: 1 }; ac.omega = { x: 0, y: 0, z: 0 }; ac.onGround = false;
+});
+await settle(4000);
+check('full detail: the water reflection pass runs', await sim('__sim.env.reflecting'));
+await shot('13-reflection');
+await page.evaluate(() => window.__sim.world.forceDetail(0));
+await page.evaluate(() => window.__sim.game.toMenu());
 await settle(300);
 
 check('no console errors', errors.length === 0, errors.slice(0, 4).join(' | '));

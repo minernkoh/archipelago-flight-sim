@@ -121,10 +121,14 @@ export function createTrainingSystem(deps) {
         // passable by sitting still for 20 s, and impossible to complete once
         // you did take off, because the reference stayed at field elevation
         // and holdFor resets the moment the predicate goes false.
+        // The reference also re-anchors whenever the aircraft leaves the
+        // band. This step begins the instant the climb passes 1,500 ft, so a
+        // reference latched once sat below wherever the student levelled off
+        // and anyone who overshot it by 100 ft could never pass.
         done: holdFor(() => {
           if (ac.onGround) return false;
-          if (refAlt === null) refAlt = ac.pos.y;
-          return Math.abs(ac.pos.y - refAlt) * FT < 100 && Math.abs(attitude(ac).roll) < 0.09;
+          if (refAlt === null || Math.abs(ac.pos.y - refAlt) * FT >= 100) { refAlt = ac.pos.y; return false; }
+          return Math.abs(attitude(ac).roll) < 0.09;
         }, 20),
         hint: 'Trim for level flight, then leave the ailerons alone — chase the altimeter with tiny pitch inputs.',
         slip: true,

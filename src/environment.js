@@ -389,6 +389,7 @@ export function createEnvironment(scene, renderer) {
       skyCol: { value: tod.skyHorizon.clone() }, sunColor: { value: tod.sunColor.clone() },
       fogColor: { value: tod.fog.clone() }, fogNear: { value: tod.fogNear }, fogFar: { value: tod.fogFar },
       glint: { value: 1.0 }, detail: { value: 1.0 },
+      reflTex: { value: null }, reflMatrix: { value: new THREE.Matrix4() }, reflOn: { value: 0 },
       depthTex: { value: depthTex }, depthRect: { value: new THREE.Vector3(0, 0, DEPTH_SPAN) }, depthOn: { value: 0 },
     },
     vertexShader: `varying vec3 vWorld; varying float vSwell;
@@ -420,6 +421,7 @@ export function createEnvironment(scene, renderer) {
         gl_Position=projectionMatrix*viewMatrix*w; }`,
     fragmentShader: `varying vec3 vWorld; varying float vSwell;
       uniform float time,fogNear,fogFar,glint,depthOn,detail; uniform vec3 sunDir,deep,shallow,skyCol,sunColor,fogColor;
+      uniform sampler2D reflTex; uniform mat4 reflMatrix; uniform float reflOn;
       uniform sampler2D depthTex; uniform vec3 depthRect;
       float hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
       float vnoise(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.0-2.0*f);
@@ -448,7 +450,19 @@ export function createEnvironment(scene, renderer) {
         vec3 view=normalize(cameraPosition-vWorld);
         float fres=pow(1.0-max(dot(view,n),0.0),3.0);
         vec3 c=mix(deep,shallow,0.25);
-        c=mix(c,skyCol,fres*0.75);                                      // sky reflection
+        vec3 reflC=skyCol;
+        #ifdef OCEAN_REFL
+        if(reflOn>0.5){
+          // planar reflection of the world above the waterline, perturbed by
+          // the swell/ripple normal (a few metres of offset) so it shimmers
+          vec4 rc=reflMatrix*vec4(vWorld.x+n.x*6.0,0.0,vWorld.z+n.z*6.0,1.0);
+          vec2 ruv=rc.xy/rc.w;
+          vec3 r=dmToScreen(texture2D(reflTex,ruv).rgb);
+          float edge=smoothstep(0.0,0.04,min(min(ruv.x,ruv.y),min(1.0-ruv.x,1.0-ruv.y)));
+          reflC=mix(skyCol,r,edge*(1.0-smoothstep(3500.0,6000.0,distance(cameraPosition,vWorld))));
+        }
+        #endif
+        c=mix(c,reflC,fres*0.82+0.08*reflOn);                          // sky / world reflection
         vec3 r=reflect(-sunDir,n);
         float sp=max(dot(r,view),0.0);
         c+=sunColor*(pow(sp,600.0)*3.0+pow(sp,60.0)*0.25+pow(sp,8.0)*0.06)*glint;   // sun glitter + sheen
@@ -508,6 +522,74 @@ export function createEnvironment(scene, renderer) {
   ocean.frustumCulled = false;
   ocean.position.y = 0;
   scene.add(ocean);
+
+  // --- Planar water reflection (v11) ---
+  // A mirrored camera renders the world above the waterline into a low-res
+  // target; an oblique near plane (Lengyel, as three's Reflector does) clips
+  // everything below y = 0, so the seabed never paints over the reflection.
+  // Full detail only: a whole extra scene pass is what a slow GPU can't spare.
+  let reflWanted = true;
+  const refl = { on: false, rt: null, cam: new THREE.PerspectiveCamera(), w: 0, h: 0 };
+  const _rp = new THREE.Vector3(), _rn = new THREE.Vector3(0, 1, 0), _rv = new THREE.Vector3(),
+    _rt = new THREE.Vector3(), _rl = new THREE.Vector3(), _rm = new THREE.Matrix4(),
+    _rplane = new THREE.Plane(), _rclip = new THREE.Vector4(), _rq = new THREE.Vector4();
+  const RBIAS = new THREE.Matrix4().set(0.5, 0, 0, 0.5, 0, 0.5, 0, 0.5, 0, 0, 0.5, 0.5, 0, 0, 0, 1);
+  // The reflection code is compiled in only while reflections run (a define):
+  // a software rasterizer pays for an untaken branch over the whole ocean.
+  function setReflDefine(on) {
+    const has = !!oceanMat.defines?.OCEAN_REFL;
+    if (has === on) return;
+    oceanMat.defines = oceanMat.defines || {};
+    if (on) oceanMat.defines.OCEAN_REFL = 1; else delete oceanMat.defines.OCEAN_REFL;
+    oceanMat.needsUpdate = true;
+  }
+  function renderReflection(camera) {
+    setReflDefine(refl.on);
+    if (!refl.on || !renderer || !ocean.visible) { oceanMat.uniforms.reflOn.value = 0; return; }
+    const cp = camera.getWorldPosition(_rv.set(0, 0, 0)).clone();
+    if (cp.y < 0.5 || cp.y > 4500) { oceanMat.uniforms.reflOn.value = 0; return; }
+    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    const w = Math.max(64, Math.round(size.x / 3)), h = Math.max(64, Math.round(size.y / 3));
+    if (!refl.rt || refl.w !== w || refl.h !== h) {
+      refl.rt?.dispose();
+      refl.rt = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType });
+      refl.w = w; refl.h = h;
+      oceanMat.uniforms.reflTex.value = refl.rt.texture;
+    }
+    const vc = refl.cam;
+    _rp.set(cp.x, 0, cp.z);                                       // plane point under the camera
+    _rm.extractRotation(camera.matrixWorld);
+    _rl.set(0, 0, -1).applyMatrix4(_rm).add(cp);
+    vc.position.set(cp.x, -cp.y, cp.z);
+    _rt.copy(_rl); _rt.y = -_rt.y;
+    vc.up.set(0, 1, 0).applyMatrix4(_rm).reflect(_rn);
+    vc.lookAt(_rt);
+    vc.near = camera.near; vc.far = camera.far;
+    vc.fov = camera.fov; vc.aspect = camera.aspect;
+    vc.updateMatrixWorld();
+    vc.updateProjectionMatrix();
+    oceanMat.uniforms.reflMatrix.value.copy(RBIAS).multiply(vc.projectionMatrix).multiply(vc.matrixWorldInverse);
+    // oblique near plane = the water plane
+    _rplane.setFromNormalAndCoplanarPoint(_rn, _rp).applyMatrix4(vc.matrixWorldInverse);
+    _rclip.set(_rplane.normal.x, _rplane.normal.y, _rplane.normal.z, _rplane.constant);
+    const pe = vc.projectionMatrix.elements;
+    _rq.set((Math.sign(_rclip.x) + pe[8]) / pe[0], (Math.sign(_rclip.y) + pe[9]) / pe[5], -1, (1 + pe[10]) / pe[14]);
+    _rclip.multiplyScalar(2 / _rclip.dot(_rq));
+    pe[2] = _rclip.x; pe[6] = _rclip.y; pe[10] = _rclip.z + 1 - 0.003; pe[14] = _rclip.w;
+    vc.projectionMatrixInverse.copy(vc.projectionMatrix).invert();
+    // NB: do not switch shadowMap.autoUpdate off for this pass to "reuse" the
+    // shadow map. Doing so left shadow-receiving draws bound to a texture of
+    // the wrong type (GL_INVALID_OPERATION: sampler mismatch) and every
+    // opaque mesh vanished from the main view for the rest of the session.
+    const prevRT = renderer.getRenderTarget();
+    ocean.visible = false;
+    renderer.setRenderTarget(refl.rt);
+    renderer.clear();
+    renderer.render(scene, vc);
+    renderer.setRenderTarget(prevRT);
+    ocean.visible = true;
+    oceanMat.uniforms.reflOn.value = 1;
+  }
 
   // --- Clouds: low-poly cumulus (see buildClouds) ---
   const { clouds, cloudMat, updateClouds, setCover } = buildClouds(scene, tod);
@@ -700,8 +782,12 @@ export function createEnvironment(scene, renderer) {
       });
       envUsers.set(key, set);
     },
-    /** Detail level for the ocean (1 full, 0 lite: no ripple layers). */
-    setDetail(k) { oceanMat.uniforms.detail.value = k; },
+    /** Detail level for the ocean (1 full, 0 lite: no ripple layers, no reflection). */
+    setDetail(k) { oceanMat.uniforms.detail.value = k; refl.on = k > 0.5 && reflWanted; if (!refl.on) oceanMat.uniforms.reflOn.value = 0; },
+    /** Planar water reflection on/off (still needs full detail). */
+    setReflections(on) { reflWanted = !!on; refl.on = reflWanted && oceanMat.uniforms.detail.value > 0.5; if (!refl.on) oceanMat.uniforms.reflOn.value = 0; },
+    get reflecting() { return oceanMat.uniforms.reflOn.value > 0.5; },
+    renderReflection,
     /** White PAPI units seen from the camera (null before a map loads). */
     papiWhites() { return rwyLights ? rwyLights.papiWhites() : null; },
     setTimeOfDay,

@@ -90,7 +90,11 @@ async function begin(id) {
 async function untilStep(prev, ms) {
   if (prev === null) return null;   // a previous step already timed out; do not cascade
   const t0 = Date.now();
-  while (Date.now() - t0 < ms) { const t = await instr(); if (t !== prev) return t; await wait(400); }
+  let n = 0;
+  while (Date.now() - t0 < ms) {
+    const t = await instr(); if (t !== prev) return t; await wait(400);
+    if (process.env.DIAG && ++n % 10 === 0) console.log('   ', await sim(`JSON.stringify({t:+__sim.simTime?.toFixed?.(1), alt:Math.round(__sim.ac.pos.y*3.28), q:[__sim.ac.q.x,__sim.ac.q.y,__sim.ac.q.z,__sim.ac.q.w].map(v=>+v.toFixed(3)), om:+__sim.ac.omega.x.toFixed(3), refl:__sim.env.reflecting, kt:Math.round(Math.hypot(__sim.ac.vel.x,__sim.ac.vel.y,__sim.ac.vel.z)*1.944), ap:__sim.autopilot.on})`));
+  }
   return null;
 }
 const rwy = await sim('({x:__sim.map.runway.spawn.x,z:__sim.map.runway.spawn.z,y:__sim.map.runway.y,hdg:__sim.map.runway.headingRad})');

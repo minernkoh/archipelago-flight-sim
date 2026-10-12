@@ -28,6 +28,16 @@ vec3 dmInvFit(vec3 y){
   vec3 A = 1.0 - y * c, B = a - y * d, C = -b - y * e;
   return (-B + sqrt(max(B * B - 4.0 * A * C, 0.0))) / (2.0 * A);
 }
+// forward: scene-linear -> on-screen (three's ACESFilmic + sRGB), for
+// sampling render targets (e.g. the water reflection) inside a custom shader
+vec3 dmToScreen(vec3 x){
+  const mat3 inM = mat3(0.59719, 0.07600, 0.02840, 0.35458, 0.90834, 0.13383, 0.04823, 0.01566, 0.83777);
+  const mat3 outM = mat3(1.60475, -0.10208, -0.00327, -0.53108, 1.10813, -0.07276, -0.07367, -0.00605, 1.07602);
+  vec3 v = inM * (x * uDispExposure / 0.6);
+  v = (v * (v + 0.0245786) - 0.000090537) / (v * (0.983729 * v + 0.4329510) + 0.238081);
+  vec3 l = clamp(outM * v, 0.0, 1.0);
+  return mix(l * 12.92, 1.055 * pow(l, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), l));
+}
 vec3 dmToScene(vec3 screen){
   // HDR headroom: anything brighter than white keeps its excess as a multiplier
   float peak = max(max(screen.r, screen.g), screen.b);
