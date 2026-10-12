@@ -8,6 +8,7 @@ import { makeNoise, woodland } from './noise.js';
 import { PAL, facetJitter } from './palette.js';
 import { runwayDressing, reciprocal } from './runwayPaint.js';
 import { taxiwayDressing } from './airfieldKit.js';
+import { buildAutogen } from './autogen.js';
 import * as taxinet from '../taxinet.js';
 
 const SEED = 20260709;
@@ -171,6 +172,27 @@ function vertexColor(h, slope, x, z, out) {
   return facetJitter(x, z, out);
 }
 
+// ---------- Solid obstacles (the chalets): spatial hash of boxes ----------
+const OCELL = 64;
+let obstacles = new Map();
+const okey = (cx, cz) => cx * 100000 + cz;
+function reg(x0, x1, z0, z1, top) {
+  const b = { x0, x1, z0, z1, top };
+  for (let cx = Math.floor(x0 / OCELL); cx <= Math.floor(x1 / OCELL); cx++)
+    for (let cz = Math.floor(z0 / OCELL); cz <= Math.floor(z1 / OCELL); cz++) {
+      const k = okey(cx, cz); let arr = obstacles.get(k);
+      if (!arr) obstacles.set(k, arr = []);
+      arr.push(b);
+    }
+}
+export function obstacleTop(x, z) {
+  const arr = obstacles.get(okey(Math.floor(x / OCELL), Math.floor(z / OCELL)));
+  if (!arr) return -Infinity;
+  let top = -Infinity;
+  for (const b of arr) if (x >= b.x0 && x <= b.x1 && z >= b.z0 && z <= b.z1 && b.top > top) top = b.top;
+  return top;
+}
+
 // ---------- Airfield dressing: runway slab, markings, hut, windsock ----------
 export function createAirfield(scene) {
   const g = new THREE.Group();
@@ -200,6 +222,39 @@ export function createAirfield(scene) {
   g.add(pole, sock);
   g.userData.windsock = sock; // main.js orients it from the live wind field
 
+  // Villages (autogen.js): gabled chalets, farmhouses and barns in clusters
+  // on the flat valley floor, clear of the runway, its approach, the race
+  // slalom and the dense forest; solid, like every building.
+  obstacles = new Map();
+  let seed = SEED ^ 0x51ed;
+  const rng = () => ((seed = Math.imul(seed ^ (seed >>> 15), 0x2c1b3c6d) ^ (seed + 0x6d2b79f5)) >>> 0) / 4294967296;
+  const VN = makeNoise(SEED ^ 0x3a9);
+  const slopeAt = (x, z) => Math.hypot(getTerrainHeight(x + 10, z) - getTerrainHeight(x - 10, z), getTerrainHeight(x, z + 10) - getTerrainHeight(x, z - 10)) / 20;
+  const raceD = (x, z) => {
+    let d = Infinity;
+    for (let i = 0; i < raceCourse.length; i++) {
+      const [ax, az] = raceCourse[i], [bx, bz] = raceCourse[(i + 1) % raceCourse.length];   // gates are [x, z, y]
+      const dx = bx - ax, dz = bz - az, t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz)));
+      d = Math.min(d, Math.hypot(ax + dx * t - x, az + dz * t - z));
+    }
+    return d;
+  };
+  const wood = [0x6b4a32, 0x7a5a3e, 0x5e4330, 0xe2ddd2, 0xd9d2c4].map(mat);
+  const roofs = [0x3d3d40, 0x4a3a32, 0x5a3a2c, 0x45464a].map(mat);
+  const village = buildAutogen({
+    bounds: [-2600, 7000, -1400, 1400], cell: 90, ground: getTerrainHeight, rng,
+    density: (x, z) => {
+      const h = getTerrainHeight(x, z), sl = slopeAt(x, z);
+      if (sl > 0.22 || h > RUNWAY.y + 320) return 0;
+      const cluster = smoothstep(0.47, 0.6, VN.fbm(x * 0.0016, z * 0.0016, 3));   // villages, not a carpet
+      return cluster * (1 - forestDensity(x, z, h, sl) * 1.5);
+    },
+    excluded: (x, z, r) => runwayDist(x, z) < 160 + r || (x > -2000 && x < RUNWAY.x1 + 3800 && Math.abs(z) < 260 + r) || raceD(x, z) < 220 + r,
+    reg, mats: { chalet: { walls: wood, roofs } },
+  });
+  g.add(village);
+  g.userData.autogen = village.userData.autogen;
+
   scene.add(g);
   return g;
 }
@@ -228,5 +283,5 @@ export const alpineMap = {
   taxiLayout: () => TAXI,
   createScenery: createAirfield,
   raceCourse,
-  obstacleTop() { return -Infinity; }, // no solid obstacles, mountains are terrain
+  obstacleTop, // the village buildings (mountains are terrain)
 };

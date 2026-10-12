@@ -30,8 +30,17 @@ export function buildAutogen(o) {
   const pick = (arr) => arr[(o.rng() * arr.length) | 0];
   let count = 0;
 
+  // one triangle, its normal from the (counter-clockwise from outside) winding
+  function tri(m, p0, p1, p2) {
+    const b = bucket(m);
+    const ux = p1[0] - p0[0], uy = p1[1] - p0[1], uz = p1[2] - p0[2], vx = p2[0] - p0[0], vy = p2[1] - p0[1], vz = p2[2] - p0[2];
+    let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const l = Math.hypot(nx, ny, nz) || 1; nx /= l; ny /= l; nz /= l;
+    for (const p of [p0, p1, p2]) { b.pos.push(p[0], p[1], p[2]); b.nor.push(nx, ny, nz); }
+  }
   // one box: centre (x, z), base y, size w x d x h, heading a; walls + roof
-  function box(m, x, y, z, w, d, h, a) {
+  // (flat, or with `roof` a gabled one: ridge along the long axis, eaves overhanging)
+  function box(m, x, y, z, w, d, h, a, roof = null) {
     const b = bucket(m), c = Math.cos(a), s = Math.sin(a);
     const P = (lx, ly, lz) => [x + lx * c - lz * s, y + ly, z + lx * s + lz * c];
     const hw = w / 2, hd = d / 2;
@@ -44,10 +53,23 @@ export function buildAutogen(o) {
     const b0 = P(-hw, h, -hd), b1 = P(hw, h, -hd), b2 = P(hw, h, hd), b3 = P(-hw, h, hd);
     quad(a0, a1, b1, b0, N(0, -1)); quad(a1, a2, b2, b1, N(1, 0));
     quad(a2, a3, b3, b2, N(0, 1)); quad(a3, a0, b0, b3, N(-1, 0));
-    quad(b0, b1, b2, b3, [0, 1, 0]);
+    let top = h;
+    if (!roof) quad(b0, b1, b2, b3, [0, 1, 0]);
+    else {
+      const rh = d * 0.42, ov = 0.7;                           // pitch ~40 deg, 0.7 m overhang
+      const eL = P(-hw - ov, h - 0.3, -hd - ov), eR = P(hw + ov, h - 0.3, -hd - ov);
+      const fL = P(-hw - ov, h - 0.3, hd + ov), fR = P(hw + ov, h - 0.3, hd + ov);
+      const rL = P(-hw - ov, h + rh, 0), rR = P(hw + ov, h + rh, 0);
+      tri(roof, eL, rL, rR); tri(roof, eL, rR, eR);            // -z slope
+      tri(roof, fR, rR, rL); tri(roof, fR, rL, fL);            // +z slope
+      // gable ends (the walls carried up to the ridge)
+      tri(m, P(hw, h, -hd), P(hw, h + rh, 0), P(hw, h, hd));
+      tri(m, P(-hw, h, hd), P(-hw, h + rh, 0), P(-hw, h, -hd));
+      top = h + rh;
+    }
     // obstacle: the box's axis-aligned bounds
     const ex = Math.abs(hw * c) + Math.abs(hd * s), ez = Math.abs(hw * s) + Math.abs(hd * c);
-    o.reg(x - ex, x + ex, z - ez, z + ez, y + h);
+    o.reg(x - ex, x + ex, z - ez, z + ez, y + top);
     count++;
   }
 
@@ -60,6 +82,18 @@ export function buildAutogen(o) {
       // blocks in a neighbourhood share a street grid: heading from a coarse cell
       const a = Math.floor((Math.sin(Math.floor(gx / 900) * 12.9898 + Math.floor(gz / 900) * 78.233) * 43758.5453 % 1 + 1) % 1 * 4) * (Math.PI / 8)
         + (o.rng() - 0.5) * 0.06;
+      if (o.mats.chalet) {
+        // alpine: a few gabled chalets / farmhouses per cell
+        const n = 1 + (o.rng() * (1 + dens * 3) | 0);
+        for (let k = 0; k < n; k++) {
+          const x = cx + (o.rng() - 0.5) * C * 0.8, z = cz + (o.rng() - 0.5) * C * 0.8;
+          if (o.excluded(x, z, 14)) continue;
+          const big = o.rng() < 0.25;                           // a barn or a guesthouse now and then
+          box(pick(o.mats.chalet.walls), x, o.ground(x, z) - 0.6, z, (big ? 20 : 11) + o.rng() * 5, (big ? 13 : 8) + o.rng() * 3,
+            (big ? 8 : 5.5) + o.rng() * 2.5, a + (o.rng() - 0.5) * 0.3, pick(o.mats.chalet.roofs));
+        }
+        continue;
+      }
       if (dens > 0.6) {
         // dense: one or two housing-board slabs, sometimes a condo tower
         if (o.rng() < 0.22) {

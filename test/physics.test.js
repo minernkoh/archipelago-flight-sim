@@ -2002,6 +2002,24 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
     `${g.userData.autogen} buildings in ${ms} ms, ${blocked} race samples blocked, ${approach} approach samples blocked`);
 }
 
+// ---- v12: alpine villages (autogen chalets with gabled roofs) ----
+{
+  const al = await import('../src/maps/alpine.js');
+  const THREE = await import('three');
+  const g = al.createAirfield(new THREE.Scene());
+  const course = al.alpineMap.raceCourse;
+  let blocked = 0;
+  for (let i = 0; i < course.length; i++) {
+    const [ax, az, ay] = course[i], [bx, bz, by] = course[(i + 1) % course.length];
+    for (let k = 0; k <= 40; k++) { const t = k / 40; if (al.obstacleTop(ax + (bx - ax) * t, az + (bz - az) * t) > ay + (by - ay) * t) blocked++; }
+  }
+  let rwy = 0;
+  for (let x = -2000; x <= al.RUNWAY.x1 + 3800; x += 25) for (const z of [-200, 0, 200]) if (al.obstacleTop(x, z) > -Infinity) rwy++;
+  check('alpine villages: chalets in the valley, solid, clear of the runway, its approach and the race slalom',
+    g.userData.autogen > 60 && blocked === 0 && rwy === 0 && al.alpineMap.obstacleTop === al.obstacleTop,
+    `${g.userData.autogen} buildings, ${blocked} race samples blocked, ${rwy} runway/approach samples blocked`);
+}
+
 // ---- v12: every cockpit panel draws without throwing (stub 2D context) ----
 // The panels are canvas code that only runs in a browser; a stub context that
 // accepts any call lets Node execute every line of them, so a reference to an
