@@ -122,7 +122,7 @@ export function clubPlaneGeometry() {
     const c = new THREE.Color(hex), n = g.attributes.position.count, a = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) { a[i * 3] = c.r; a[i * 3 + 1] = c.g; a[i * 3 + 2] = c.b; }
     g.setAttribute('color', new THREE.BufferAttribute(a, 3));
-    g.deleteAttribute('uv'); g.deleteAttribute('normal');
+    g.deleteAttribute('uv');
     return g;
   };
   const gear = [];
@@ -279,7 +279,7 @@ export function createTraffic(scene, map, opts = {}) {
   }
 
   const planeGeo = hasRunway ? clubPlaneGeometry() : null;
-  const planeMat = flat({ side: THREE.DoubleSide });
+  const planeMat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.45, metalness: 0.05 });
   const planeMeshes = [];
   if (hasRunway) {
     for (let i = 0; i < 2; i++) {

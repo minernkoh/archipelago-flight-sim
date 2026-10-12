@@ -1,8 +1,10 @@
 // Model kit for the aircraft meshes: lofted fuselages and airfoil-section
-// lifting surfaces, built as non-indexed geometry with ONE colour per face
-// (vertex colours), the same crisp faceted look as the terrain. The livery is
-// painted through a callback evaluated at each face's centroid, so stripes,
-// windows and panels fall exactly on facet edges and cost no textures.
+// lifting surfaces. Geometry is non-indexed with one colour per face (vertex
+// colours): the livery is painted through a callback evaluated at each face's
+// centroid, so stripes, windows and panels fall on face rows and cost no
+// textures. v10: profiles are refined with a smooth curve and normals are
+// smoothed across faces (keeping creases sharper than CREASE), so the skin
+// renders as continuous metal while the paint keeps its crisp edges.
 //
 // Model frame: +x forward, +y up, +z right (the physics body frame).
 //
@@ -31,10 +33,52 @@ class Tris {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(this.p, 3));
     g.setAttribute('color', new THREE.Float32BufferAttribute(this.c, 3));
-    g.computeVertexNormals();
+    smoothNormals(g);
     g.computeBoundingSphere();
     return g;
   }
+}
+
+const CREASE = Math.cos(48 * Math.PI / 180);
+/**
+ * Area-weighted smooth normals for a non-indexed geometry: each corner takes
+ * the normals of the faces that share its position AND bend less than CREASE
+ * from its own face, so trailing edges, wing tips and caps stay sharp.
+ */
+export function smoothNormals(g, crease = CREASE) {
+  const p = g.attributes.position.array, n = p.length / 9;
+  const fn = new Float32Array(n * 3);               // area-weighted face normals
+  for (let f = 0; f < n; f++) {
+    const o = f * 9;
+    const ux = p[o + 3] - p[o], uy = p[o + 4] - p[o + 1], uz = p[o + 5] - p[o + 2];
+    const vx = p[o + 6] - p[o], vy = p[o + 7] - p[o + 1], vz = p[o + 8] - p[o + 2];
+    fn[f * 3] = uy * vz - uz * vy; fn[f * 3 + 1] = uz * vx - ux * vz; fn[f * 3 + 2] = ux * vy - uy * vx;
+  }
+  const key = (i) => `${Math.round(p[i] * 2000)},${Math.round(p[i + 1] * 2000)},${Math.round(p[i + 2] * 2000)}`;
+  const shared = new Map();
+  for (let v = 0; v < n * 3; v++) {
+    const k = key(v * 3);
+    let list = shared.get(k);
+    if (!list) shared.set(k, list = []);
+    list.push(Math.floor(v / 3));
+  }
+  const out = new Float32Array(n * 9);
+  for (let v = 0; v < n * 3; v++) {
+    const f = Math.floor(v / 3);
+    const ax = fn[f * 3], ay = fn[f * 3 + 1], az = fn[f * 3 + 2];
+    const al = Math.hypot(ax, ay, az) || 1;
+    let sx = 0, sy = 0, sz = 0;
+    for (const g2 of shared.get(key(v * 3))) {
+      const bx = fn[g2 * 3], by = fn[g2 * 3 + 1], bz = fn[g2 * 3 + 2];
+      const bl = Math.hypot(bx, by, bz) || 1;
+      // either orientation: lofts and mirrored halves wind both ways
+      const d = (ax * bx + ay * by + az * bz) / (al * bl);
+      if (Math.abs(d) >= crease) { const sg = d < 0 ? -1 : 1; sx += bx * sg; sy += by * sg; sz += bz * sg; }
+    }
+    const l = Math.hypot(sx, sy, sz) || 1;
+    out[v * 3] = sx / l; out[v * 3 + 1] = sy / l; out[v * 3 + 2] = sz / l;
+  }
+  g.setAttribute('normal', new THREE.BufferAttribute(out, 3));
 }
 
 const centroid = (...pts) => {
@@ -66,6 +110,31 @@ export function roundProfile(n = 12) {
   return out;
 }
 
+// Smooth a half profile with Catmull-Rom, `k` sub-segments per original
+// segment. rowOf maps each refined segment to its original row, so livery
+// callbacks keep working on the coarse rows they were written against.
+function refineProfile(pts, k) {
+  if (k <= 1) return { pts, rowOf: pts.map((_, i) => i) };
+  const out = [], rowOf = [];
+  const P = (i) => {
+    if (i < 0) return [-pts[1][0], pts[1][1]];               // mirror across the centreline
+    if (i >= pts.length) return [-pts[pts.length - 2][0], pts[pts.length - 2][1]];
+    return pts[i];
+  };
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = P(i - 1), p1 = P(i), p2 = P(i + 1), p3 = P(i + 2);
+    for (let s = 0; s < k; s++) {
+      const t = s / k, t2 = t * t, t3 = t2 * t;
+      const cr = (a, b, c, d) => 0.5 * (2 * b + (-a + c) * t + (2 * a - 5 * b + 4 * c - d) * t2 + (-a + 3 * b - 3 * c + d) * t3);
+      out.push([Math.max(0, cr(p0[0], p1[0], p2[0], p3[0])), cr(p0[1], p1[1], p2[1], p3[1])]);
+      rowOf.push(i);
+    }
+  }
+  out.push(pts[pts.length - 1]); rowOf.push(pts.length - 2);
+  out[0] = [0, pts[0][1]];
+  return { pts: out, rowOf };
+}
+
 // --------------------------------------------------------------- lofts --
 
 // Linear interpolation of lofting sections so long constant parts can be
@@ -91,8 +160,11 @@ function subdivide(sections, maxDx) {
  * are capped. paint({x,y,z, row, k, side}) -> hex, where row is the profile
  * segment index from the top centre (0) downwards, k the section index.
  */
-export function loft(sections, { profile = PROFILE.cabin, paint, maxDx = 0 } = {}) {
+export function loft(sections, { profile = PROFILE.cabin, paint, maxDx = 0, refine = 3 } = {}) {
   const secs = subdivide(sections, maxDx);
+  const prof = refineProfile(profile, refine);
+  const rowOf = prof.rowOf;
+  profile = prof.pts;
   const half = profile.length - 1;
   // full ring: right side top->bottom, then left side bottom->top (no dup ends)
   const ringIdx = [];
@@ -108,7 +180,7 @@ export function loft(sections, { profile = PROFILE.cabin, paint, maxDx = 0 } = {
     const r0 = rings[k], r1 = rings[k + 1];
     for (let j = 0; j < N; j++) {
       const j1 = (j + 1) % N;
-      const row = Math.min(ringIdx[j][0], ringIdx[j1][0]);
+      const row = rowOf[Math.min(ringIdx[j][0], ringIdx[j1][0])];
       const c = centroid(r0[j], r0[j1], r1[j1], r1[j]);
       const side = c[2] >= (secs[k].z || 0) ? 1 : -1;
       const hex = paint ? paint({ x: c[0], y: c[1], z: c[2], row, k, side }) : 0xcccccc;
@@ -287,18 +359,20 @@ export function wingHalf(stations, { hingeC = 0.74, surfaces = [], camber = 0, t
 export function mergeGeos(geos) {
   let n = 0;
   for (const g of geos) n += g.attributes.position.count;
-  const pos = new Float32Array(n * 3), col = new Float32Array(n * 3);
+  const pos = new Float32Array(n * 3), col = new Float32Array(n * 3), nor = new Float32Array(n * 3);
   let o = 0;
   for (const g of geos) {
+    if (!g.attributes.normal) g.computeVertexNormals();
     pos.set(g.attributes.position.array, o);
     col.set(g.attributes.color.array, o);
+    nor.set(g.attributes.normal.array, o);
     o += g.attributes.position.array.length;
     g.dispose();
   }
   const out = new THREE.BufferGeometry();
   out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   out.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  out.computeVertexNormals();
+  out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));   // keeps each part's smooth normals
   out.computeBoundingSphere();
   return out;
 }

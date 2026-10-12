@@ -175,7 +175,7 @@ export function createAirfield(scene) {
   strip.position.set(RUNWAY.x0, RUNWAY.y + 0.06, 0);
   g.add(strip);
 
-  const mat = (c) => new THREE.MeshLambertMaterial({ color: c, flatShading: true });
+  const mat = (c) => new THREE.MeshLambertMaterial({ color: c });
 
   // Small alpine hut/hangar
   const hut = new THREE.Group();

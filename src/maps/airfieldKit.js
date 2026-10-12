@@ -8,7 +8,7 @@
 
 import * as THREE from 'three';
 
-const lam = (color, extra = {}) => new THREE.MeshLambertMaterial({ color, flatShading: true, ...extra });
+const lam = (color, extra = {}) => new THREE.MeshLambertMaterial({ color, ...extra });
 const decal = (color, units = -8) => new THREE.MeshLambertMaterial({
   color, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: units,
 });
@@ -127,7 +127,7 @@ export function hangar({ w = 30, d = 22, h = 7, wall = 0xa3abb3, roof = 0x6e7780
 /** Control tower: tapered shaft, glazed and slanted cab, roof, antenna, beacon. */
 export function tower({ h = 16 } = {}) {
   const g = new THREE.Group();
-  const shaftM = lam(0xc4c8cd), glassM = new THREE.MeshPhongMaterial({ color: 0x24394a, specular: 0x9fb8cc, shininess: 80, flatShading: true });
+  const shaftM = lam(0xc4c8cd), glassM = new THREE.MeshPhongMaterial({ color: 0x24394a, specular: 0x9fb8cc, shininess: 80 });
   const dark = lam(0x2a3038);
   const shaft = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 3.0, h, 8), shaftM);
   shaft.position.y = h / 2;

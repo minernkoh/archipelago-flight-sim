@@ -224,7 +224,7 @@ export function createRealWorldMap(preset) {
 
   function createScenery(scene) {
     const g = new THREE.Group();
-    const mat = (c) => new THREE.MeshLambertMaterial({ color: c, flatShading: true });
+    const mat = (c) => new THREE.MeshLambertMaterial({ color: c });
 
     // Asphalt + ICAO markings as geometry (runwayPaint.js), rotated to the
     // bearing. The runway is centred on the origin, so start half a length back.

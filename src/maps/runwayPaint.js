@@ -58,7 +58,7 @@ function asphaltMaterial(length, width, tone) {
           float patchN = rn(m * vec2(0.05, 0.09) + 17.0);
           k += smoothstep(0.78, 0.8, patchN) * 0.09;
           // aggregate grain, faded out before it can alias
-          k += (rh(floor(m * 4.0)) - 0.5) * 0.16 * near;
+          k += (rn(m * 2.6) * 0.55 + rn(m * 8.3) * 0.45 - 0.5) * 0.16 * near;
           // joint lines between lanes
           float jd = abs(fract(m.y / 7.5 + 0.5) - 0.5) * 7.5;
           k -= (1.0 - smoothstep(0.0, 0.08 + fw.y, jd)) * 0.12 * near;
@@ -140,7 +140,7 @@ function designator(label) {
  * @param {string[]} o.labels [label at x=0 end, label at x=length end]
  * @param {number} [o.tone]   asphalt base colour
  */
-export function runwayDressing({ length: L, halfWidth: hw, labels = ['', ''], tone = 0x4a4d52 }) {
+export function runwayDressing({ length: L, halfWidth: hw, labels = ['', ''], tone = 0x4b4b4a }) {
   const g = new THREE.Group();
   const W = hw * 2;
 

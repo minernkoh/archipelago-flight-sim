@@ -2,7 +2,7 @@
 
 import * as THREE from 'three';
 import { createAircraft, step, resetOnRunway } from './physics/flightModel.js';
-import { createTerrain, COARSE_TILE_RADIUS } from './terrain.js';
+import { createTerrain, COARSE_TILE_RADIUS, GROUND_DETAIL } from './terrain.js';
 import { archipelagoMap } from './maps/archipelago.js';
 import { singaporeMap } from './maps/singapore.js';
 import { alpineMap } from './maps/alpine.js';
@@ -76,6 +76,17 @@ function adaptResolution(rawDt) {
   else if (fps > 56) resScale = Math.min(1, resScale + 0.05);
   if (resScale !== prev) applyPixelRatio();
   post?.observeFps(fps, resScale);
+  // Same idea one step further: still slow at the resolution floor, drop the
+  // per-pixel ground/water detail for the rest of the session (the "lite"
+  // shading path; LOW quality uses it from the start).
+  if (detailAuto && resScale <= 0.6001 && fps < 24) { if (++slowDetail >= 2) { detailAuto = false; setDetail(0); } }
+  else slowDetail = 0;
+}
+let detailAuto = true, slowDetail = 0;
+function setDetail(k) {
+  GROUND_DETAIL.value = k;
+  env.setDetail(k);
+  terrain.setDetail(k);
 }
 
 window.addEventListener('resize', () => {
@@ -117,6 +128,8 @@ const physEnv = {
 };
 env.setGround(collisionHeight);
 env.onMapLoaded(currentMap, scenery);
+env.applyEnv(traffic.group, 'traffic');
+env.applyEnv(scenery, 'scenery');
 
 function disposeGroup(g) {
   g.traverse(o => {
@@ -160,13 +173,15 @@ async function loadMap(map) {
     if (!map.ready(map.runway.spawn.x, map.runway.spawn.z, COARSE_TILE_RADIUS)) map.abandonPending?.();
     if (map.elevationOffline) hud.message('Elevation tiles offline — flying a flat world.', 5000);
   }
-  terrain = createTerrain(scene, map);
+  terrain = createTerrain(scene, map);   // picks up GROUND_DETAIL (lite or full) at creation
   terrain.setFarTier(qualityHigh);   // a fresh streamer defaults to on — re-apply the setting
   terrain.setTrees(qualityHigh);
   scenery = map.createScenery(scene);
   rings = createRings(scene, { course: map.raceCourse, heightFn: map.height, finalDir: map.finalGateDir });
   rings.show(false);
   traffic = createTraffic(scene, map, { enabled: qualityHigh });
+  env.applyEnv(traffic.group, 'traffic');
+  env.applyEnv(scenery, 'scenery');
   env.setGround(collisionHeight);
   env.onMapLoaded(currentMap, scenery);
   terrain.prime(map.runway.spawn.x, map.runway.spawn.z);
@@ -197,6 +212,7 @@ function setAircraft(craft) {
   plane = craft.buildMesh();
   plane.group.traverse(o => { if (o.isMesh) o.castShadow = true; });   // v6 shadows
   scene.add(plane.group);
+  env.applyEnv(plane.group, 'aircraft');   // PBR paint + glass reflect the sky
   ac.p = { ...craft.params };
   controls.setRates(craft.params);
   hud.configure(craft.hud);
@@ -279,6 +295,7 @@ const world = {
   setPixelRatioCap(cap) { pixelRatioCap = cap; applyPixelRatio(); },
   setAutoRes(on) { autoRes = on !== false; if (!autoRes) { resScale = 1; applyPixelRatio(); } },
   get resScale() { return resScale; },
+  get detail() { return GROUND_DETAIL.value; },
   // v6 quality knob: HIGH = coarse terrain tier out to 9 km + real shadows.
   // LOW is the pre-v6 view for weaker GPUs.
   setQuality(q) {
@@ -288,6 +305,7 @@ const world = {
     traffic.setEnabled(qualityHigh);
     env.setShadows(qualityHigh);
     renderer.shadowMap.enabled = qualityHigh;
+    setDetail(qualityHigh && detailAuto ? 1 : 0);
   },
   // POST FX setting: bloom + grade + sun flare. Still gated on HIGH quality and
   // on the session auto-disable in post.js.

@@ -36,24 +36,27 @@ function deckMaterial(top) {
       sunDir: { value: new THREE.Vector3(0, 1, 0) },
     },
     vertexShader: `
-      uniform float base, time; varying vec3 vW;
+      uniform float base, time; varying vec3 vW; varying vec3 vN;
       float h2(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
       float n2(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
         return mix(mix(h2(i), h2(i + vec2(1, 0)), f.x), mix(h2(i + vec2(0, 1)), h2(i + vec2(1, 1)), f.x), f.y); }
+      float lump(vec2 p){ return n2(p / 520.0) * 0.65 + n2(p / 190.0) * 0.35; }
       void main(){
         vec4 w = modelMatrix * vec4(position, 1.0);
         vec2 p = w.xz + vec2(time * 3.0, time * 1.2);
-        float n = n2(p / 520.0) * 0.65 + n2(p / 190.0) * 0.35;
-        ${top ? 'w.y = base + ' + DECK_THICK + '.0 - 60.0 + n * 150.0;' : 'w.y = base + 40.0 - n * 130.0;'}
+        float n = lump(p);
+        float e = 12.0;
+        vec2 gr = vec2(lump(p + vec2(e, 0.0)) - n, lump(p + vec2(0.0, e)) - n) / e;
+        ${top ? 'w.y = base + ' + DECK_THICK + '.0 - 60.0 + n * 150.0; vN = normalize(vec3(-gr.x * 150.0, 1.0, -gr.y * 150.0));'
+              : 'w.y = base + 40.0 - n * 130.0; vN = normalize(vec3(-gr.x * 130.0, -1.0, -gr.y * 130.0));'}
         vW = w.xyz;
         gl_Position = projectionMatrix * viewMatrix * w;
       }`,
     fragmentShader: `
       uniform vec3 col, fogColor, sunDir; uniform float fogNear, fogFar, flash;
-      varying vec3 vW;
+      varying vec3 vW; varying vec3 vN;
       void main(){
-        vec3 n = normalize(cross(dFdx(vW), dFdy(vW)));
-        ${top ? 'if (n.y < 0.0) n = -n;' : 'if (n.y > 0.0) n = -n;'}
+        vec3 n = normalize(vN);
         float l = ${top ? '0.82 + 0.25 * max(dot(n, sunDir), 0.0)' : '0.78 + 0.32 * (1.0 + n.y) + 0.12 * abs(n.x)'};
         vec3 c = col * l + vec3(0.7, 0.75, 0.9) * flash;
         float d = distance(cameraPosition, vW);

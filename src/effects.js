@@ -19,7 +19,7 @@ export function createEffects(scene) {
 
   const puffs = [];
   for (let i = 0; i < PUFF_COUNT; i++) {
-    const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, transparent: true, opacity: 0 });
+    const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0 });
     const mesh = new THREE.Mesh(puffGeo, mat);
     mesh.visible = false;
     group.add(mesh);
@@ -32,7 +32,7 @@ export function createEffects(scene) {
 
   const debris = [];
   for (let i = 0; i < DEBRIS_COUNT; i++) {
-    const mat = new THREE.MeshLambertMaterial({ color: 0x2b2723, flatShading: true, transparent: true, opacity: 0 });
+    const mat = new THREE.MeshLambertMaterial({ color: 0x2b2723, transparent: true, opacity: 0 });
     const mesh = new THREE.Mesh(debrisGeo, mat);
     mesh.visible = false;
     group.add(mesh);

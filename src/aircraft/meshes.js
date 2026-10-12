@@ -1,4 +1,4 @@
-// Faceted low-poly aircraft for ARCHIPELAGO.
+// Aircraft meshes for ARCHIPELAGO: smooth lofted PBR airframes (modelkit.js).
 // Model frame: +x forward, +y up, +z right (matches the physics body frame).
 // Every builder returns { group: THREE.Group, animate(controls, rpmNorm, dt, st) }.
 //
@@ -25,10 +25,12 @@ import {
 
 // Canopy / windscreen glass: flat-shaded but with a specular sheen so the sun
 // glints across the facets.
+// Canopy / windscreen glass: dark, glossy, reflecting the sky environment.
 function glassMat(color, opts = {}) {
-  return new THREE.MeshPhongMaterial({
-    color, flatShading: true, specular: 0x9fb8cc, shininess: 90,
-    emissive: 0x050a10, ...opts,
+  const { specular, shininess, ...rest } = opts;   // legacy Phong knobs ignored
+  return new THREE.MeshPhysicalMaterial({
+    color, metalness: 0.0, roughness: 0.04, clearcoat: 1, clearcoatRoughness: 0.02,
+    envMapIntensity: 1.6, side: THREE.DoubleSide, ...rest,
   });
 }
 
@@ -165,16 +167,18 @@ function legGroup(x, y, z) {
 
 // --------------------------------------------------------- shared kit --
 
-// Painted airframe skin: per-face vertex colours, a little specular so the
-// sun walks across the facets. Double-sided so loft winding never matters
-// (flat shading derives the normal per pixel and flips it for back faces).
-function paintMat(opts = {}) {
-  return new THREE.MeshPhongMaterial({
-    vertexColors: true, flatShading: true, side: THREE.DoubleSide,
-    specular: 0x2c2c2c, shininess: 36, ...opts,
+// Painted airframe skin: PBR paint with a clear coat that picks up the sky
+// (scene.environment, see environment.js). Per-face vertex colours carry the
+// livery. Double-sided so loft winding never matters (three flips the normal
+// for back faces).
+function paintMat({ roughness = 0.42, metalness = 0.05, clearcoat = 0.7 } = {}) {
+  return new THREE.MeshPhysicalMaterial({
+    vertexColors: true, side: THREE.DoubleSide,
+    roughness, metalness, clearcoat, clearcoatRoughness: 0.12,
   });
 }
-const lam = (color) => new THREE.MeshLambertMaterial({ color, flatShading: true });
+// Unpainted parts: tyres, struts, hubs, gear legs.
+const lam = (color, roughness = 0.7, metalness = 0.1) => new THREE.MeshStandardMaterial({ color, roughness, metalness });
 const neg = (surfs) => surfs.map(s => ({ ...s, from: -s.from, to: -s.to }));
 
 // Spinning wheel set: a tyre/hub pair with a couple of hub spokes so the
@@ -522,7 +526,7 @@ function hornet() {
   const P = AIRCRAFT.hornet;
   const C = { top: 0x7f8992, side: 0x98a1aa, belly: 0xa9b1b9, radome: 0x6a7179, dark: 0x2b2e32,
     band: 0xd9a21b, metal: 0x50545a, white: 0xe6e6df };
-  const mat = paintMat({ shininess: 26 });
+  const mat = paintMat({ roughness: 0.55, clearcoat: 0.15, metalness: 0.2 });   // matte naval grey
   const glass = glassMat(0x2a3640, { specular: 0xc8dcf0 });
   const dark = lam(C.dark), tire = lam(0x141416), hub = lam(0x9da2a8);
   const g = new THREE.Group();
@@ -714,7 +718,7 @@ function heavy() {
   const P = AIRCRAFT.heavy;
   const C = { white: 0xf2f2ee, grey: 0xc6cad1, navy: 0x1f3358, red: 0xc21f1f, glass: 0x1c2630,
     lip: 0xc9ccd2, dark: 0x24262a, wing: 0xe2e4e8, wingLo: 0xbfc4cc };
-  const mat = paintMat({ shininess: 44 });
+  const mat = paintMat({ roughness: 0.35, clearcoat: 0.9 });
   const dark = lam(C.dark), tire = lam(0x141416), hub = lam(0x9da2a8);
   const g = new THREE.Group();
 
@@ -790,7 +794,7 @@ function heavy() {
       const geo = new THREE.BufferGeometry();
       const v = [...pts[0], ...pts[1], ...pts[3], ...pts[0], ...pts[3], ...pts[2]];
       geo.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
-      const pm = new THREE.MeshLambertMaterial({ color: C.wing, side: THREE.DoubleSide });
+      const pm = new THREE.MeshStandardMaterial({ color: C.wing, roughness: 0.4, metalness: 0.1, side: THREE.DoubleSide });
       const h = hinged(geo, pm, pts[0], pts[2]);
       g.add(h.obj);
       spoilers.push({ h, s });
@@ -920,7 +924,7 @@ function heavy() {
 function spirit() {
   const P = AIRCRAFT.spirit;
   const C = { top: 0x3c4048, low: 0x31343a, glass: 0x10161d, intake: 0x202227, exhaust: 0x4f4b46, edge: 0x464a52 };
-  const mat = paintMat({ shininess: 18, specular: 0x1c1c1c });
+  const mat = paintMat({ roughness: 0.7, clearcoat: 0.0, metalness: 0.1 });   // radar-absorbent matte
   const dark = lam(0x212327), tire = lam(0x141416), hub = lam(0x8a8f96);
   const g = new THREE.Group();
   const half = 26.2;

@@ -167,7 +167,7 @@ export function getTerrainHeight(x, z) {
   return h;
 }
 
-// ---------- Terrain colours (faceted: called once per triangle) ----------
+// ---------- Terrain colours (called once per terrain vertex; terrain.js shades the detail) ----------
 // Cosmetic layers (forest + meadow) use their own noise so heights stay put.
 const NZ = makeNoise(SEED ^ 0x5eed);
 function forestDensity(x, z, h, slope) {
@@ -207,7 +207,7 @@ export function createAirfield(scene) {
   strip.position.set(RUNWAY.x0, RUNWAY.y + 0.06, 0);
   g.add(strip);
 
-  const mat = (c) => new THREE.MeshLambertMaterial({ color: c, flatShading: true });
+  const mat = (c) => new THREE.MeshLambertMaterial({ color: c });
 
   // Apron, taxiway, hangar, tower, parked club aircraft, fuel truck (airfieldKit.js).
   const field = new THREE.Group();
@@ -218,7 +218,7 @@ export function createAirfield(scene) {
   const tw = tower({ h: 16 });
   tw.position.set(212, 0, 56);
   const parked = clubPlaneGeometry();
-  const parkMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: THREE.DoubleSide });
+  const parkMat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.45, metalness: 0.05 });
   for (const [x, z, yaw] of [[104, 38, 2.2], [158, 36, -2.3]]) {
     const pm = new THREE.Mesh(parked, parkMat);
     pm.position.set(x, 1.23, z);
@@ -385,7 +385,7 @@ function buildVillages(g, rand) {
     }
   }
 
-  const lamb = () => new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
+  const lamb = () => new THREE.MeshLambertMaterial({ color: 0xffffff });
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), sc = new THREE.Vector3();
   const up = new THREE.Vector3(0, 1, 0);
   const finish = (im) => { im.frustumCulled = false; im.instanceMatrix.needsUpdate = true; im.instanceColor.needsUpdate = true; g.add(im); };
@@ -455,8 +455,8 @@ function buildLighthouses(g, rand) {
   const beams = new THREE.Group();
   beams.visible = false;
   g.add(beams);
-  const white = new THREE.MeshLambertMaterial({ color: 0xf2f0ea, flatShading: true });
-  const red = new THREE.MeshLambertMaterial({ color: 0xc8372d, flatShading: true });
+  const white = new THREE.MeshLambertMaterial({ color: 0xf2f0ea });
+  const red = new THREE.MeshLambertMaterial({ color: 0xc8372d });
   const glass = new THREE.MeshBasicMaterial({ color: 0xffe9a8 });
   const beamMat = new THREE.MeshBasicMaterial({
     color: 0xfff1c4, vertexColors: true, transparent: true, opacity: 0.14, blending: THREE.AdditiveBlending,

@@ -74,41 +74,152 @@ function treeHash(ix, iz, k) {
   return (n >>> 0) / 4294967296;
 }
 
-// Merge a few primitives into one non-indexed geometry with vertex colours.
+// Merge a few primitives into one indexed geometry with vertex colours and
+// smooth normals.
 function mergeColored(parts) {
-  const pos = [], nor = [], col = [];
-  for (const [geo, hex] of parts) {
-    const g = geo.index ? geo.toNonIndexed() : geo;
-    g.computeVertexNormals();
-    const c = new THREE.Color(hex);
-    const p = g.attributes.position, n = g.attributes.normal;
+  const pos = [], nor = [], col = [], idx = [];
+  for (const [geo, hex, jitter = 0] of parts) {
+    geo.computeVertexNormals();
+    const c = new THREE.Color(hex), base = pos.length / 3;
+    const p = geo.attributes.position, n = geo.attributes.normal;
     for (let i = 0; i < p.count; i++) {
       pos.push(p.getX(i), p.getY(i), p.getZ(i));
       nor.push(n.getX(i), n.getY(i), n.getZ(i));
-      col.push(c.r, c.g, c.b);
+      // a little per-vertex light/dark so a crown reads as clumps of leaves
+      const k = 1 + (treeHash(i, p.count, 7) - 0.5) * jitter;
+      col.push(c.r * k, c.g * k, c.b * k);
     }
-    geo.dispose(); if (g !== geo) g.dispose();
+    if (geo.index) for (let i = 0; i < geo.index.count; i++) idx.push(base + geo.index.getX(i));
+    else for (let i = 0; i < p.count; i++) idx.push(base + i);
+    geo.dispose();
   }
   const out = new THREE.BufferGeometry();
   out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   out.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
   out.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  out.setIndex(idx);
   return out;
 }
 
-// Unit-height trees (base at y=0, top at y=1); instances scale them. Kept to
-// ~20 triangles each (open-ended, no caps you could ever see from the air):
-// thousands are instanced, and software-rendered test runs feel every one.
+// Lumpy sphere: a crown or a needle tier, displaced so it isn't a ball.
+function lumpy(geo, amt, seed) {
+  const p = geo.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    const k = 1 + (treeHash(Math.round(x * 97), Math.round(z * 97), seed + Math.round(y * 53)) - 0.5) * amt;
+    p.setXYZ(i, x * k, y * (1 + (k - 1) * 0.5), z * k);
+  }
+  return geo;
+}
+
+// Unit-height trees (base at y=0, top at y=1); instances scale them. Smooth
+// shaded, a few hundred triangles at most: thousands are instanced.
 function coniferGeometry() {
+  const trunk = new THREE.CylinderGeometry(0.03, 0.05, 0.35, 4, 1, true); trunk.translate(0, 0.17, 0);
+  const t1 = lumpy(new THREE.ConeGeometry(0.33, 0.42, 7, 1, true), 0.25, 1); t1.translate(0, 0.38, 0);
+  const t2 = lumpy(new THREE.ConeGeometry(0.26, 0.38, 7, 1, true), 0.25, 2); t2.translate(0, 0.6, 0);
+  const t3 = lumpy(new THREE.ConeGeometry(0.17, 0.34, 6, 1, true), 0.2, 3); t3.translate(0, 0.83, 0);
+  return mergeColored([[trunk, 0x5a4232], [t1, 0x2c4a2a, 0.35], [t2, 0x31522e, 0.35], [t3, 0x375a32, 0.3]]);
+}
+// Lite trees (detail 0): the pre-v10 ~20-triangle shapes, natural colours.
+function coniferLite() {
   const trunk = new THREE.CylinderGeometry(0.04, 0.05, 0.3, 4, 1, true); trunk.translate(0, 0.15, 0);
   const lo = new THREE.ConeGeometry(0.3, 0.6, 6, 1, true); lo.translate(0, 0.45, 0);
   const hi = new THREE.ConeGeometry(0.2, 0.45, 5, 1, true); hi.translate(0, 0.77, 0);
-  return mergeColored([[trunk, 0x7a5a40], [lo, 0x3f8a45], [hi, 0x4f9d52]]);
+  return mergeColored([[trunk, 0x5a4232], [lo, 0x2e4c2b], [hi, 0x355631]]);
 }
-function broadleafGeometry() {
+function broadleafLite() {
   const trunk = new THREE.CylinderGeometry(0.04, 0.06, 0.45, 4, 1, true); trunk.translate(0, 0.225, 0);
   const crown = new THREE.OctahedronGeometry(0.36, 0); crown.scale(1, 0.95, 1); crown.translate(0, 0.68, 0);
-  return mergeColored([[trunk, 0x7d5c40], [crown, 0x72b04a]]);
+  return mergeColored([[trunk, 0x5e4634], [crown, 0x4d6f33]]);
+}
+function broadleafGeometry() {
+  const trunk = new THREE.CylinderGeometry(0.035, 0.06, 0.5, 4, 1, true); trunk.translate(0, 0.25, 0);
+  const c1 = lumpy(new THREE.IcosahedronGeometry(0.3, 1), 0.3, 4); c1.translate(0, 0.66, 0);
+  const c2 = lumpy(new THREE.IcosahedronGeometry(0.22, 0), 0.3, 5); c2.translate(0.17, 0.58, 0.08);
+  const c3 = lumpy(new THREE.IcosahedronGeometry(0.21, 0), 0.3, 6); c3.translate(-0.14, 0.6, -0.12);
+  return mergeColored([[trunk, 0x5e4634], [c1, 0x4d6f33, 0.4], [c2, 0x46682f, 0.4], [c3, 0x52763a, 0.4]]);
+}
+
+// ---------- Ground shading ----------
+// Lambert (one light evaluation, cheap at full screen) with vertex colours
+// from the map, plus world-space procedural detail injected into the shader:
+//  - macro (~250 m) and mid (~30 m) tone variation so fields and slopes are
+//    never one flat swatch, with dry/yellowed patches on vegetation,
+//  - fine grain (~3 m) and a bump normal close to the camera,
+//  - rock strata on steep faces.
+// Everything near-field fades out with distance (and fwidth) so nothing
+// shimmers. `far` adds the coarse tier's sink-under-the-fine-tier trick.
+// Shared by both ground materials: 1 = full per-pixel detail, 0 = lite
+// (per-vertex tone only). main.js drops it when the GPU can't keep up.
+export const GROUND_DETAIL = { value: 1 };
+const GROUND_NOISE = `
+  uniform float uDetail;
+  float gh(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float gn(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(gh(i), gh(i + vec2(1, 0)), u.x), mix(gh(i + vec2(0, 1)), gh(i + vec2(1, 1)), u.x), u.y); }
+  float gfbm(vec2 p){ return gn(p) * 0.57 + gn(p * 2.03 + 17.1) * 0.29 + gn(p * 4.1 + 3.7) * 0.14; }
+`;
+function terrainMaterial(far) {
+  const m = new THREE.MeshLambertMaterial({ vertexColors: true });
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uDetail = GROUND_DETAIL;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vTW; varying vec3 vTN; varying float vMacro;' + GROUND_NOISE)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        vec4 tw0 = modelMatrix * vec4(transformed, 1.0);
+        ${far ? 'transformed.y -= (1.0 - smoothstep(2500.0, 2950.0, distance(tw0.xz, cameraPosition.xz))) * 250.0;' : ''}
+        vTW = (modelMatrix * vec4(transformed, 1.0)).xyz;
+        vTN = normalize(mat3(modelMatrix) * objectNormal);
+        vMacro = gfbm(vTW.xz * 0.0042);                 // ~250 m: vertices sample it fine`);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vTW; varying vec3 vTN; varying float vMacro;' + GROUND_NOISE)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        if (uDetail < 0.5) {
+          diffuseColor.rgb *= 1.0 + (vMacro - 0.5) * 0.42;
+        } else {
+          vec3 c = diffuseColor.rgb;
+          float dist = length(vTW - cameraPosition);
+          float nearK = 1.0 - smoothstep(80.0, 520.0, dist);
+          float midK = 1.0 - smoothstep(900.0, 4200.0, dist);
+          float slope = 1.0 - clamp(vTN.y, 0.0, 1.0);
+          float veg = smoothstep(0.015, 0.09, c.g - max(c.r, c.b));
+          float macro = vMacro;
+          float mid = gn(vTW.xz * 0.031 + 5.3) * 0.65 + gn(vTW.xz * 0.07 + 1.3) * 0.35;
+          float fine = gn(vTW.xz * 0.42) * 0.6 + gn(vTW.xz * 1.7) * 0.4;
+          c *= 1.0 + (macro - 0.5) * 0.42 + (mid - 0.5) * 0.24 * midK + (fine - 0.5) * 0.12 * nearK;
+          // sun-dried patches and darker damp hollows on vegetation
+          c = mix(c, c * vec3(1.18, 1.06, 0.7), veg * smoothstep(0.55, 0.78, macro) * 0.55);
+          c = mix(c, c * vec3(0.78, 0.86, 0.8), veg * smoothstep(0.6, 0.85, mid) * 0.4 * midK);
+          // crags on steep faces: noise projected on the two vertical planes
+          // (triplanar minus the top), blended by the surface normal
+          float rockK = smoothstep(0.22, 0.5, slope);
+          if (rockK > 0.01) {
+            vec3 an = abs(vTN);
+            float rx = gn(vTW.zy * vec2(0.07, 0.11)) * 0.55 + gn(vTW.zy * 0.38) * 0.45;
+            float rz = gn(vTW.xy * vec2(0.07, 0.11) + 7.0) * 0.55 + gn(vTW.xy * 0.38 + 7.0) * 0.45;
+            float crag = (rx * an.x + rz * an.z) / (an.x + an.z + 1e-3);
+            c = mix(c, c * (0.68 + 0.64 * crag), rockK * 0.7);
+          }
+          diffuseColor.rgb = c;
+        }`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        {
+          float dist = length(vTW - cameraPosition);
+          float bk = (1.0 - smoothstep(60.0, 900.0, dist)) * 0.45;
+          if (uDetail > 0.5 && bk > 0.001) {
+            vec2 p = vTW.xz;
+            float e = 0.6;
+            float b0 = gn(p * 0.3);
+            float bx = gn((p + vec2(e, 0.0)) * 0.3);
+            float bz = gn((p + vec2(0.0, e)) * 0.3);
+            vec3 gw = vec3(-(bx - b0), 0.0, -(bz - b0)) * 2.2 * bk;
+            normal = normalize(normal + (viewMatrix * vec4(gw, 0.0)).xyz);
+          }
+        }`);
+  };
+  m.customProgramCacheKey = () => far ? 'ground-far' : 'ground';
+  return m;
 }
 
 export function createTerrain(scene, map = archipelagoMap) {
@@ -125,9 +236,12 @@ export function createTerrain(scene, map = archipelagoMap) {
   const treePending = [];
   let treesOn = !!map.forest;
   let treeCx = null, treeCz = null;
-  const treeMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
-  const coniferGeo = map.forest ? coniferGeometry() : null;
-  const broadGeo = map.forest ? broadleafGeometry() : null;
+  const treeMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+  const coniferFull = map.forest ? coniferGeometry() : null;
+  const broadFull = map.forest ? broadleafGeometry() : null;
+  const coniferThin = map.forest ? coniferLite() : null;
+  const broadThin = map.forest ? broadleafLite() : null;
+  let coniferGeo = coniferFull, broadGeo = broadFull;
   const coniferP = map.conifer || (() => 0.3);
   const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(),
     _p = new THREE.Vector3(), _c = new THREE.Color(), _up = new THREE.Vector3(0, 1, 0);
@@ -197,96 +311,69 @@ export function createTerrain(scene, map = archipelagoMap) {
     for (const im of g.children) im.dispose?.();   // geometry + material are shared
   }
 
-  // One material per tier instead of one per chunk — every chunk used its own
-  // identical MeshLambertMaterial, so a full view was 121 redundant materials.
-  const mat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
-  const farMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
-  // The coarse tier interpolates over 200 m, so on rugged ground it can rise
-  // ABOVE the fine surface in valleys and poke through it (FAR_DROP alone is
-  // only 2 m). Inside the fine tier's reach, sink it well out of the way; the
-  // fine tier always covers at least ~3000 m from the aircraft.
-  farMat.onBeforeCompile = (sh) => {
+  // One material per tier instead of one per chunk (shared, disposed once).
+  // Both carry the realistic ground shader (terrainShading below): world-space
+  // detail noise for grass/soil/rock, rock strata on steep faces, and a bump
+  // normal, all faded with distance before it can alias.
+  const matFull = terrainMaterial(false);
+  const farFull = terrainMaterial(true);
+  // Lite coarse tier: plain Lambert plus only the sink-under-the-fine-tier snippet.
+  const farLite = new THREE.MeshLambertMaterial({ vertexColors: true });
+  farLite.onBeforeCompile = (sh) => {
     sh.vertexShader = sh.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
       vec4 fw = modelMatrix * vec4(transformed, 1.0);
       transformed.y -= (1.0 - smoothstep(2500.0, 2950.0, distance(fw.xz, cameraPosition.xz))) * 250.0;`);
   };
+  farLite.customProgramCacheKey = () => 'ground-far-lite';
+  // Lite (detail 0): plain Lambert for the fine tier, no injected shading at
+  // all — on a software rasterizer even an untaken branch costs.
+  const matLite = new THREE.MeshLambertMaterial({ vertexColors: true });
+  let lite = GROUND_DETAIL.value < 0.5;
+  let mat = lite ? matLite : matFull;
+  let farMat = lite ? farLite : farFull;
 
-  // The coarse tier (200 m cells, 1.8-9 km out) keeps smooth per-vertex
-  // colour: facets that big read as crude slabs, and at that range fog and
-  // distance want soft gradients anyway.
-  function buildSmooth(hgt, n, cell, half, x0, z0, drop) {
-    const pos = new Float32Array(n * n * 3), col = new Float32Array(n * n * 3);
-    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
-      const k = j * n + i, h = hgt[k];
-      const hx = hgt[j * n + Math.min(n - 1, i + 1)], hz = hgt[Math.min(n - 1, j + 1) * n + i];
-      const slope = Math.min(1, Math.hypot(h - hx, h - hz) / cell);
-      const lx = -half + i * cell, lz = -half + j * cell;
-      colorFn(h, slope, x0 + lx, z0 + lz, _fc);
-      pos[k * 3] = lx; pos[k * 3 + 1] = h; pos[k * 3 + 2] = lz;
-      col[k * 3] = _fc.r; col[k * 3 + 1] = _fc.g; col[k * 3 + 2] = _fc.b;
-    }
-    const idx = [];
-    for (let j = 0; j < n - 1; j++) for (let i = 0; i < n - 1; i++) {
-      const a = j * n + i, b = a + 1, c = a + n, d = c + 1;
-      idx.push(a, c, b, b, c, d);
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    geo.setIndex(idx);
-    geo.computeVertexNormals();
-    const mesh = new THREE.Mesh(geo, farMat);
-    mesh.position.set(x0, -drop, z0);
-    return mesh;
-  }
-
-  // FACETED: one colour per triangle, sampled at the triangle's centroid with
-  // the slope of the face itself. Per-vertex colours used to smear across
-  // every face, which made the ground read as a blurry low-res texture rather
-  // than low-poly; a flat colour per facet is what gives the style its crisp
-  // cut-paper look. Costs a non-indexed geometry (6 verts per quad).
+  // Smooth, SEAMLESS chunks: heights are sampled one cell beyond the chunk
+  // edge so every vertex normal (central differences) and slope sees the same
+  // neighbours as the vertex shared with the next chunk. computeVertexNormals
+  // per chunk would light each 600 m tile a little differently at its border.
   const _fc = new THREE.Color();
   function buildChunk(cx, cz, size = CHUNK, res = RES, drop = 0) {
     const x0 = cx * size, z0 = cz * size;
-    const n = res + 1, cell = size / res, half = size / 2;
-    const hgt = new Float32Array(n * n);
-    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
-      hgt[j * n + i] = heightFn(x0 - half + i * cell, z0 - half + j * cell);
+    const n = res + 1, cell = size / res, half = size / 2, m = n + 2;
+    const hgt = new Float32Array(m * m);
+    for (let j = -1; j <= n; j++) for (let i = -1; i <= n; i++) {
+      hgt[(j + 1) * m + (i + 1)] = heightFn(x0 - half + i * cell, z0 - half + j * cell);
     }
-    if (drop) return buildSmooth(hgt, n, cell, half, x0, z0, drop);
-    const tris = res * res * 2;
-    const pos = new Float32Array(tris * 9);
-    const col = new Float32Array(tris * 9);
-    let p = 0;
-    const tri = (ax, az, ah, bx, bz, bh, qx, qz, qh) => {
-      // face normal (y-up) -> slope as rise/run, same scale the maps expect
-      const ux = bx - ax, uy = bh - ah, uz = bz - az, vx = qx - ax, vy = qh - ah, vz = qz - az;
-      const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
-      const slope = Math.min(1, Math.hypot(nx, nz) / Math.max(1e-6, Math.abs(ny)));
-      const mx = (ax + bx + qx) / 3, mz = (az + bz + qz) / 3, mh = (ah + bh + qh) / 3;
-      colorFn(mh, slope, x0 + mx, z0 + mz, _fc);
-      pos[p] = ax; pos[p + 1] = ah; pos[p + 2] = az;
-      pos[p + 3] = bx; pos[p + 4] = bh; pos[p + 5] = bz;
-      pos[p + 6] = qx; pos[p + 7] = qh; pos[p + 8] = qz;
-      for (let k = 0; k < 9; k += 3) { col[p + k] = _fc.r; col[p + k + 1] = _fc.g; col[p + k + 2] = _fc.b; }
-      p += 9;
-    };
-    for (let j = 0; j < res; j++) for (let i = 0; i < res; i++) {
-      const xa = -half + i * cell, xb = xa + cell, za = -half + j * cell, zb = za + cell;
-      const h00 = hgt[j * n + i], h10 = hgt[j * n + i + 1], h01 = hgt[(j + 1) * n + i], h11 = hgt[(j + 1) * n + i + 1];
-      // alternate the diagonal so facets don't all lean the same way
-      if ((i + j) & 1) {
-        tri(xa, za, h00, xa, zb, h01, xb, za, h10);
-        tri(xb, za, h10, xa, zb, h01, xb, zb, h11);
+    const H = (i, j) => hgt[(j + 1) * m + (i + 1)];
+    const pos = new Float32Array(n * n * 3), nor = new Float32Array(n * n * 3), col = new Float32Array(n * n * 3);
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      const k = (j * n + i) * 3, h = H(i, j);
+      const dx = H(i + 1, j) - H(i - 1, j), dz = H(i, j + 1) - H(i, j - 1);
+      const nx = -dx, ny = 2 * cell, nz = -dz, il = 1 / Math.hypot(nx, ny, nz);
+      const slope = Math.min(1, Math.hypot(dx, dz) / (2 * cell));
+      const lx = -half + i * cell, lz = -half + j * cell;
+      colorFn(h, slope, x0 + lx, z0 + lz, _fc);
+      pos[k] = lx; pos[k + 1] = h; pos[k + 2] = lz;
+      nor[k] = nx * il; nor[k + 1] = ny * il; nor[k + 2] = nz * il;
+      col[k] = _fc.r; col[k + 1] = _fc.g; col[k + 2] = _fc.b;
+    }
+    const idx = new (n * n > 65535 ? Uint32Array : Uint16Array)((n - 1) * (n - 1) * 6);
+    let o = 0;
+    for (let j = 0; j < n - 1; j++) for (let i = 0; i < n - 1; i++) {
+      const a = j * n + i, b = a + 1, c = a + n, d = c + 1;
+      // split each quad along the diagonal that follows the terrain better
+      if (Math.abs(H(i, j) - H(i + 1, j + 1)) < Math.abs(H(i + 1, j) - H(i, j + 1))) {
+        idx[o++] = a; idx[o++] = c; idx[o++] = d; idx[o++] = a; idx[o++] = d; idx[o++] = b;
       } else {
-        tri(xa, za, h00, xa, zb, h01, xb, zb, h11);
-        tri(xa, za, h00, xb, zb, h11, xb, za, h10);
+        idx[o++] = a; idx[o++] = c; idx[o++] = b; idx[o++] = b; idx[o++] = c; idx[o++] = d;
       }
     }
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    geo.computeVertexNormals();
+    geo.setIndex(new THREE.BufferAttribute(idx, 1));
+    geo.computeBoundingSphere();
     const mesh = new THREE.Mesh(geo, drop ? farMat : mat);
     mesh.position.set(x0, -drop, z0);
     mesh.receiveShadow = !drop;   // shadows only land on the fine tier
@@ -363,6 +450,22 @@ export function createTerrain(scene, map = archipelagoMap) {
         }
       }
     },
+    /**
+     * Detail level: 1 full ground shader + full trees, 0 lite (plain Lambert,
+     * ~20-triangle trees). Swaps materials on live chunks and regrows trees.
+     */
+    setDetail(k) {
+      const nl = k < 0.5;
+      if (nl === lite) return;
+      lite = nl;
+      mat = lite ? matLite : matFull;
+      farMat = lite ? farLite : farFull;
+      for (const [key, m] of chunks) m.material = key.startsWith('n:') ? mat : farMat;
+      coniferGeo = lite ? coniferThin : coniferFull;
+      broadGeo = lite ? broadThin : broadFull;
+      for (const g of trees.values()) disposeTrees(g);
+      trees.clear(); treePending.length = 0; treeCx = treeCz = null;
+    },
     /** Coarse tier off = the old single-tier behaviour (quality: LOW). */
     setFarTier(on) { farOn = !!on; curCx = null; curCz = null; },
     /** Vegetation on/off (quality knob). A map with no `forest` never grows any. */
@@ -379,13 +482,14 @@ export function createTerrain(scene, map = archipelagoMap) {
     // rebuilds from scratch (used when swapping maps).
     disposeAll() {
       for (const m of chunks.values()) { scene.remove(m); m.geometry.dispose(); }
-      mat.dispose(); farMat.dispose();   // shared: disposed once, at teardown
+      for (const m of [matFull, matLite, farFull, farLite]) m.dispose();   // shared: disposed once, at teardown
       chunks.clear();
       pending.length = 0;
       curCx = null; curCz = null;
       for (const g of trees.values()) disposeTrees(g);
       trees.clear(); treePending.length = 0; treeCx = treeCz = null;
-      treeMat.dispose(); coniferGeo?.dispose(); broadGeo?.dispose();
+      treeMat.dispose();
+      for (const g of [coniferFull, broadFull, coniferThin, broadThin]) g?.dispose();
     },
   };
 }

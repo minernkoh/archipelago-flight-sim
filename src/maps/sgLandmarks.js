@@ -5,7 +5,7 @@
 
 import * as THREE from 'three';
 
-const lam = (c) => new THREE.MeshLambertMaterial({ color: c, flatShading: true });
+const lam = (c) => new THREE.MeshLambertMaterial({ color: c });
 
 const M = {
   concrete: lam(0xb9bdc1), glassDark: lam(0x3a4a58), glassBlue: lam(0x5b7d94),
