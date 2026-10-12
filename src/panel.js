@@ -475,6 +475,7 @@ export function createPanel() {
     chkEl.innerHTML = `<div class="t">START CHECKLIST</div><ul>
       <li data-chk="bat">Battery master — ON</li>
       <li data-chk="mix">Mixture — RICH</li>
+      <li data-chk="prime">Primer: 2 strokes (more floods it)</li>
       <li data-chk="start">Hold START until the engine catches</li>
       <li data-chk="run">Engine running — throttle when ready</li></ul>`;
     root.insertBefore(chkEl, svg);
@@ -486,11 +487,13 @@ export function createPanel() {
       `<span class="ap-batt"><i style="width:100%"></i></span>` +
       `<button class="ap-sw" data-sw="mags">MAGS BOTH</button>` +
       `<button class="ap-sw" data-sw="start">START</button>` +
-      `<button class="ap-sw" data-sw="mix">MIX RICH</button>`;
+      `<button class="ap-sw" data-sw="mix">MIX RICH</button>` +
+      `<button class="ap-sw" data-sw="prime">PRIME</button>`;
     root.appendChild(swEl);
     const sw = (n) => swEl.querySelector(`[data-sw="${n}"]`);
     sw('bat').addEventListener('click', () => { if (curAc) curAc.sys.battery = !curAc.sys.battery; });
     sw('mix').addEventListener('click', () => { if (curAc) curAc.sys.mixture = curAc.sys.mixture > 0.3 ? 0 : 1; });
+    sw('prime').addEventListener('click', () => { if (curAc && !curAc.engineRunning) curAc.sys.primes = Math.min(9, (curAc.sys.primes || 0) + 1); });
     const MAG_CYCLE = ['OFF', 'R', 'L', 'BOTH'];
     sw('mags').addEventListener('click', () => {
       if (!curAc || curAc.sys.mags === 'START') return;
@@ -524,6 +527,8 @@ export function createPanel() {
       q('mags').classList.toggle('on', s.mags !== 'OFF');
       q('mags').textContent = 'MAGS ' + (s.mags === 'START' ? 'START' : s.mags);
       q('start').classList.toggle('on', s.mags === 'START');
+      q('prime').classList.toggle('on', s.primes > 0);
+      q('prime').textContent = s.primes ? `PRIME ${s.primes}` : 'PRIME';
       const bar = swEl.querySelector('.ap-batt');
       bar.classList.toggle('low', ac.batteryCharge < 0.25);
       bar.firstElementChild.style.width = `${Math.round(safeNum(ac.batteryCharge, 0) * 100)}%`;
@@ -534,6 +539,7 @@ export function createPanel() {
       const tick = (n, done) => chkEl.querySelector(`[data-chk="${n}"]`).classList.toggle('done', !!done);
       tick('bat', s.battery);
       tick('mix', s.mixture > 0.3);
+      tick('prime', ac.engineRunning || s.primes > 0);
       tick('start', ac.engineRunning || ac.crankT > 0.2);
       tick('run', ac.engineRunning);
     } else {

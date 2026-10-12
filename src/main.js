@@ -82,6 +82,9 @@ function cockpitAction(id) {
       if (s && s.lights) s.lights[k] = !s.lights[k];
       break;
     }
+    case 'carb': if (s) s.carbHeat = !s.carbHeat; break;
+    case 'prime': if (s && !ac.engineRunning) s.primes = Math.min(9, (s.primes || 0) + 1); break;
+    case 'xpdr': if (s) { const X = [1200, 7000, 7600, 7700]; s.xpdr = X[(X.indexOf(s.xpdr ?? 1200) + 1) % X.length]; } break;
     case 'fuel': if (s) { const F = ['BOTH', 'L', 'R', 'OFF']; s.fuel = F[(F.indexOf(s.fuel || 'BOTH') + 1) % F.length]; } break;
     case 'trim-dn': case 'trim-up': controls.state.trim = Math.max(-0.3, Math.min(0.3, (controls.state.trim || 0) + (id === 'trim-up' ? 0.03 : -0.03))); break;
     case 'cb-avn': case 'cb-ap': case 'cb-flap': { const k = id.slice(3); if (ac.breakers) ac.breakers[k] = !ac.breakers[k]; break; }
@@ -327,6 +330,7 @@ const skyId = (w) => (w === 'rain' || w === 'storm') ? w : 'clear';
 function setSkyWeather(id) {
   weatherFx.set(skyId(id), currentMap);
   physEnv.wet = WET_WEATHER.has(id);
+  physEnv.carbIceRisk = WET_WEATHER.has(id) ? 1 : 0;   // rain and storms: moist air ices carburettors
 }
 const audioView = { x: 0, y: 0, z: 0, mode: 'CHASE' }; // reused each frame for Doppler/distance
 const minimap = createMinimap();
@@ -639,6 +643,8 @@ function frame(now) {
       'lt-land': ac.sys?.lights?.land !== false, 'lt-nav': ac.sys?.lights?.nav !== false,
       'lt-strb': ac.sys?.lights?.strobe !== false, 'lt-bcn': ac.sys?.lights?.beacon !== false,
       fuel: ac.sys?.fuel === 'OFF' ? false : 'F ' + (ac.sys?.fuel || 'BOTH'),
+      carb: !!ac.sys?.carbHeat, prime: ac.sys?.primes ? 'PR ' + ac.sys.primes : false,
+      xpdr: String(ac.sys?.xpdr ?? 1200),
       'trim-up': (controls.state.trim || 0) > 0.005 ? 'T ' + Math.round(controls.state.trim * 100) : false,
       'trim-dn': (controls.state.trim || 0) < -0.005 ? 'T ' + Math.round(controls.state.trim * 100) : false,
       'cb-avn': ac.breakers?.avn !== false, 'cb-ap': ac.breakers?.ap !== false, 'cb-flap': ac.breakers?.flap !== false,

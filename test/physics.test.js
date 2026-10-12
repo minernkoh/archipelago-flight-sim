@@ -1091,13 +1091,18 @@ import { setColdStart } from '../src/physics/flightModel.js';
   run(a3, {}, 3);
   check('coldstart: no mixture -> cranks, never catches', !a3.engineRunning);
 
-  // Full correct sequence: battery ON, mixture rich, mags START ~2 s -> running.
+  // Full correct sequence: battery ON, mixture rich, PRIME (v12), mags START ~2 s -> running.
   const a4 = mk();
-  a4.sys.battery = true; a4.sys.mixture = 1; a4.sys.mags = 'START';
+  a4.sys.battery = true; a4.sys.mixture = 1; a4.sys.primes = 2; a4.sys.mags = 'START';
   run(a4, {}, 2.5);
   a4.sys.mags = 'BOTH'; // release the key
   run(a4, { throttle: 0.3 }, 2);
   check('coldstart: correct sequence starts the engine', a4.engineRunning && a4.thrust > 100, `thrust ${a4.thrust.toFixed(0)}`);
+  // v12 primer: unprimed cranks much longer before it catches; over-primed floods
+  const crankTime = (primes) => { const a = mk(); a.sys.battery = true; a.sys.mixture = 1; a.sys.primes = primes; a.sys.mags = 'START';
+    for (let i = 0; i < 10 * 120; i++) { step(a, { elevator: 0, aileron: 0, rudder: 0, throttle: 0, flaps: 0, brakes: false, trim: 0 }, flatEnv, 1 / 120); if (a.engineRunning) return i / 120; } return 99; };
+  const tP = crankTime(2), tU = crankTime(0), tF = crankTime(6);
+  check('coldstart: primed catches fast, unprimed cranks longer, over-primed floods', tP < 2 && tU > 3 && tU < 4.5 && tF > 5.5, `${tP.toFixed(1)} / ${tU.toFixed(1)} / ${tF.toFixed(1)} s`);
 
   // Cutting the mags kills a running engine.
   a4.sys.mags = 'OFF';
@@ -1721,6 +1726,11 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   e.update({ onGround: false, agl: 300, vsFpm: -400, cross: 10, toAim: 6000, ai: aiAt({ phase: 'final', toAim: 3000, y: 160, type: 'Heavy jet', heavy: true }) }, 5);
   e.update({ onGround: false, agl: 290, vsFpm: -400, cross: 10, toAim: 5800, ai: aiAt({ phase: 'final', toAim: 2800, y: 150, type: 'Heavy jet', heavy: true }) }, 5);
   check('ATC: behind an airliner the sequence adds a wake turbulence caution', /follow the Heavy jet on final, caution wake turbulence/.test(said.find(x => x.id === 'sequence')?.t || ''), said.map(x => x.t).join(' | '));
+  const em = tower();
+  em.update({ onGround: false, agl: 800, cross: 0 }, 0);
+  em.update({ onGround: false, agl: 600, vsFpm: 0, cross: 3000, squawk: 7700 }, 5);
+  em.update({ onGround: false, agl: 590, vsFpm: 0, cross: 3000, squawk: 7700 }, 5);
+  check('ATC: squawk 7700 gets an emergency landing clearance, once, and is never sent around', said.map(x => x.id).join(',') === 'emergency' && /all runways available/i.test(said.find(x => x.id === 'emergency')?.t || ''), said.map(x => x.id).join(','));
 }
 
 // ---- v12: circuit breakers and radios ----
@@ -1770,6 +1780,25 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   check('fuel back on does not magically restart it (needs the starter)', ac.engineRunning === false);
   resetOnRunway(ac, { x: 0, z: 0, y: 0, headingRad: 0 });
   check('a respawn resets the fuel selector and the light switches', ac.sys.fuel === 'BOTH' && ac.sys.lights.nav === true && ac.fuelStarveT === 0);
+}
+
+// ---- v12: carburettor icing and carb heat ----
+{
+  const { createAircraft, step } = await import('../src/physics/flightModel.js');
+  const { AIRCRAFT } = await import('../src/aircraft/params.js');
+  const wet = { groundHeight: () => 0, terrainHeight: () => 0, isRunway: () => false, carbIceRisk: 1 };
+  const dry = { groundHeight: () => 0, terrainHeight: () => 0, isRunway: () => false };
+  const mk = () => { const a = createAircraft({ pos: { x: 0, y: 1500, z: 0 }, vel: { x: 50, y: 0, z: 0 } }); a.p = { ...AIRCRAFT.c172 }; return a; };
+  const c = { elevator: 0, aileron: 0, rudder: 0, throttle: 0.2, flaps: 0, brakes: false, trim: 0 };
+  const d = mk(); for (let i = 0; i < 120 * 120; i++) step(d, c, dry, 1 / 120);
+  check('carb ice: none in dry air', d.carbIce === 0 && d.engineRunning);
+  const a = mk(); let quit = null, iceAt60 = 0;
+  for (let i = 0; i < 400 * 120 && quit === null; i++) { step(a, c, wet, 1 / 120); if (i === 60 * 120) iceAt60 = a.carbIce; if (!a.engineRunning) quit = i / 120; }
+  check('carb ice: builds at low power in moist air until the engine quits', iceAt60 > 0.15 && quit !== null && quit > 120 && quit < 400, `ice@60s ${iceAt60.toFixed(2)}, quit at ${quit?.toFixed(0)} s`);
+  const b = mk(); for (let i = 0; i < 90 * 120; i++) step(b, c, wet, 1 / 120);
+  const t0 = b.thrust, ice0 = b.carbIce;
+  b.sys.carbHeat = true; for (let i = 0; i < 40 * 120; i++) step(b, c, wet, 1 / 120);
+  check('carb heat melts the ice (the engine keeps running)', b.carbIce < ice0 * 0.4 && b.engineRunning, `${ice0.toFixed(2)} -> ${b.carbIce.toFixed(2)}`);
 }
 
 // ---- v12: volumetric cloud noise (volclouds.js) ----

@@ -304,12 +304,14 @@ check('clicking the cockpit HDG button engages heading hold', ckClick.before ===
 check('clicking the HDG+ knob steps the heading bug 5 deg', ckClick.bugStep === 5, JSON.stringify(ckClick));
 const sw = await page.evaluate(() => {
   const s = window.__sim, t0 = s.controls.state.trim;
-  s.cockpitAction('trim-up'); s.cockpitAction('lt-strb'); s.cockpitAction('fuel');
-  const r = { trim: +(s.controls.state.trim - t0).toFixed(3), strobe: s.ac.sys.lights.strobe, fuel: s.ac.sys.fuel };
+  s.cockpitAction('trim-up'); s.cockpitAction('lt-strb'); s.cockpitAction('fuel'); s.cockpitAction('carb'); s.cockpitAction('xpdr');
+  const r = { trim: +(s.controls.state.trim - t0).toFixed(3), strobe: s.ac.sys.lights.strobe, fuel: s.ac.sys.fuel, carb: s.ac.sys.carbHeat, xpdr: s.ac.sys.xpdr };
   s.cockpitAction('trim-dn'); s.cockpitAction('lt-strb'); for (let i = 0; i < 3; i++) s.cockpitAction('fuel');   // put them back
+  s.cockpitAction('carb'); for (let i = 0; i < 3; i++) s.cockpitAction('xpdr');
   return r;
 });
-check('cockpit trim, light and fuel selector switches act', sw.trim === 0.03 && sw.strobe === false && sw.fuel === 'L', JSON.stringify(sw));
+check('cockpit trim, light, fuel, carb heat and transponder switches act',
+  sw.trim === 0.03 && sw.strobe === false && sw.fuel === 'L' && sw.carb === true && sw.xpdr === 7000, JSON.stringify(sw));
 await press('h');   // HDG back off
 await press('c');
 await settle(400);
@@ -798,8 +800,11 @@ await settle(800);
 const cold = await sim('({ running: __sim.ac.engineRunning, avionics: __sim.ac.avionics, mags: __sim.ac.sys.mags, panelShown: document.querySelector("#ap-sixpack").classList.contains("ap-visible"), chk: document.querySelector("#ap-sixpack").classList.contains("ap-show-chk") })');
 check('cold & dark spawns engine-off with the panel + checklist up',
   !cold.running && cold.avionics === false && cold.mags === 'OFF' && cold.panelShown && cold.chk, JSON.stringify(cold));
-// run the real sequence through the switch state (battery, mixture, crank, release)
-await page.evaluate(() => { const s = window.__sim.ac.sys; s.battery = true; s.mixture = 1; s.mags = 'START'; });
+// run the real sequence through the switch state (battery, mixture, prime, crank, release)
+const prime0 = await sim('__sim.ac.sys.primes');
+await page.evaluate(() => { const s = window.__sim.ac.sys; s.battery = true; s.mixture = 1; window.__sim.cockpitAction('prime'); window.__sim.cockpitAction('prime'); s.mags = 'START'; });
+const primed = await sim('__sim.ac.sys.primes');
+check('cold & dark starts unprimed; two PRIME strokes register', prime0 === 0 && primed === 2, JSON.stringify({ prime0, primed }));
 const f0 = await sim('__sim.frames');
 await simSettle(4000, '__sim.ac.engineRunning');   // the starter needs 1.6 s of SIM time
 const crankDiag = await sim('({ crank: __sim.ac.crankT, run: __sim.ac.engineRunning, state: __sim.game.state, cam: __sim.camName, res: __sim.world.resScale })');

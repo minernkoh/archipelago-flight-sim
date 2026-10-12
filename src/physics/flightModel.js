@@ -85,7 +85,9 @@ export function createAircraft(opts = {}) {
     // v5-R3: piston start/electrical state (only exercised for p.startup aircraft).
     // Defaults are ready-to-fly so every existing caller spawns hot.
     // player switch positions (v12: fuel selector and light switches)
-    sys: { battery: true, mags: 'BOTH', mixture: 1, fuel: 'BOTH', lights: { land: true, nav: true, strobe: true, beacon: true } },
+    sys: { battery: true, mags: 'BOTH', mixture: 1, fuel: 'BOTH', lights: { land: true, nav: true, strobe: true, beacon: true },
+      carbHeat: false, primes: 2, xpdr: 1200 },
+    carbIce: 0,            // 0..1 carburettor ice (start-up piston aircraft, moist air, low power)
     fuelStarveT: 0,        // seconds the fuel selector has been OFF (the lines run dry after ~12 s)
     engineRunning: true,   // is the engine actually turning under its own power
     batteryCharge: 1,      // 0..1; alternator recharges, loads drain
@@ -131,22 +133,24 @@ export function resetSystems(ac) {
   ac._flapJam = null; ac.gyro = null;
   ac.breakers = { avn: true, ap: true, flap: true };
   // Ready-to-fly: master on, mags BOTH, mixture rich, engine turning, full battery.
-  ac.sys = { battery: true, mags: 'BOTH', mixture: 1, fuel: 'BOTH', lights: { land: true, nav: true, strobe: true, beacon: true } };
-  ac.fuelStarveT = 0;
+  ac.sys = { battery: true, mags: 'BOTH', mixture: 1, fuel: 'BOTH', lights: { land: true, nav: true, strobe: true, beacon: true },
+    carbHeat: false, primes: 2, xpdr: 1200 };
+  ac.fuelStarveT = 0; ac.carbIce = 0;
   ac.engineRunning = true; ac.batteryCharge = 1; ac.crankT = 0; ac.avionics = true;
 }
 
 // Cold & dark (v5-R3): master OFF, mags OFF, mixture cut, engine stopped. The
 // player must run the start sequence. Battery is charged — it's just switched off.
 export function setColdStart(ac) {
-  ac.sys = { battery: false, mags: 'OFF', mixture: 0, fuel: 'BOTH', lights: { land: false, nav: false, strobe: false, beacon: false } };
+  ac.sys = { battery: false, mags: 'OFF', mixture: 0, fuel: 'BOTH', lights: { land: false, nav: false, strobe: false, beacon: false },
+    carbHeat: false, primes: 0, xpdr: 1200 };   // a cold engine wants priming
   ac.engineRunning = false; ac.spool = 0; ac.crankT = 0;
   ac.batteryCharge = 1; ac.avionics = false;
 }
 
 // Piston start/electrical state machine. Only meaningful for p.startup aircraft;
 // everything else just mirrors the engineFailed flag so behaviour is unchanged.
-export function updateEngineSystems(ac, dt) {
+export function updateEngineSystems(ac, dt, env = null, throttle = 0) {
   const p = ac.p;
   if (!p.startup) {
     ac.engineRunning = !ac.engineFailed;
@@ -164,12 +168,22 @@ export function updateEngineSystems(ac, dt) {
   // fuel selector OFF: the engine runs on what is in the lines for ~12 s, then starves
   ac.fuelStarveT = s.fuel === 'OFF' ? (ac.fuelStarveT || 0) + dt : 0;
   const fuelOk = ac.fuelKg > 0 && ac.fuelStarveT < 12;
+  // Carburettor ice: moist air (env.carbIceRisk 0..1: the weather) cools the
+  // venturi most at low power; ice chokes the engine until it quits. Carb heat
+  // melts it at the price of ~10% power. Healthy dry air = risk 0 = untouched.
+  const risk = env && env.carbIceRisk ? env.carbIceRisk : 0;
+  if (ac.engineRunning && (risk > 0 || ac.carbIce > 0 || s.carbHeat)) {
+    if (s.carbHeat) ac.carbIce = Math.max(0, ac.carbIce - 0.02 * dt);
+    else ac.carbIce = Math.min(1, ac.carbIce + risk * 0.0045 * (1.15 - 0.75 * throttle) * dt);
+  }
   if (ac.engineRunning) {
-    // Runs on its own magnetos; quits if mags cut, mixture starved, out of fuel, or failed.
-    if (!magsHot || !mixOk || !fuelOk || ac.engineFailed) ac.engineRunning = false;
+    // Runs on its own magnetos; quits if mags cut, mixture starved, out of fuel, iced, or failed.
+    if (!magsHot || !mixOk || !fuelOk || ac.engineFailed || ac.carbIce > 0.95) ac.engineRunning = false;
   } else if (s.mags === 'START' && s.battery && ac.batteryCharge > 0.12 && mixOk && fuelOk && !ac.engineFailed) {
     ac.crankT += dt;                       // starter cranking
-    if (ac.crankT > 1.6) { ac.engineRunning = true; ac.crankT = 0; }
+    // primer: 1-3 strokes catch at once; unprimed it takes longer; over-primed it floods
+    const pr = s.primes ?? 2, need = pr === 0 ? 3.5 : pr <= 3 ? 1.6 : 6.0;
+    if (ac.crankT > need) { ac.engineRunning = true; ac.crankT = 0; s.primes = 0; }
   } else {
     ac.crankT = 0;
   }
@@ -267,7 +281,7 @@ export function step(ac, controls, env, dt) {
   const densityRatio = rho / RHO0;
   const eng = p.engine;
   // v5-R3: update the piston start/electrical state (no-op for hot aircraft).
-  updateEngineSystems(ac, dt);
+  updateEngineSystems(ac, dt, env, controls.throttle);
   // A startup aircraft only makes power when actually running; failed engine cuts all.
   const noPower = ac.engineFailed || (p.startup && !ac.engineRunning);
   const cmdThrottle = noPower ? 0 : controls.throttle;
@@ -286,6 +300,7 @@ export function step(ac, controls, env, dt) {
     else ac.rpmNorm = 0.25 + 0.75 * ac.spool;
   }
   if (ac.systems.power === false && !noPower) thrust *= 0.5;   // rough-running engine
+  if (p.startup && (ac.carbIce > 0 || ac.sys.carbHeat)) thrust *= (1 - 0.6 * ac.carbIce) * (ac.sys.carbHeat ? 0.9 : 1);
   F = vAdd(F, v3(thrust, 0, 0));
   ac.thrust = thrust;
 

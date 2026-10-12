@@ -721,6 +721,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
           headingRad: Math.atan2(-2 * (q.x * q.z - q.w * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)),
           toAim: 300 - fr.along(ac.pos),
           ai: world.aiTraffic?.() || null,
+          squawk: ac.sys?.xpdr ?? 1200,
         }, dt);
       }
 

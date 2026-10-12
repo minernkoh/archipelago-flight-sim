@@ -169,7 +169,8 @@ export function createCockpit(cfg, hud, p = null) {
     // steam cockpits: light switches, fuel selector (start-up aircraft) and the trim wheel
     ...(glass ? [] : [
       { id: 'lt-land', label: 'LAND' }, { id: 'lt-nav', label: 'NAV' }, { id: 'lt-strb', label: 'STRB' }, { id: 'lt-bcn', label: 'BCN' },
-      ...(p?.startup ? [{ id: 'fuel', label: 'FUEL' }] : []),
+      ...(p?.startup ? [{ id: 'fuel', label: 'FUEL' }, { id: 'carb', label: 'CARB' }, { id: 'prime', label: 'PRIME' }] : []),
+      { id: 'xpdr', label: 'XPDR' },
       { id: 'trim-dn', label: 'TRM ▼' }, { id: 'trim-up', label: 'TRM ▲' },
     ]),
     // glass cockpits tune NAV 1 here (the steam panels have it in the radio stack)

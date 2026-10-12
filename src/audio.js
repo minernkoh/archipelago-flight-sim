@@ -381,7 +381,7 @@ export function createAudio() {
           setP('ab', 0, t);
         }
         setP('gain', alive ? 1 : 0, t, 0.05);
-        setP('misfire', ac.systems?.power === false ? 1 : 0, t);
+        setP('misfire', ac.systems?.power === false || (ac.carbIce || 0) > 0.35 ? 1 : 0, t);   // rough: failure or carb ice
       }
       const legacy = !synth;
       const propOn = legacy && alive && !isJet;

@@ -51,6 +51,7 @@ export const PHRASES = {
   sequence:  (c) => `${c.callsign}, number two, follow the ${c.traffic} on final${c.wake ? ', caution wake turbulence' : ''}.`,
   trafficInfo: (c) => `${c.callsign}, traffic, ${c.clock} o'clock, ${c.miles} ${c.miles === 'one' ? 'mile' : 'miles'}, ${c.rel}, ${c.traffic}${c.wake ? ' on final' : ' in the pattern'}.`,
   goAroundTraffic: (c) => `${c.callsign}, go around, traffic on the runway. Climb runway heading.`,
+  emergency: (c) => `${c.callsign}, ${c.field} tower, roger your emergency squawk. All runways available, wind calm, runway ${c.rwy}, cleared to land.`,
 };
 const NUM = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
 
@@ -115,7 +116,7 @@ export function createAtc({ field, rwyName, callsign, say } = {}) {
   let phase = 'hold';
   let sinceCall = LIMITS.minGapSec;   // allow the very first call immediately
   let armed = true;
-  let sinceTraffic = 1e9, sequenced = false;
+  let sinceTraffic = 1e9, sequenced = false, emergencyAck = false;
 
   function emit(id, extra) {
     const text = buildPhrase(id, extra ? { ...ctx, ...extra } : ctx);
@@ -128,7 +129,7 @@ export function createAtc({ field, rwyName, callsign, say } = {}) {
     get phase() { return phase; },
     get context() { return { ...ctx }; },
     // Called on a fresh flight: back to holding short.
-    reset() { phase = 'hold'; sinceCall = LIMITS.minGapSec; armed = true; sinceTraffic = 1e9; sequenced = false; },
+    reset() { phase = 'hold'; sinceCall = LIMITS.minGapSec; armed = true; sinceTraffic = 1e9; sequenced = false; emergencyAck = false; },
     // ATC off (settings) or a lesson in progress: go quiet without losing phase.
     setArmed(on) { armed = !!on; },
 
@@ -139,6 +140,9 @@ export function createAtc({ field, rwyName, callsign, say } = {}) {
       if (sinceCall < LIMITS.minGapSec) return null;
 
       const { onGround, agl = 0, vsFpm = 0, cross = 0, touchdown = null, groundSpeedKt = 0 } = snap;
+      // squawk 7700: the tower clears the way at once (once per squawk)
+      if (snap.squawk === 7700 && !emergencyAck && !onGround) { emergencyAck = true; phase = 'final'; return emit('emergency'); }
+      if (snap.squawk !== 7700) emergencyAck = false;
       const lined = Math.abs(cross) < LIMITS.inboundCross;
       // v12 traffic: ai = aitraffic state (or null), toAim = our distance before the aim point
       const ai = snap.ai || null;
@@ -204,7 +208,8 @@ export function createAtc({ field, rwyName, callsign, say } = {}) {
 
         case 'final':
           if (touchdown) { phase = 'down'; return emit(touchdown.onRunway ? 'landed' : 'offField'); }
-          if (tooSteep(vsFpm, groundSpeedKt) || Math.abs(cross) > LIMITS.unstableCross) {
+          // an emergency aircraft lands however it can: never sent around
+          if (!emergencyAck && (tooSteep(vsFpm, groundSpeedKt) || Math.abs(cross) > LIMITS.unstableCross)) {
             phase = 'cruise';
             return emit('goAround');
           }
