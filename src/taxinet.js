@@ -22,8 +22,9 @@ const hyp = Math.hypot;
 export function defaultTaxiLayout(rwy, { side = -1, offset = 78, width = 23 } = {}) {
   const h = rwy.headingRad;
   const fx = Math.cos(h), fz = -Math.sin(h), rx = Math.sin(h), rz = Math.cos(h);
-  const W = (u, v) => [fx * u + rx * v, fz * u + rz * v];
   const spawnU = rwy.spawn.x * fx + rwy.spawn.z * fz;
+  const v0 = rwy.spawn.x * rx + rwy.spawn.z * rz;            // centreline offset (parallel runways)
+  const W = (u, v) => [fx * u + rx * (v + v0), fz * u + rz * (v + v0)];
   const x0 = Number.isFinite(rwy.x0) ? rwy.x0 : spawnU - 60;
   const x1 = Number.isFinite(rwy.x1) ? rwy.x1 : spawnU + 2500;
   const V = side * offset, hw = rwy.halfWidth || 15;
@@ -254,8 +255,9 @@ export function planGround(rwy, layout, { aim, vapp, minRoll = 700 } = {}) {
   if (!layout || !layout.lines?.length || !layout.stand) return null;
   const h = rwy.headingRad;
   const fx = Math.cos(h), fz = -Math.sin(h), rx = Math.sin(h), rz = Math.cos(h);
-  const U = (x, z) => x * fx + z * fz, Vf = (x, z) => x * rx + z * rz;
-  const W = (u, v) => [fx * u + rx * v, fz * u + rz * v];
+  const v0 = rwy.spawn.x * rx + rwy.spawn.z * rz;            // centreline offset (parallel runways)
+  const U = (x, z) => x * fx + z * fz, Vf = (x, z) => x * rx + z * rz - v0;
+  const W = (u, v) => [fx * u + rx * (v + v0), fz * u + rz * (v + v0)];
   const hw = rwy.halfWidth || 20;
   const spawnU = rwy.spawn.x * fx + rwy.spawn.z * fz;
   const x1 = Number.isFinite(rwy.x1) ? rwy.x1 : aim + 2500;

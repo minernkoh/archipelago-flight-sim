@@ -146,7 +146,9 @@ export function createAtc({ field, rwyName, callsign, say } = {}) {
       const lined = Math.abs(cross) < LIMITS.inboundCross;
       // v12 traffic: ai = aitraffic state (or null), toAim = our distance before the aim point
       const ai = snap.ai || null;
-      const aiShort = !!ai && (ai.onRunway || (ai.phase === 'final' && ai.toAim < LIMITS.shortFinal));
+      // traffic on a parallel runway gets traffic calls, never holds, sequencing or go-arounds
+      const rai = ai && !ai.otherRunway ? ai : null;
+      const aiShort = !!rai && (rai.onRunway || (rai.phase === 'final' && rai.toAim < LIMITS.shortFinal));
       const tx = ai ? { traffic: ai.type || 'Cessna', wake: !!ai.heavy } : null;
 
       switch (phase) {
@@ -196,10 +198,10 @@ export function createAtc({ field, rwyName, callsign, say } = {}) {
           if (agl < LIMITS.finalAgl && unstable) { phase = 'cruise'; return emit('goAround'); }
           // traffic ahead of us on final, or on the runway: sequence, and
           // only clear us to land once the runway is ours
-          const ahead = !!ai && (ai.onRunway || (ai.phase === 'final' && snap.toAim != null && ai.toAim < snap.toAim));
+          const ahead = !!rai && (rai.onRunway || (rai.phase === 'final' && snap.toAim != null && rai.toAim < snap.toAim));
           if (ahead && !sequenced) { sequenced = true; return emit('sequence', tx); }
-          if (ai && ai.onRunway && agl < LIMITS.goAroundBelow) { phase = 'cruise'; sequenced = false; return emit('goAroundTraffic'); }
-          if (agl < LIMITS.finalAgl && !unstable && !(ai && ai.onRunway)) { phase = 'final'; sequenced = false; return emit('clearLand'); }
+          if (rai && rai.onRunway && agl < LIMITS.goAroundBelow) { phase = 'cruise'; sequenced = false; return emit('goAroundTraffic'); }
+          if (agl < LIMITS.finalAgl && !unstable && !(rai && rai.onRunway)) { phase = 'final'; sequenced = false; return emit('clearLand'); }
           if (agl < LIMITS.finalAgl) return null;                         // waiting on the runway
           // Climbed away or wandered off the centerline — stop expecting them.
           if (agl > LIMITS.inboundAgl || !lined) phase = 'cruise';

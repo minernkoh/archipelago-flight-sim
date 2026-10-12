@@ -286,22 +286,41 @@ export function createTraffic(scene, map, opts = {}) {
   const aiNominal = hasRunway ? createCircuitTraffic(rwy) : null;
   const AI_SPACING = aiNominal ? aiNominal.total / aiNominal.speed / 2 : 0;   // seconds between the two aircraft
   let aiT = 0;
-  const aiOut = [{}, {}, {}];
-  // An airliner on a straight-in ILS arrival, timed so its last 2.5 km and
-  // rollout fall in a gap where neither club aircraft is on short final or
-  // the runway (both cycles repeat every two circuit laps).
-  let jet = null, jetMesh = null;
-  if (aiNominal) {
-    // its ground movements follow the map's taxiway network (taxinet.js):
-    // the synthetic parallel taxiway on the fictional maps, OSM taxiways on
-    // the real ones; none (or one that does not serve the runway) keeps the
+  const aiOut = [{}, {}];
+  // Airliners on straight-in ILS arrivals, each timed so its runway use falls
+  // in a gap where neither club aircraft is on short final or the runway (both
+  // cycles repeat every two circuit laps): one on the map's runway, and one
+  // on every other runway the map offers (Singapore's parallel 02C).
+  const airliners = [];
+  function addAirliner(r, layout, id, otherRunway, from) {
+    // ground movements follow the runway's taxiway network (taxinet.js): the
+    // synthetic parallel taxiway on the fictional maps, OSM taxiways on the
+    // real ones; none (or one that does not serve the runway) keeps the
     // simple turn-off
     let ground = null;
     try {
-      const spawnU = rwy.spawn.x * Math.cos(rwy.headingRad) - rwy.spawn.z * Math.sin(rwy.headingRad);
-      ground = planGround(rwy, map.taxiLayout ? map.taxiLayout() : null, { aim: spawnU + 300, vapp: 72 });
+      const spawnU = r.spawn.x * Math.cos(r.headingRad) - r.spawn.z * Math.sin(r.headingRad);
+      ground = planGround(r, layout, { aim: spawnU + 300, vapp: 72 });
     } catch { ground = null; }
-    jet = slotStraightIn(rwy, aiNominal, AI_SPACING, { ground });
+    const traf = slotStraightIn(r, aiNominal, AI_SPACING, { ground, from });
+    const anim = MESH_BUILDERS.heavy();
+    const mesh = anim.group;
+    mesh.rotation.order = 'YXZ';
+    mesh.traverse(o => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+    mesh.visible = false;
+    group.add(mesh);
+    airliners.push({ traf, id, otherRunway, runway: r.name, mesh, anim, avoid: 0,
+      ctl: { elevator: 0, aileron: 0, rudder: 0, throttle: 0.35, flaps: 1, brakes: false },
+      st: { onGround: false, agl: 300, airspeed: 72, groundSpeed: 72, rpmNorm: 0.5, vel: { x: 0, y: 0, z: 0 }, q: { x: 0, y: 0, z: 0, w: 1 }, flapsEff: 1, gearPos: 1 },
+      air: { on: false, x: 0, y: 0, z: 0 } });
+    aiOut.push({});
+    return traf;
+  }
+  let jet = null;
+  if (aiNominal) {
+    jet = addAirliner(rwy, map.taxiLayout ? map.taxiLayout() : null, 2, false, 0);
+    // other runways: offset half a cycle so the arrivals alternate
+    (map.extraRunways ? map.extraRunways() : []).forEach((ex, k) => addAirliner(ex.runway, ex.taxiLayout, 3 + k, true, jet.period / 2));
   }
   // the club aircraft go around if the airliner is still on the runway
   const ai = jet ? createCircuitTraffic(rwy, { occupied: (tt) => jet.occupies(tt) }) : aiNominal;
@@ -318,17 +337,6 @@ export function createTraffic(scene, map, opts = {}) {
     }
   }
   let bank0 = 0, bank1 = 0;
-  let jetAnim = null;
-  if (jet) {
-    jetAnim = MESH_BUILDERS.heavy();
-    jetMesh = jetAnim.group;
-    jetMesh.rotation.order = 'YXZ';
-    jetMesh.traverse(o => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
-    jetMesh.visible = false;
-    group.add(jetMesh);
-  }
-  const jetCtl = { elevator: 0, aileron: 0, rudder: 0, throttle: 0.35, flaps: 1, brakes: false };
-  const jetSt = { onGround: false, agl: 300, airspeed: 72, groundSpeed: 72, rpmNorm: 0.5, vel: { x: 0, y: 0, z: 0 }, q: { x: 0, y: 0, z: 0, w: 1 }, flapsEff: 1, gearPos: 1 };
 
   // ---------- birds ----------
   const birds = new THREE.InstancedMesh(birdGeometry(), new THREE.MeshLambertMaterial({ color: 0xf6f6f4, side: THREE.DoubleSide, flatShading: true }), MAX_FLOCKS * BIRDS_PER_FLOCK);
@@ -434,13 +442,12 @@ export function createTraffic(scene, map, opts = {}) {
 
   // ------------------------------------------------------------------ API --
   const avoidY = [0, 0];
-  const jetAir = { on: false, x: 0, y: 0, z: 0 };
+
   // coordinated TCAS (v12): main.js passes the player's resolution advisory;
   // the intruder it names manoeuvres the complementary way (you CLIMB, it
   // descends), as two TCAS-equipped aircraft coordinate over their datalink
   let coordRa = null;
   const raY = (id) => !coordRa || coordRa.id !== id ? null : coordRa.sense === 'CLIMB' ? -150 : 150;
-  let jetAvoid = 0;
   function update(dt, camPos, t, playerPos = null, ra = null) {
     coordRa = ra;
     if (!enabled) return;
@@ -454,24 +461,24 @@ export function createTraffic(scene, map, opts = {}) {
     }
     writeBoats(t);
     writeBirds(t);
-    jetAir.on = false;
-    if (jet && jetMesh) {
-      const j = jet.at(t);
-      // the airliner flies its RA too (only ever airborne, never below 300 m AGL)
-      const jt = j.visible && j.agl > 300 ? (raY(2) ?? 0) : 0;
-      jetAvoid += Math.max(-8 * dt, Math.min(8 * dt, jt - jetAvoid));
-      if (j.visible && j.agl > 20) { jetAir.on = true; jetAir.x = j.x; jetAir.y = j.y + jetAvoid; jetAir.z = j.z; }
+    for (const A of airliners) {
+      const j = A.traf.at(t);
+      // the airliners fly their RA too (only ever airborne, never below 300 m AGL)
+      const jt = j.visible && j.agl > 300 ? (raY(A.id) ?? 0) : 0;
+      A.avoid += Math.max(-8 * dt, Math.min(8 * dt, jt - A.avoid));
+      A.air.on = j.visible && j.agl > 20;
+      if (A.air.on) { A.air.x = j.x; A.air.y = j.y + A.avoid; A.air.z = j.z; }
       const near = Math.hypot(camPos.x - j.x, camPos.z - j.z) < 20000;
-      jetMesh.visible = j.visible && near;
-      if (jetMesh.visible) {
-        jetMesh.position.set(j.x, j.y + 5.5 + jetAvoid, j.z);
-        jetMesh.rotation.set(0, j.yaw, j.pitch);
-        const ground = j.agl < 1;
-        jetSt.onGround = ground; jetSt.agl = j.agl; jetSt.airspeed = jetSt.groundSpeed = j.speed;
-        jetCtl.throttle = j.departing ? 1 : ground ? (j.phase === 'taxi' || j.phase === 'lineup' ? 0.12 : 0.03) : 0.35;
-        jetCtl.brakes = j.phase === 'parked' || j.phase === 'holding';
-        jetCtl.flaps = j.phase === 'climb' ? 0.33 : j.departing ? 0.33 : 1;
-        try { jetAnim.animate(jetCtl, j.departing ? 0.95 : ground ? 0.3 : 0.55, dt, jetSt); } catch { /* cosmetic only */ }
+      A.mesh.visible = j.visible && near;
+      if (A.mesh.visible) {
+        A.mesh.position.set(j.x, j.y + 5.5 + A.avoid, j.z);
+        A.mesh.rotation.set(0, j.yaw, j.pitch);
+        const ground = j.agl < 1, c = A.ctl, st = A.st;
+        st.onGround = ground; st.agl = j.agl; st.airspeed = st.groundSpeed = j.speed;
+        c.throttle = j.departing ? 1 : ground ? (j.phase === 'taxi' || j.phase === 'lineup' ? 0.12 : 0.03) : 0.35;
+        c.brakes = j.phase === 'parked' || j.phase === 'holding';
+        c.flaps = j.phase === 'climb' ? 0.33 : j.departing ? 0.33 : 1;
+        try { A.anim.animate(c, j.departing ? 0.95 : ground ? 0.3 : 0.55, dt, st); } catch { /* cosmetic only */ }
       }
     }
     if (hasRunway) {
@@ -491,7 +498,7 @@ export function createTraffic(scene, map, opts = {}) {
           if (a.y - (rwy.y || 0) > 60) {
             const rq = raY(i);
             if (rq != null) target = rq;                      // coordinated RA wins
-            for (const th of [playerPos, jetAir.on ? jetAir : null]) {
+            for (const th of [playerPos, ...airliners.map(A => A.air.on ? A.air : null)]) {
               if (!th || target) continue;
               const dx = a.x - th.x, dz = a.z - th.z, dy = a.y - th.y;
               if (dx * dx + dz * dz < 600 * 600 && Math.abs(dy) < 150) target = dy >= 0 || a.y - (rwy.y || 0) < 200 ? 150 : -150;
@@ -523,7 +530,13 @@ export function createTraffic(scene, map, opts = {}) {
     aiStates(t = aiT) {
       if (!enabled || !ai) return [];
       const list = [0, 1].map(i => { const o = Object.assign(aiOut[i], ai.at(t + i * AI_SPACING, -i * AI_SPACING), { id: i }); o.y += avoidY[i]; o.avoidDy = avoidY[i]; o.avoiding = Math.abs(avoidY[i]) > 1; return o; });
-      if (jet) { const j = jet.at(t); if (j.visible) { const o = Object.assign(aiOut[2], j, { id: 2 }); o.y += jetAvoid; o.avoiding = Math.abs(jetAvoid) > 1; list.push(o); } }
+      airliners.forEach((A, k) => {
+        const j = A.traf.at(t);
+        if (!j.visible) return;
+        // otherRunway: traffic on a parallel runway, never a reason to hold you
+        const o = Object.assign(aiOut[2 + k], j, { id: A.id, runway: A.runway, otherRunway: A.otherRunway });
+        o.y += A.avoid; o.avoidDy = A.avoid; o.avoiding = Math.abs(A.avoid) > 1; list.push(o);
+      });
       return list;
     },
     setEnabled(on) { enabled = !!on; group.visible = enabled; },

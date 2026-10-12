@@ -151,6 +151,9 @@ export function createStraightInTraffic(rwy, { out = 14000, vapp = 72, period = 
   const h = rwy.headingRad;
   const fx = Math.cos(h), fz = -Math.sin(h), rx = Math.sin(h), rz = Math.cos(h);
   const spawnU = rwy.spawn.x * fx + rwy.spawn.z * fz;
+  // lateral offset of this runway's centreline from the origin (0 for the
+  // map's main runway, -800 m for Singapore's parallel 02C)
+  const v0 = rwy.spawn.x * rx + rwy.spawn.z * rz;
   const aim = spawnU + 300;
   const x1 = Number.isFinite(rwy.x1) ? rwy.x1 : aim + 2500;
   const hw = rwy.halfWidth || 20;
@@ -186,11 +189,11 @@ export function createStraightInTraffic(rwy, { out = 14000, vapp = 72, period = 
     type, heavy: true, speed: 0, agl: 0, visible: false, departing: false };
   const put = (u, v, y, yaw, spd) => {
     out_.visible = true; out_.u = u; out_.v = v; out_.speed = spd; out_.agl = y;
-    out_.x = fx * u + rx * v; out_.z = fz * u + rz * v; out_.y = (rwy.y || 0) + y; out_.yaw = yaw; out_.bank = 0;
+    out_.x = fx * u + rx * (v + v0); out_.z = fz * u + rz * (v + v0); out_.y = (rwy.y || 0) + y; out_.yaw = yaw; out_.bank = 0;
     return out_;
   };
   const putXZ = (p, phase) => {
-    put(p.x * fx + p.z * fz, p.x * rx + p.z * rz, 0, p.yaw, p.speed);
+    put(p.x * fx + p.z * fz, p.x * rx + p.z * rz - v0, 0, p.yaw, p.speed);
     out_.phase = phase; out_.pitch = 0; out_.toAim = 1e9;
     out_.onRunway = Math.abs(out_.v) < hw + 25 && out_.u > spawnU - 250 && out_.u < x1 + 50;
     return out_;
@@ -280,7 +283,7 @@ export function createStraightInTraffic(rwy, { out = 14000, vapp = 72, period = 
  * two circuit laps. The club aircraft still go around if anything slips
  * (createCircuitTraffic `occupied`).
  */
-export function slotStraightIn(rwy, circuit, spacing, { ground = null } = {}) {
+export function slotStraightIn(rwy, circuit, spacing, { ground = null, from = 0 } = {}) {
   const clubPeriod = circuit.total / circuit.speed;
   let P2 = 2 * clubPeriod;
   const DT = 0.5, N = Math.ceil(clubPeriod / DT);
@@ -320,8 +323,10 @@ export function slotStraightIn(rwy, circuit, spacing, { ground = null } = {}) {
     for (let i = 0; i < 2; i++) if (Math.hypot(cx[2 * k + i] - d.x, cy[2 * k + i] - d.y, cz[2 * k + i] - d.z) < SEP) return false;
     return true;
   });
-  for (let off = 0; off < P2; off += 2) {
+  for (let k = 0; k < P2; k += 2) {
     // with offset `off` the jet's cycle time c happens at absolute t = c - off
+    // (the search starts at `from`, so a second airliner alternates with the first)
+    const off = (from + k) % P2;
     if (arr.some(c => rwyBusy[idx(c - off)])) continue;
     if (!g) return Object.assign(createStraightInTraffic(rwy, { period: P2, offset: off }), { slotted: true });
     const lineStart = probe.dep0 - g.lineup.duration - 3;

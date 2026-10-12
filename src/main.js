@@ -407,12 +407,13 @@ const world = {
     // first, otherwise the nearest
     const list = traffic?.aiStates?.() ?? [];
     if (!list.length) return null;
-    const busy = list.find(a => a.onRunway) || list.find(a => a.phase === 'final' && a.toAim < 2500);
+    // (an airliner on a parallel runway is traffic to watch, never one to wait for)
+    const busy = list.find(a => a.onRunway && !a.otherRunway) || list.find(a => a.phase === 'final' && a.toAim < 2500 && !a.otherRunway);
     if (busy) return busy;
     // aircraft parked, taxiing or holding off the runway are not traffic
     let best = null, bd = Infinity;
     for (const a of list) {
-      if (AI_GROUND_PHASES.has(a.phase)) continue;
+      if (AI_GROUND_PHASES.has(a.phase) || (a.otherRunway && a.onRunway)) continue;
       const d = Math.hypot(a.x - pos.x, a.y - pos.y, a.z - pos.z); if (d < bd) { bd = d; best = a; }
     }
     return best;

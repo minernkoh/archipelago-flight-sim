@@ -133,6 +133,7 @@ export function resetSystems(ac) {
   ac.systems.oil = true;
   ac._flapJam = null; ac.gyro = null;
   ac.oilQty = 1; ac.oilT = null; ac.oilLowT = 0;      // oil warms up again from the next update
+  ac.cht = null; ac.chtRate = 0; ac.shockCooling = false; ac.engineWear = 0;   // a fresh engine on every respawn
   ac.breakers = { avn: true, ap: true, flap: true };
   // Ready-to-fly: master on, mags BOTH, mixture rich, engine turning, full battery.
   ac.sys = { battery: true, mags: 'BOTH', mixture: 1, fuel: 'BOTH', lights: { land: true, nav: true, strobe: true, beacon: true },
@@ -149,6 +150,7 @@ export function setColdStart(ac) {
   ac.engineRunning = false; ac.spool = 0; ac.crankT = 0;
   ac.batteryCharge = 1; ac.avionics = false;
   ac.oilT = 59; ac.oilP = 0; ac.oilQty = 1; ac.oilLowT = 0;   // a cold engine: oil at ambient
+  ac.cht = [70, 70, 70, 70]; ac.egt = 70;
 }
 
 // Oil system (piston engines, v12): pressure follows rpm, reads high on cold
@@ -191,6 +193,35 @@ export function mixtureState(mixture, rho) {
   const dr = r - 0.93;
   const egtShape = 1 - (dr > 0 ? 0.55 : 1.6) * dr * dr;
   return { r, power, fuelFlow: mixture, egtShape, rough: r < 0.75, quits: r < 0.55 };
+}
+
+// Cylinder heads (start-up pistons, v12): four CHTs heated by the exhaust and
+// cooled by the airflow over the fins, each with its own offset (the rear
+// cylinders run hot). Shock cooling (the hottest head falling faster than
+// 50 F/min, e.g. a power-off descent at speed) and heads over 460 F add to
+// `engineWear` (0..1), which costs power. Healthy flight never wears it, so
+// the cruise hash is untouched.
+const CHT_OFFSET = [-14, 4, 18, -6];
+function updateCylinders(ac, dt, V) {
+  const kt = V * 1.9438;
+  if (!ac.cht) ac.cht = CHT_OFFSET.map(o => (ac.engineRunning ? 360 : 70) + (ac.engineRunning ? o : 0));
+  const hot0 = Math.max(...ac.cht);
+  for (let i = 0; i < 4; i++) {
+    const target = ac.engineRunning
+      ? 70 + (ac.egt - 70) * 0.27 + CHT_OFFSET[i] - 0.9 * Math.max(0, kt - 70)
+      : 70;
+    // heads heat in ~90 s; the fins shed heat faster at speed
+    const tau = target > ac.cht[i] ? 90 : Math.max(25, 160 - kt);
+    ac.cht[i] += (target - ac.cht[i]) * Math.min(1, dt / tau);
+  }
+  const hot = Math.max(...ac.cht);
+  const rate = dt > 0 ? (hot - hot0) / dt * 60 : 0;            // F per minute
+  ac.chtRate = (ac.chtRate ?? 0) + (rate - (ac.chtRate ?? 0)) * Math.min(1, dt / 3);
+  ac.shockCooling = ac.engineRunning && ac.chtRate < -50 && hot > 200;
+  let wear = 0;
+  if (ac.shockCooling) wear += (-ac.chtRate - 50) * 2e-6 * dt;
+  if (hot > 460) wear += (hot - 460) * 4e-6 * dt;
+  if (wear > 0) ac.engineWear = Math.min(1, (ac.engineWear || 0) + wear);
 }
 
 // Piston start/electrical state machine. Only meaningful for p.startup aircraft;
@@ -347,6 +378,8 @@ export function step(ac, controls, env, dt) {
     ac.abOn = false;
     if (p.startup && !ac.engineRunning) ac.rpmNorm = ac.crankT > 0 ? 0.1 : 0; // cranking blip or dead prop
     else ac.rpmNorm = 0.25 + 0.75 * ac.spool;
+    // mag check: one magneto fires one plug per cylinder, a slower burn: ~75 rpm drop at run-up
+    if (p.startup && ac.engineRunning && (ac.sys.mags === 'L' || ac.sys.mags === 'R')) { ac.rpmNorm *= 0.94; thrust *= 0.95; }
   }
   if (ac.systems.power === false && !noPower) thrust *= 0.5;   // rough-running engine
   if (p.startup && (ac.carbIce > 0 || ac.sys.carbHeat)) thrust *= (1 - 0.6 * ac.carbIce) * (ac.sys.carbHeat ? 0.9 : 1);
@@ -360,7 +393,10 @@ export function step(ac, controls, env, dt) {
     const mx = mixtureState(ac.sys.mixture, rho);
     const target = ac.engineRunning ? (900 + 600 * (0.3 + 0.7 * ac.spool)) * mx.egtShape : 70;
     ac.egt = (ac.egt ?? target) + (target - (ac.egt ?? target)) * Math.min(1, dt / 6);
+    updateCylinders(ac, dt, V);
   }
+  // engine wear (shock cooling, over-temperature) costs power; zero when healthy
+  if (ac.engineWear > 0) thrust *= 1 - 0.35 * ac.engineWear;
   F = vAdd(F, v3(thrust, 0, 0));
   ac.thrust = thrust;
 

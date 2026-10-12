@@ -187,8 +187,15 @@ export const runway = {
   x0: 0, x1: RWY_LEN, halfWidth: RWY_HALFW,
 };
 
-const RWY2_V = -800; // parallel 02C, decorative but landable
+const RWY2_V = -800; // parallel 02C, landable; the AI airliners use it too
 export const TAXI = taxinet.defaultTaxiLayout(runway);
+// 02C as an active runway for the second AI airliner (traffic.js): same frame,
+// centreline 800 m to the left, its own parallel taxiway and stand further left
+export const runway2 = {
+  spawn: { x: runway.spawn.x + PERP.x * RWY2_V, z: runway.spawn.z + PERP.z * RWY2_V },
+  headingRad: RWY_HEADING, y: RWY_Y, name: '02C', x0: 0, x1: RWY_LEN, halfWidth: RWY_HALFW,
+};
+export const TAXI2 = taxinet.defaultTaxiLayout(runway2);
 export function isRunway(x, z) {
   const { u, v } = toRunwayFrame(x, z);
   if (u > -30 && u < RWY_LEN + 30) {
@@ -249,7 +256,7 @@ export function createScenery(scene) {
 
   runwayStrip(g, 0, '02L', '20R');
   runwayStrip(g, RWY2_V, '02C', '20C');
-  g.add(taxiwayDressing(TAXI, RWY_Y, taxinet));
+  g.add(taxiwayDressing(TAXI, RWY_Y, taxinet), taxiwayDressing(TAXI2, RWY_Y, taxinet));
   addChangi(g, reg, RWY_Y, FWD);
 
   const gy = (x, z) => height(x, z);
@@ -291,6 +298,8 @@ export const singaporeMap = {
   isRunway,
   runway,
   taxiLayout: () => TAXI,
+  // other runways the AI traffic works (traffic.js): 02C, with its own taxiways
+  extraRunways: () => [{ runway: runway2, taxiLayout: TAXI2 }],
   createScenery,
   raceCourse,
   finalGateDir: { x: FWD.x, z: FWD.z },  // last gate faces down 02L

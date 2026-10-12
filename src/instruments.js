@@ -104,8 +104,8 @@ function arc(x, cx, cy, r, a0, a1, col, w) {
   x.strokeStyle = col; x.lineWidth = w;
   x.beginPath(); x.arc(cx, cy, r, a0 - Math.PI / 2, a1 - Math.PI / 2); x.stroke();
 }
-function label(x, cx, cy, t, fs) {
-  x.fillStyle = '#9aa0a6'; x.font = `${fs}px "B612", Arial, sans-serif`; x.textAlign = 'center'; x.textBaseline = 'middle';
+function label(x, cx, cy, t, fs, col = '#9aa0a6') {
+  x.fillStyle = col; x.font = `${fs}px "B612", Arial, sans-serif`; x.textAlign = 'center'; x.textBaseline = 'middle';
   x.fillText(t, cx, cy);
 }
 
@@ -296,7 +296,13 @@ export function drawSteamPanel(x, W, H, ac, hud, ui = null) {
   const cap = num(ac.p?.fuel?.capacityKg, 1) || 1;
   smallGauge(x, ex, gy + dy, r * 0.5, num(ac.fuelKg, 0) / cap * 0.97, 'FUEL', 0.98, true);
   // EGT (lean by it: peak, then richen ~50 F) above the tachometer
-  if (ac.p?.startup) label(x, ex, gy - r * 0.84, `EGT ${Math.round(num(ac.egt, 70))}\u00b0F`, r * 0.15);
+  if (ac.p?.startup) {
+    // EGT and the hottest cylinder head (amber when shock cooling or over 460 F)
+    const cht = Array.isArray(ac.cht) ? ac.cht : [70], hot = Math.max(...cht), ci = cht.indexOf(hot) + 1;
+    label(x, ex, gy - r * 0.84, `EGT ${Math.round(num(ac.egt, 70))}\u00b0F`, r * 0.15);
+    const warn = ac.shockCooling || hot > 460;
+    label(x, ex, gy - r * 0.68, `CHT${ci} ${Math.round(hot)}\u00b0F`, r * 0.13, warn ? '#ffb300' : '#9aa0a6');
+  }
   // radio stack: COM + NAV, then the autopilot (KAP 140 style) when clickable
   const rx = ex + r * 1.0, rw = W - rx - W * 0.03;
   const radios = ui ? 2 : 3;

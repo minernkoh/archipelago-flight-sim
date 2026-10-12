@@ -1653,6 +1653,20 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
     ac.sys.mixture = 0.56; fly(ac, c, 1, pin); const rough = ac.mixRough && ac.engineRunning;
     ac.sys.mixture = 0.42; fly(ac, c, 1, pin);
     check('mixture: too lean runs rough, then the engine quits', rough && !ac.engineRunning, `rough ${rough}, running ${ac.engineRunning}`); }
+  // cylinder heads: warm cruise in the normal band, rear cylinder hottest; a
+  // power-off dive shock-cools them and wears the engine; wear costs power
+  { const ac = mk('c172'); const c = cs({ throttle: 0.7 });
+    const pin = (vx, vy = 0) => () => { ac.q = { x: 0, y: 0, z: 0, w: 1 }; ac.omega = { x: 0, y: 0, z: 0 }; ac.vel = { x: vx, y: vy, z: 0 }; ac.pos.y = 1000; };
+    fly(ac, c, 600, pin(55)); const cruise = ac.cht.map(v => Math.round(v)), wear0 = ac.engineWear || 0, shock0 = ac.shockCooling;
+    let shocked = false; c.throttle = 0; fly(ac, c, 90, () => { pin(75, -8)(); if (ac.shockCooling) shocked = true; });
+    check('CHT: warm cruise 330-440 F with the rear cylinder hottest, no wear; a power-off dive shock-cools and wears the engine',
+      Math.min(...cruise) > 330 && Math.max(...cruise) < 440 && cruise.indexOf(Math.max(...cruise)) === 2 && wear0 === 0 && !shock0 && shocked && ac.engineWear > 0,
+      `cruise ${cruise.join('/')} F, wear after the dive ${ac.engineWear?.toExponential(2)}`);
+    const a = mk('c172'), b = mk('c172'); b.engineWear = 0.4; const cc = cs({ throttle: 1 }); fly(a, cc, 3); fly(b, cc, 3);
+    check('engine wear costs power (40% wear -> -14% thrust)', Math.abs(b.thrust / a.thrust - 0.86) < 0.02, (b.thrust / a.thrust).toFixed(3)); }
+  { const a = mk('c172'), b = mk('c172'); const c = cs({ throttle: 0.6 }); b.sys.mags = 'L'; fly(a, c, 3); fly(b, c, 3);
+    const drop = (a.rpmNorm - b.rpmNorm) * 2000;              // panel tach: 700 + 2000 x rpmNorm
+    check('mag check: one magneto drops ~50-125 rpm and a little power, engine keeps running', drop > 50 && drop < 125 && b.engineRunning && b.thrust < a.thrust, `${drop.toFixed(0)} rpm drop`); }
   // electrical (jet without a start sequence): battery carries ~7 min, then the AP drops out
   { const ac = mk('heavy', 125); const c = cs({ throttle: 0.55 }); const ap = createAutopilot();
     const ctl = { state: c, axisActive: () => false }; step(ac, c, env, 1 / 120); ap.toggleMaster(ac, ctl); ap.toggleIas(ac, ctl); ap.sel.ias = 125;
@@ -1794,6 +1808,26 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
       worst.n > 0 && both === 0 && gas > 0 && gaLow > 40, `${worst.n} s of conflict unseparated -> ${both} with go-arounds (${gas}), lowest over the aim point ${gaLow.toFixed(0)} m`);
     void bad;
   }
+  { // Singapore's parallel 02C: a second airliner on its own centreline, taxiways and stand
+    const sg = await import('../src/maps/singapore.js');
+    const tn = await import('../src/taxinet.js');
+    const r2 = sg.runway2, h = r2.headingRad, rx = Math.sin(h), rz = Math.cos(h), fx = Math.cos(h), fz = -Math.sin(h);
+    const ai2 = createCircuitTraffic(sg.runway), P = ai2.total / ai2.speed;
+    const sU = r2.spawn.x * fx + r2.spawn.z * fz;
+    const gp = tn.planGround(r2, sg.TAXI2, { aim: sU + 300, vapp: 72 });
+    const j2 = slotStraightIn(r2, ai2, P / 2, { ground: gp, from: P });
+    let offLine = 0, onRwyOk = true; const seen = new Set();
+    for (let t = 0; t < j2.period; t += 1) {
+      const j = j2.at(t); if (!j.visible) continue; seen.add(j.phase);
+      const v = j.x * rx + j.z * rz;                                  // lateral position in the 02L frame
+      if ((j.phase === 'final' || j.phase === 'runway' || j.phase === 'departure') && Math.abs(v - (-800)) > 1) offLine++;
+      if (j.phase === 'runway' && !sg.isRunway(j.x, j.z)) onRwyOk = false;
+    }
+    check('Singapore 02C: the second airliner flies its own centreline 800 m left, lands on 02C, parks and departs',
+      !!j2.ground && offLine === 0 && onRwyOk && ['final', 'runway', 'taxi', 'parked', 'holding', 'lineup', 'departure'].every(p => seen.has(p)),
+      `${offLine} samples off the 02C centreline, phases ${[...seen].join(',')}`);
+    check('Singapore offers 02C to the AI traffic', sg.singaporeMap.extraRunways?.()[0]?.runway === r2);
+  }
   check('clock positions', clockOf(0, 100, 0) === 12 && clockOf(0, 0, 100) === 3 && clockOf(0, -100, 0) === 6 && clockOf(0, 0, -100) === 9);
 
   const said = [];
@@ -1841,6 +1875,9 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   e.update({ onGround: false, agl: 300, vsFpm: -400, cross: 10, toAim: 6000, ai: aiAt({ phase: 'final', toAim: 3000, y: 160, type: 'Heavy jet', heavy: true }) }, 5);
   e.update({ onGround: false, agl: 290, vsFpm: -400, cross: 10, toAim: 5800, ai: aiAt({ phase: 'final', toAim: 2800, y: 150, type: 'Heavy jet', heavy: true }) }, 5);
   check('ATC: behind an airliner the sequence adds a wake turbulence caution', /follow the Heavy jet on final, caution wake turbulence/.test(said.find(x => x.id === 'sequence')?.t || ''), said.map(x => x.t).join(' | '));
+  const pr = tower();
+  pr.update({ onGround: true, agl: 0, cross: 0, ai: aiAt({ phase: 'runway', onRunway: true, toAim: -100, y: 5, otherRunway: true, type: 'Heavy jet', heavy: true }) }, 0);
+  check('ATC: an airliner on the parallel runway never holds you short', said[0]?.id === 'clearance', said.map(x => x.id).join(','));
   const em = tower();
   em.update({ onGround: false, agl: 800, cross: 0 }, 0);
   em.update({ onGround: false, agl: 600, vsFpm: 0, cross: 3000, squawk: 7700 }, 5);
