@@ -105,10 +105,12 @@ export function createHUD() {
   // Autopilot annunciator + CDI (Phase H)
   const apEl = $('#ap-status');
   const apModes = {
-    hdg: $('#apm-hdg'), alt: $('#apm-alt'), ias: $('#apm-ias'), nav: $('#apm-nav'), wing: $('#apm-wing'),
+    hdg: $('#apm-hdg'), alt: $('#apm-alt'), ias: $('#apm-ias'), nav: $('#apm-nav'), wing: $('#apm-wing'), apr: $('#apm-apr'),
   };
   const apVals = $('#ap-vals'), apWarn = $('#ap-warn');
   const cdiEl = $('#ap-cdi'), cdiNeedle = $('#ap-cdi .needle'), cdiInfo = $('#ap-cdi .info');
+  const gsEl = $('#ap-gs'), gsDiamond = $('#ap-gs b');
+  const annEl = $('#annun'); let annKey = '';
   const pad3 = (n) => String(Math.round(n) % 360).padStart(3, '0');
 
   const papiEl = $('#papi'), papiLights = papiEl.querySelectorAll('i');
@@ -142,6 +144,13 @@ export function createHUD() {
       slipBall.style.transform = `translateX(${px}px)`;
     },
     setCamera(name) { stCam.textContent = name; },
+    // v12: annunciator lights for failed systems (failures.js annunciators())
+    setAnnunciators(list) {
+      const key = list.join(',');
+      if (key === annKey) return;
+      annKey = key;
+      annEl.innerHTML = list.map(a => `<i class="${a === 'ENG' ? 'warning' : ''}">${a}</i>`).join('');
+    },
     // Autopilot mode block + CDI needle. s = createAutopilot().status(ac).
     setAP(s) {
       apEl.classList.toggle('on', s.on);
@@ -150,13 +159,24 @@ export function createHUD() {
       apModes.ias.classList.toggle('active', s.ias);
       apModes.nav.classList.toggle('active', s.nav);
       apModes.wing.classList.toggle('active', s.wing);
+      // APR: white = armed, green = both beams captured
+      apModes.apr.classList.toggle('active', !!(s.apr && s.apr.loc && s.apr.gs));
+      apModes.apr.classList.toggle('armed', !!(s.apr && !(s.apr.loc && s.apr.gs)));
+      apModes.apr.textContent = s.apr ? `APR ${s.apr.loc ? 'LOC' : 'loc'} ${s.apr.gs ? 'GS' : 'gs'}` : 'APR';
       apVals.textContent = s.on
         ? `HDG ${pad3(s.selHdg)}  ALT ${Math.round(s.selAlt * FT / 10) * 10}  IAS ${Math.round(s.selIas * KT)}`
         : '';
       apWarn.classList.toggle('show', !!s.warn);
       const cdi = s.navData;
-      cdiEl.classList.toggle('show', !!cdi);
-      if (cdi) {
+      const ils = s.apr ? s.ils : null;
+      cdiEl.classList.toggle('show', !!cdi || !!ils);
+      gsEl.classList.toggle('show', !!ils);
+      if (ils) {
+        // ILS: dots +-5 full scale, fly-to (needle right = steer right)
+        cdiNeedle.style.transform = `translateX(${(ils.locDots / 5 * 46).toFixed(1)}px)`;
+        gsDiamond.style.top = `${(50 - ils.gsDots / 5 * 50).toFixed(1)}%`;
+        cdiInfo.textContent = `ILS  ${(Math.max(0, ils.dist) / 1852).toFixed(1)} NM`;
+      } else if (cdi) {
         // Deflect the needle toward the course (fly-to): right of course → left needle.
         const px = Math.max(-46, Math.min(46, -cdi.xtk / 500 * 46));
         cdiNeedle.style.transform = `translateX(${px}px)`;
@@ -234,8 +254,8 @@ export function createHUD() {
     update(ac, controls, dt, ringBearing) {
       // v5-R3: no electrical power -> the glass HUD goes dark (panel dims too).
       $('#hud').classList.toggle('unpowered', ac.avionics === false);
-      const kt = ac.airspeed * KT;
-      const altFt = ac.pos.y * FT;
+      const kt = (ac.iasIndicated ?? ac.airspeed) * KT;   // indicated: a blocked pitot freezes it
+      const altFt = (ac.altIndicated ?? ac.pos.y) * FT;   // static-port altimeter
       setSpd(kt); setAlt(altFt);
       spdCur.textContent = Math.round(kt);
       altCur.textContent = Math.round(altFt / 10) * 10;
@@ -247,7 +267,7 @@ export function createHUD() {
       slow += dt;
       if (slow > 0.12) { // cheap text updates at ~8 Hz
         slow = 0;
-        const vs = Math.round(ac.vel.y * FT * 60 / 50) * 50;
+        const vs = Math.round((ac.vsIndicated ?? ac.vel.y) * FT * 60 / 50) * 50;
         vsi.textContent = (vs >= 0 ? '+' : '−') + String(Math.abs(vs)).padStart(4, '0');
         radalt.textContent = Math.max(0, Math.round(ac.agl * FT));
         aoa.textContent = ac.airspeed > 9 ? (ac.alpha * 57.29).toFixed(1) + '°' : '—';

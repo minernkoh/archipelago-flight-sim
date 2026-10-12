@@ -71,7 +71,7 @@ export class EngineSynth {
     this.rand = rng(seed);
     // p = targets as last reported by the sim (~frame rate); s = the values
     // actually used, glided per block so 60 Hz updates never zipper
-    this.p = { rpm: 0, n1: 0, load: 0, alive: 0, crank: 0, dop: 1, cockpit: 0, front: 0, ab: 0, gain: 1 };
+    this.p = { rpm: 0, n1: 0, load: 0, alive: 0, crank: 0, dop: 1, cockpit: 0, front: 0, ab: 0, gain: 1, misfire: 0 };
     this.s = { ...this.p };
     this.loadSlow = 0;
     this.configure(cfg);
@@ -116,7 +116,7 @@ export class EngineSynth {
     S.rpm += (P.rpm - S.rpm) * k; S.n1 += (P.n1 - S.n1) * k; S.load += (P.load - S.load) * k;
     S.dop += (P.dop - S.dop) * kf; S.cockpit += (P.cockpit - S.cockpit) * kf; S.front += (P.front - S.front) * k;
     S.ab += (P.ab - S.ab) * (1 - Math.exp(-dt / 0.15)); S.gain += (P.gain - S.gain) * kf;
-    S.alive = P.alive; S.crank = P.crank;
+    S.alive = P.alive; S.crank = P.crank; S.misfire = P.misfire;
     this.loadSlow += (S.load - this.loadSlow) * (1 - Math.exp(-dt / 0.5));
     if (this.cfg.kind === 'piston') this.renderPiston(out, n, offset);
     else this.renderFan(out, n, offset);
@@ -161,7 +161,8 @@ export class EngineSynth {
         this.cyc += revPerSample;
         if (this.cyc >= this.nextFire) {
           const k = this.cylGain[this.cyl];
-          const a = fireAmp * k * (1 + roughK * (r() * 2 - 1));
+          // a rough-running engine (failures.js 'power') drops ~1 in 3 firings
+          const a = (P.misfire > 0.5 && alive && r() < 0.32 ? 0.08 : 1) * fireAmp * k * (1 + roughK * (r() * 2 - 1));
           // compression-only "chuff" when cranking; a real firing otherwise
           this.pulse += a; this.rasp += a * (alive ? 0.5 + 0.6 * load : 0.2); this.thump += a * 0.6;
           this.cyl = (this.cyl + 1) % c.cylinders;

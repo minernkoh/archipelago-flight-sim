@@ -73,7 +73,13 @@ export function createAircraft(opts = {}) {
     fuelFrac: 1,
     iasIndicated: 0,
     eas: 0, mach: 0, damage: 0, damageCause: '', flapsEff: 0,
-    systems: { engine: true, electrical: true, hydraulics: true, gear: true, pitot: true },
+    // v12: every entry now has a consequence (see failSystem). power = full
+    // engine power available; flaps = flap drive; vacuum = the steam gyros'
+    // vacuum pump; static = the static port (altimeter + VSI).
+    systems: { engine: true, electrical: true, hydraulics: true, gear: true, pitot: true,
+      power: true, flaps: true, vacuum: true, static: true },
+    altIndicated: opts.pos ? opts.pos.y : 1000, vsIndicated: 0,   // static-port instruments
+    gyro: null,            // drifting gyro attitude after a vacuum failure, else null
     // v5-R3: piston start/electrical state (only exercised for p.startup aircraft).
     // Defaults are ready-to-fly so every existing caller spawns hot.
     sys: { battery: true, mags: 'BOTH', mixture: 1 }, // player switch positions
@@ -93,11 +99,23 @@ export function createAircraft(opts = {}) {
   return ac;
 }
 
-// Systems/failure framework. true = healthy. Engine + pitot have live
-// consequences (see step); electrical/hydraulics/gear are wired as no-ops here
-// and land their consequences in a later phase.
+// Systems/failure framework. true = healthy. Consequences (v12, see step and
+// updateEngineSystems; failures.js schedules them):
+//   engine      total power loss              power     ~50% power, running rough
+//   electrical  alternator dead: the battery  pitot     IAS freezes
+//               runs the avionics ~7 min      static    altimeter freezes, VSI reads 0
+//   vacuum      AI/HI spin down and drift     flaps     flaps jam where they are
+//   hydraulics  (jets) flaps jam              gear      reserved: gear is not yet simulated
+// Only failed systems take a different code path, so healthy flight (and the
+// cruise state hash) is untouched.
 export function failSystem(ac, name) {
-  if (ac.systems && name in ac.systems) ac.systems[name] = false;
+  if (!ac.systems || !(name in ac.systems)) return;
+  ac.systems[name] = false;
+  if (name === 'flaps' || name === 'hydraulics') ac._flapJam = ac.flapsEff ?? 0;
+  if (name === 'vacuum') {
+    const a = attitude(ac);
+    ac.gyro = { pitch: a.pitch, roll: a.roll, heading: a.heading, t: 0, dir: Math.sin(a.heading * 7 + a.pitch * 3) >= 0 ? 1 : -1 };
+  }
 }
 export function resetSystems(ac) {
   ac.systems.engine = true;
@@ -105,6 +123,8 @@ export function resetSystems(ac) {
   ac.systems.hydraulics = true;  // no-op consequence until a later phase
   ac.systems.gear = true;        // no-op consequence until a later phase
   ac.systems.pitot = true;
+  ac.systems.power = true; ac.systems.flaps = true; ac.systems.vacuum = true; ac.systems.static = true;
+  ac._flapJam = null; ac.gyro = null;
   // Ready-to-fly: master on, mags BOTH, mixture rich, engine turning, full battery.
   ac.sys = { battery: true, mags: 'BOTH', mixture: 1 };
   ac.engineRunning = true; ac.batteryCharge = 1; ac.crankT = 0; ac.avionics = true;
@@ -122,7 +142,15 @@ export function setColdStart(ac) {
 // everything else just mirrors the engineFailed flag so behaviour is unchanged.
 export function updateEngineSystems(ac, dt) {
   const p = ac.p;
-  if (!p.startup) { ac.engineRunning = !ac.engineFailed; ac.avionics = true; return; }
+  if (!p.startup) {
+    ac.engineRunning = !ac.engineFailed;
+    if (ac.systems.electrical === false) {
+      // alternator / generators dead: the battery carries the avionics ~7 min
+      ac.batteryCharge = Math.max(0, ac.batteryCharge - 0.0021 * dt);
+      ac.avionics = ac.batteryCharge > 0.1;
+    } else ac.avionics = true;
+    return;
+  }
   const s = ac.sys;
   const magsHot = s.mags === 'L' || s.mags === 'R' || s.mags === 'BOTH' || s.mags === 'START';
   const mixOk = s.mixture > 0.3;
@@ -138,11 +166,12 @@ export function updateEngineSystems(ac, dt) {
   }
   // Battery: alternator recharges while running; loads (and the starter) drain it when off.
   if (s.battery) {
-    const rate = ac.engineRunning ? -0.05 : (0.008 + (s.mags === 'START' ? 0.06 : 0)); // per second
+    const charging = ac.engineRunning && ac.systems.electrical !== false;
+    const rate = charging ? -0.05 : (ac.engineRunning ? 0.0021 : (0.008 + (s.mags === 'START' ? 0.06 : 0))); // per second
     ac.batteryCharge = Math.max(0, Math.min(1, ac.batteryCharge - rate * dt));
   }
   // Instruments have power from the battery (while charged) or the running alternator.
-  ac.avionics = s.battery && (ac.batteryCharge > 0.1 || ac.engineRunning);
+  ac.avionics = s.battery && (ac.batteryCharge > 0.1 || (ac.engineRunning && ac.systems.electrical !== false));
 }
 
 // controls: { elevator -1..1 (+=nose up), aileron -1..1 (+=roll right),
@@ -170,7 +199,12 @@ export function step(ac, controls, env, dt) {
   // Above Vfe the flaps blow back toward retracted rather than failing — the
   // aero reads flapsEff from here on, never controls.flaps. Exactly identity
   // at or below Vfe, so nothing in normal flight changes.
-  const flapsEff = flapBlowback(ac.eas, controls.flaps, p);
+  let flapsEff = flapBlowback(ac.eas, controls.flaps, p);
+  // jammed flaps (flap motor, or hydraulics on the jets) stay where they were
+  if (ac.systems.flaps === false || (ac.systems.hydraulics === false && p.engine.type === 'jet')) {
+    if (ac._flapJam == null) ac._flapJam = ac.flapsEff ?? 0;
+    flapsEff = ac._flapJam;
+  }
   ac.flapsEff = flapsEff;
   // A stopped or windmilling propeller is a large flat-plate drag source. It
   // is why the POH glide (9.0 : 1) is so much worse than the clean airframe
@@ -241,6 +275,7 @@ export function step(ac, controls, env, dt) {
     if (p.startup && !ac.engineRunning) ac.rpmNorm = ac.crankT > 0 ? 0.1 : 0; // cranking blip or dead prop
     else ac.rpmNorm = 0.25 + 0.75 * ac.spool;
   }
+  if (ac.systems.power === false && !noPower) thrust *= 0.5;   // rough-running engine
   F = vAdd(F, v3(thrust, 0, 0));
   ac.thrust = thrust;
 
@@ -476,6 +511,20 @@ export function step(ac, controls, env, dt) {
   // Indicated airspeed (EAS ~ TAS * sqrt(rho/rho0)). A failed pitot freezes the
   // gauge at its last value while true airspeed keeps updating.
   if (ac.systems.pitot !== false) ac.iasIndicated = V * Math.sqrt(densityRatio);
+  // Static port: a blocked one freezes the altimeter and zeroes the VSI.
+  if (ac.systems.static !== false) { ac.altIndicated = ac.pos.y; ac.vsIndicated = ac.vel.y; }
+  else ac.vsIndicated = 0;
+  // Vacuum pump: the gyros spin down over a couple of minutes and the
+  // attitude and heading indications wander off with growing drift.
+  if (ac.gyro) {
+    const g = ac.gyro;
+    g.t += dt;
+    const k = Math.min(1, g.t / 120);                  // spin-down
+    g.roll += g.dir * (0.035 * k + 0.004) * dt;                // rad/s, settles into a lazy bank
+    g.pitch += (-0.012 * k) * dt * Math.sign(Math.sin(g.t * 0.05) + 0.3);
+    g.heading += g.dir * 0.02 * k * dt;
+    g.roll = clamp(g.roll, -1.4, 1.4); g.pitch = clamp(g.pitch, -0.6, 0.6);
+  }
   ac.agl = agl;
   ac.groundSpeed = Math.hypot(ac.vel.x, ac.vel.z);
   ac.stalled = V > 15 && alpha > aStall && !ac.onGround;

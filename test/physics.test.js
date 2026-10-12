@@ -1561,11 +1561,81 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   } finally { globalThis.fetch = offlineFetch; }
 }
 
+// ---- v12: failures (flightModel failSystem + physics/failures.js) ----
+{
+  const { createAircraft, step, attitude, resetOnRunway } = await import('../src/physics/flightModel.js');
+  const { AIRCRAFT } = await import('../src/aircraft/params.js');
+  const { createFailures, failurePool, annunciators, FAILURES } = await import('../src/physics/failures.js');
+  const { createAutopilot } = await import('./../src/autopilot.js');
+  const env = { groundHeight: () => 0, terrainHeight: () => 0, isRunway: () => false };
+  const mk = (id, vx = 55) => { const ac = createAircraft({ pos: { x: 0, y: 1000, z: 0 }, vel: { x: vx, y: 0, z: 0 } }); ac.p = { ...AIRCRAFT[id] }; if (ac.p.fuel) ac.fuelKg = ac.p.fuel.capacityKg; return ac; };
+  const cs = (o = {}) => ({ elevator: 0, aileron: 0, rudder: 0, throttle: 0.6, flaps: 0, brakes: false, trim: 0, ...o });
+  const fly = (ac, c, secs, each) => { for (let i = 0; i < secs * 120; i++) { step(ac, c, env, 1 / 120); each?.(i / 120); } };
+
+  // pitot: IAS freezes while the real airspeed changes
+  { const ac = mk('c172'); const c = cs(); fly(ac, c, 2); ac.p = { ...ac.p }; const { failSystem } = await import('../src/physics/flightModel.js');
+    failSystem(ac, 'pitot'); const ias0 = ac.iasIndicated; c.throttle = 0; c.elevator = -0.1; fly(ac, c, 8);
+    check('failure: blocked pitot freezes the airspeed indicator', ac.iasIndicated === ias0 && Math.abs(ac.airspeed - ias0) > 3, `ind ${ias0.toFixed(1)} true ${ac.airspeed.toFixed(1)}`); }
+  // static: altimeter freezes, VSI reads zero, while the aircraft climbs
+  { const ac = mk('c172'); const c = cs({ throttle: 1, elevator: 0.15 }); fly(ac, c, 1);
+    (await import('../src/physics/flightModel.js')).failSystem(ac, 'static'); const a0 = ac.altIndicated; fly(ac, c, 10);
+    check('failure: blocked static port freezes the altimeter and zeroes the VSI', ac.altIndicated === a0 && ac.vsIndicated === 0 && Math.abs(ac.pos.y - a0) > 15, `alt ind ${a0.toFixed(0)} true ${ac.pos.y.toFixed(0)}`); }
+  // power: half thrust, engine still turning
+  { const a = mk('c172'), b = mk('c172'); const c = cs({ throttle: 1 }); fly(a, c, 3); fly(b, c, 1);
+    (await import('../src/physics/flightModel.js')).failSystem(b, 'power'); fly(b, c, 2);
+    check('failure: rough-running engine makes about half power', Math.abs(b.thrust / a.thrust - 0.5) < 0.08 && b.engineRunning, `${(b.thrust / a.thrust).toFixed(2)}`); }
+  // flaps: jammed where they were
+  { const ac = mk('c172', 35); const c = cs({ flaps: 0.5 }); fly(ac, c, 4); (await import('../src/physics/flightModel.js')).failSystem(ac, 'flaps');
+    const f0 = ac.flapsEff; c.flaps = 1; fly(ac, c, 3); c.flaps = 0; fly(ac, c, 3);
+    check('failure: flap drive failure jams the flaps where they are', Math.abs(ac.flapsEff - f0) < 1e-9 && f0 > 0.3, `jammed at ${f0.toFixed(2)}`); }
+  // vacuum: the gyro attitude wanders off while the aircraft is held level
+  { const ac = mk('c172'); const c = cs(); (await import('../src/physics/flightModel.js')).failSystem(ac, 'vacuum');
+    fly(ac, c, 180, () => { ac.q = { x: 0, y: 0, z: 0, w: 1 }; ac.omega = { x: 0, y: 0, z: 0 }; ac.vel = { x: 55, y: 0, z: 0 }; ac.pos.y = 1000; });
+    check('failure: vacuum pump failure lets the attitude gyro drift (>20 deg in 3 min)', Math.abs(ac.gyro.roll) * 57.3 > 20 && Math.abs(attitude(ac).roll) < 0.01, `gyro roll ${(ac.gyro.roll * 57.3).toFixed(0)} deg`); }
+  // electrical (jet without a start sequence): battery carries ~7 min, then the AP drops out
+  { const ac = mk('heavy', 125); const c = cs({ throttle: 0.55 }); const ap = createAutopilot();
+    const ctl = { state: c, axisActive: () => false }; step(ac, c, env, 1 / 120); ap.toggleMaster(ac, ctl); ap.toggleIas(ac, ctl); ap.sel.ias = 125;
+    (await import('../src/physics/flightModel.js')).failSystem(ac, 'electrical');
+    let onAt5 = null, offAt = null;
+    for (let i = 0; i < 9 * 60 * 120; i++) {
+      ap.update(ac, ctl, 1 / 120); step(ac, c, env, 1 / 120);
+      if (i === 5 * 60 * 120) onAt5 = ac.avionics && ap.on;
+      if (offAt === null && !ac.avionics) offAt = i / 120;
+    }
+    check('failure: alternator failure, battery runs the avionics ~7 min, then the bus and AP drop', onAt5 === true && offAt > 360 && offAt < 480 && !ap.on && !ac.crashed && annunciators(ac).includes('VOLTS'), `off at ${offAt?.toFixed(0)} s, crashed ${ac.crashed}`); }
+  // scheduler: one failure, 2-12 min airborne, never on the ground, deterministic, airframe-aware
+  { const times = [];
+    for (let seed = 1; seed <= 12; seed++) {
+      const f = createFailures({ seed }); f.setMode('random');
+      const ac = mk('c172'); let t = 0, ev = null, n = 0;
+      ac.onGround = true; for (let i = 0; i < 2000; i++) f.update(ac, 1);       // a long time taxiing
+      const groundFired = f.fired.length;
+      ac.onGround = false;
+      for (; t < 900; t += 0.5) { const e = f.update(ac, 0.5); if (e) { ev = e; n++; times.push(t); } }
+      if (groundFired || n !== 1 || !ev) { times.push(-1); }
+    }
+    check('failure scheduler: exactly one failure per flight, 2-12 min airborne, none on the ground', times.length === 12 && times.every(t => t >= 120 && t <= 720), times.map(t => t.toFixed(0)).join(','));
+    const a = createFailures({ seed: 9 }), b = createFailures({ seed: 9 }); a.setMode('random'); b.setMode('random');
+    check('failure scheduler: deterministic for a seed', a.dueIn === b.dueIn);
+    check('failure pool: vacuum only on steam-gauge aircraft, hydraulics only on jets',
+      failurePool(AIRCRAFT.c172).includes('vacuum') && !failurePool(AIRCRAFT.c172).includes('hydraulics')
+      && failurePool(AIRCRAFT.heavy).includes('hydraulics') && !failurePool(AIRCRAFT.heavy).includes('vacuum'));
+    const off = createFailures({ seed: 3 }); off.setMode('off'); const ac = mk('c172'); let any = false;
+    for (let i = 0; i < 2000; i++) if (off.update(ac, 1)) any = true;
+    check('failure scheduler: OFF never fails anything', !any);
+  }
+  // a respawn clears every failure
+  { const ac = mk('c172'); const { failSystem } = await import('../src/physics/flightModel.js');
+    for (const id of Object.keys(FAILURES)) failSystem(ac, id);
+    resetOnRunway(ac, { x: 0, z: 0, y: 0, headingRad: 0 });
+    check('failure: respawn restores every system', Object.values(ac.systems).every(v => v === true) && ac.gyro === null && ac._flapJam == null); }
+}
+
 // ---- v11: autopilot ALT hold auto-trim ----
 // Before the integrators, P-only ALT hold settled 200-400 ft off target on the
 // Extra and Hornet (it needed a standing VS error to hold level-flight pitch).
 {
-  const { flyAltHold } = await import('./aptune.mjs');
+  const { flyAltHold, flyApproach } = await import('./aptune.mjs');
   for (const id of ['c172', 'extra300', 'hornet', 'heavy', 'spirit']) {
     const lim = id === 'heavy' ? 150 : 40;
     const r = flyAltHold(id, { turb: true });
@@ -1573,6 +1643,17 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   }
   // A slow machine (3 fps): poll() recentres untouched axes every frame. The
   // AP must hold from its own command memory, not restart from neutral.
+  // v12 APR: from 12 km out, 1.5 km off the centreline and below the glide-
+  // slope, every type captures both beams and hands over at 200 ft lined up
+  // and on the slope, in calm air and in a 15 kt crosswind with turbulence.
+  for (const id of ['c172', 'extra300', 'hornet', 'heavy', 'spirit']) {
+    for (const wx of [{}, { windKt: 15, windFrom: 180, turb: true }]) {
+      const r = flyApproach(id, wx);
+      const ok = !r.crashed && !r.timeout && r.locCapS && r.gsCapS && Math.abs(r.handoverFt - 200) < 15
+        && Math.abs(r.xtkM) < 20 && Math.abs(r.aboveGsM) < 10 && r.worstGsDots < 2.5 && r.worstLocDots < 2 && r.vsFpm > -1500 && Math.abs(r.bankDeg) < 5;
+      check(`autopilot APR: ${id} ${wx.windKt ? 'crosswind' : 'calm'} approach to minimums`, ok, JSON.stringify(r));
+    }
+  }
   const slow = flyAltHold('c172', { turb: true, recentre: 0.3 });
   check('autopilot holds altitude and wings through 3 fps axis recentring',
     !slow.crashed && slow.on && slow.maxErrFt < 40 && slow.maxBankDeg < 5, JSON.stringify(slow));

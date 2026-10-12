@@ -21,6 +21,7 @@ export const DEFAULTS = {
   quality: 'high',     // v6: 'low' = near terrain only, no shadows | 'high' = both
   post: true,          // bloom + colour grade + sun flare (HIGH quality only; self-disables on slow GPUs)
   autoRes: true,       // dynamic resolution: drop render scale when fps sags
+  failures: 'off',     // v12: 'random' = one system failure at a random moment in free flight
 };
 
 export function loadSettings() {
@@ -52,6 +53,8 @@ const ROWS = [
     values: [true, false], fmt: v => v ? 'ON' : 'OFF' },
   { id: 'coldDark', label: 'COLD & DARK', hint: 'Skyhawk spawns shut down — run the real start checklist (I opens the panel)',
     values: [false, true], fmt: v => v ? 'ON' : 'OFF' },
+  { id: 'failures', label: 'FAILURES', hint: 'RANDOM: one system fails at an unannounced moment in free flight (engine, alternator, vacuum, pitot, static, flaps…)',
+    values: ['off', 'random'], fmt: v => v === 'random' ? 'RANDOM' : 'OFF' },
   { id: 'atc', label: 'ATC', hint: 'tower talks you round the circuit — stays quiet during lessons',
     values: [true, false], fmt: v => v ? 'ON' : 'OFF' },
   { id: 'autoRes', label: 'DYNAMIC RES', hint: 'renders at a lower resolution when the frame rate sags, back up when it recovers',

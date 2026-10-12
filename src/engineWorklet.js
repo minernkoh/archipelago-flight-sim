@@ -4,7 +4,7 @@
 // aircraft over the port.
 import { EngineSynth, ENGINE_SOUNDS } from './engineSynth.js';
 
-const PARAMS = ['rpm', 'n1', 'load', 'alive', 'crank', 'dop', 'cockpit', 'front', 'ab', 'gain'];
+const PARAMS = ['rpm', 'n1', 'load', 'alive', 'crank', 'dop', 'cockpit', 'front', 'ab', 'gain', 'misfire'];
 
 class EngineProcessor extends AudioWorkletProcessor {
   static get parameterDescriptors() {

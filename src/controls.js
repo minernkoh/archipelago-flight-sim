@@ -92,6 +92,7 @@ export function createControls() {
     if (k === 'j') emit('ap-ias');      // airspeed hold (throttle)
     if (k === 'n') emit('ap-nav');      // NAV / waypoint steering
     if (k === 'l') emit('ap-wing');     // wing leveler
+    if (k === 'o') emit('ap-apr');      // approach: localizer + glideslope to the runway
   });
   window.addEventListener('keyup', (e) => {
     keys.delete(e.key.length === 1 ? e.key.toLowerCase() : e.key);
@@ -107,6 +108,11 @@ export function createControls() {
   return {
     state,
     on(ev, cb) { handlers[ev] = cb; },
+    /** Same as pressing the bound key (cockpit switches and buttons use this). */
+    fire(ev) { emit(ev); },
+    /** Flap lever one detent: +1 down, -1 up (what F / Shift+F do). */
+    flapStep(dir) { flapIdx = Math.max(0, Math.min(FLAP_DETENTS.length - 1, flapIdx + (dir > 0 ? 1 : -1))); },
+    get flapDetent() { return flapIdx; },
     // Swap keyboard-smoothing rates when the aircraft changes. p.inputRate is the
     // primary (pitch/roll) rate; rudder keeps the original 4.5/5.5 ratio.
     setRates(p) {

@@ -2,6 +2,7 @@
 
 import * as THREE from 'three';
 import { createAircraft, step, resetOnRunway } from './physics/flightModel.js';
+import { createFailures, annunciators } from './physics/failures.js';
 import { createTerrain, COARSE_TILE_RADIUS, GROUND_DETAIL } from './terrain.js';
 import { archipelagoMap } from './maps/archipelago.js';
 import { singaporeMap } from './maps/singapore.js';
@@ -15,6 +16,7 @@ import { createEnvironment } from './environment.js';
 import { createHUD } from './hud.js';
 import { createRings } from './rings.js';
 import { createAudio } from './audio.js';
+import { NAV } from './instruments.js';
 import { createGameFlow } from './modes.js';
 import { createTrainingSystem } from './training.js';
 import { createEffects } from './effects.js';
@@ -47,6 +49,50 @@ renderer.toneMappingExposure = 1.05;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
+
+// v12 clickable cockpit: a SHORT click on a cockpit button operates it (a drag
+// is still free-look, camera.js); the starter is held while the button is.
+const cockpitRay = new THREE.Raycaster();
+const cockpitNdc = new THREE.Vector2();
+function cockpitPick(e) {
+  if (!cockpit || !cockpit.group.visible || game.state !== 'flying') return null;
+  const r = renderer.domElement.getBoundingClientRect();
+  cockpitNdc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  cockpitRay.setFromCamera(cockpitNdc, camera);
+  return cockpit.pick(cockpitRay);
+}
+function cockpitAction(id) {
+  const s = ac.sys;
+  switch (id) {
+    case 'bat': if (s) s.battery = !s.battery; break;
+    case 'mix': if (s) s.mixture = s.mixture > 0.3 ? 0 : 1; break;
+    case 'mags': if (s && s.mags !== 'START') { const C = ['OFF', 'R', 'L', 'BOTH']; s.mags = C[(C.indexOf(s.mags) + 1) % C.length]; } break;
+    case 'flap-up': controls.flapStep(-1); break;
+    case 'flap-dn': controls.flapStep(1); break;
+    default: if (id.startsWith('ap')) controls.fire(id === 'ap' ? 'ap' : id);
+  }
+  audio.click?.();
+}
+let cockpitDown = null;
+renderer.domElement.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  const hit = cockpitPick(e);
+  cockpitDown = hit ? { id: hit.id, x: e.clientX, y: e.clientY } : null;
+  if (hit?.id === 'start' && ac.sys) { ac.sys.mags = 'START'; audio.click?.(); }
+});
+window.addEventListener('mouseup', (e) => {
+  const d = cockpitDown; cockpitDown = null;
+  if (!d) return;
+  if (d.id === 'start') { if (ac.sys?.mags === 'START') ac.sys.mags = 'BOTH'; return; }
+  if (Math.hypot(e.clientX - d.x, e.clientY - d.y) < 6) cockpitAction(d.id);
+});
+let hoverT = 0;
+renderer.domElement.addEventListener('mousemove', (e) => {
+  const now = performance.now();
+  if (now - hoverT < 90) return;
+  hoverT = now;
+  renderer.domElement.style.cursor = cockpitPick(e) ? 'pointer' : '';
+});
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.3, 20000);
@@ -157,6 +203,7 @@ async function loadMap(map) {
   gatesAdapter.clear();
   currentMap = map;
   env.setHeightFn(map.height);
+  autopilot.setRunway(map.runway);       // APR flies to this map's runway
   // Real-world maps stream elevation tiles; wait for the ones around the spawn
   // before building terrain so chunks/minimap sample real ground, not sea. Caps
   // at 12 s so a slow network degrades to a flat world rather than hanging;
@@ -234,7 +281,7 @@ function setAircraft(craft) {
   hull = [];
   plane.group.traverse(o => { if (o.userData.hull) hull.push(o); });
   if (cockpit) { scene.remove(cockpit.group); cockpit.dispose(); }
-  cockpit = createCockpit(craft.camera, craft.hud);
+  cockpit = createCockpit(craft.camera, craft.hud, craft.params);
   cockpit.setNight(env.state().night);
   scene.add(cockpit.group);
   env.applyEnv(cockpit.group, 'cockpit');
@@ -400,7 +447,8 @@ controls.on('smoke', () => {
   if (game.state !== 'flying') return;
   hud.message(trails.toggleSmoke() ? 'Smoke on.' : 'Smoke off.', 1200);
 });
-const game = createGameFlow({ ac, hud, audio, controls, camRig, world, fx, autopilot, panel, replay });
+const failures = createFailures();
+const game = createGameFlow({ ac, hud, audio, controls, camRig, world, fx, autopilot, panel, replay, failures });
 setAircraft(byId('c172'));
 hud.setCamera(camRig.modeName);
 
@@ -429,8 +477,9 @@ controls.on('ap-alt', () => { if (flying()) autopilot.toggleAlt(ac, controls); }
 controls.on('ap-ias', () => { if (flying()) autopilot.toggleIas(ac, controls); });
 controls.on('ap-nav', () => { if (flying()) autopilot.toggleNav(ac); });
 controls.on('ap-wing', () => { if (flying()) autopilot.toggleWing(ac); });
+controls.on('ap-apr', () => { if (flying()) autopilot.toggleApr(ac, controls); });
 
-window.__sim = { ac, controls, game, world, autopilot, audio, env, windField, minimap, camRig, camera, weatherFx, physEnv, replay, get simTime() { return elapsed; }, get cockpit() { return cockpit; }, get plane() { return plane; },
+window.__sim = { ac, controls, game, world, autopilot, audio, failures, env, windField, minimap, camRig, camera, weatherFx, physEnv, replay, get simTime() { return elapsed; }, get cockpit() { return cockpit; }, cockpitAction: (id) => cockpitAction(id), get plane() { return plane; },
   terrainCounts: () => terrain.counts(),
   get rings() { return gauntletRings || rings; }, get map() { return currentMap; },
   get camName() { return camRig.modeName; }, get trails() { return trails; }, get traffic() { return traffic; }, scene, renderer };
@@ -509,6 +558,11 @@ function frame(now) {
     while (acc >= PHYS_DT) {
       autopilot.update(ac, controls, PHYS_DT);
       step(ac, c, physEnv, PHYS_DT);
+      const failed = failures.update(ac, PHYS_DT);
+      if (failed && failed.kind !== 'silent') {
+        hud.message(`<b class="${failed.kind}">${failed.kind === 'warning' ? 'WARNING' : 'CAUTION'}</b> ${failed.label}`, 6000);
+        audio.caution?.(failed.kind === 'warning');
+      }
       acc -= PHYS_DT;
     }
     replay.record(dt, ac, c);
@@ -531,7 +585,18 @@ function frame(now) {
     cockpit.group.visible = inCockpit;
     if (inCockpit) cockpit.setNight(env.state().night);
   }
-  if (inCockpit) cockpit.update(ac, c, dt);
+  if (inCockpit) {
+    const apS = autopilot.status(ac);
+    const flapNames = currentCraft?.hud?.flapNames;
+    cockpit.setUi({
+      ap: apS.on, 'ap-hdg': apS.hdg, 'ap-alt': apS.alt, 'ap-ias': apS.ias, 'ap-nav': apS.nav,
+      'ap-apr': apS.apr ? (apS.apr.loc && apS.apr.gs ? true : 'APR·') : false,
+      bat: !!ac.sys?.battery, mix: (ac.sys?.mixture ?? 1) > 0.3, start: ac.sys?.mags === 'START',
+      mags: ac.sys ? (ac.sys.mags === 'OFF' ? false : 'M ' + (ac.sys.mags === 'START' ? 'ST' : ac.sys.mags)) : false,
+      'flap-up': controls.flapDetent === 0, 'flap-dn': controls.flapDetent > 0 ? (flapNames?.[controls.flapDetent] ?? true) : false,
+    });
+    cockpit.update(ac, c, dt);
+  }
 
   const ringBearing = game.tick(dt);
   if (trainGates) trainGates.update(dt);
@@ -574,7 +639,12 @@ function frame(now) {
   weatherFx.update(dt, elapsed, view, camera, replaying ? 'REPLAY' : camRig.modeName);
   if (isFlying) {
     hud.update(ac, c, dt, ringBearing ?? null);
-    hud.setAP(autopilot.status(ac));
+    const apS = autopilot.status(ac);
+    hud.setAP(apS);
+    hud.setAnnunciators?.(annunciators(ac));
+    // ILS receiver: needles live inside the localizer beam out to 18 km (or whenever APR is armed)
+    const appr = apS.ils;
+    NAV.ils = appr && appr.dist > -300 && appr.dist < 18000 && (apS.apr || Math.abs(appr.locDots) < 5) ? appr : null;
     audioView.x = camera.position.x; audioView.y = camera.position.y; audioView.z = camera.position.z;
     audioView.mode = camRig.modeName;
     audio.update(ac, c, audioView);

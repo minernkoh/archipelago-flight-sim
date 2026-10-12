@@ -184,6 +184,22 @@
           background: var(--mag); transform: translateX(0); transition: transform .15s; }
   #ap-cdi .info { font-family: "B612 Mono", monospace; font-size: .62rem; letter-spacing: .1em;
           color: var(--mag); margin-top: .3rem; }
+  /* v12 APR: glideslope scale (vertical, fly-to diamond) beside the attitude centre */
+  #ap-gs { position: absolute; left: calc(50% + 9rem); top: 50%; width: .9rem; height: 9rem;
+          transform: translateY(-50%); display: none; border-left: 1px solid var(--panel-line); }
+  #ap-gs.show { display: block; }
+  #ap-gs i { position: absolute; left: -.35rem; top: 50%; width: .7rem; height: 1px; background: var(--ink-dim); }
+  #ap-gs b { position: absolute; left: -.4rem; top: 50%; width: .55rem; height: .55rem; margin-top: -.3rem;
+          background: var(--mag); transform: rotate(45deg); transition: top .15s; }
+  #ap-gs span { position: absolute; left: -.5rem; bottom: -1.1rem; font: .55rem "B612 Mono", monospace;
+          letter-spacing: .1em; color: var(--mag); }
+  /* v12 annunciator lights (failures.js): amber cautions, red warnings */
+  #annun { position: absolute; left: max(2vw, 1rem); top: calc(max(1.5vh, .6rem) + 5.4rem); display: flex; gap: .3rem; }
+  #annun i { font: 700 .62rem "B612 Mono", monospace; letter-spacing: .12em; font-style: normal;
+          padding: .1rem .35rem; color: #1b1200; background: var(--amber); }
+  #annun i.warning { background: var(--red, #ff3b30); color: #fff; }
+  #msg b.caution { color: var(--amber); } #msg b.warning { color: var(--red, #ff3b30); }
+  #ap-status .ap-mode.armed { color: var(--ink); border-color: var(--ink-dim); }
   @media (prefers-reduced-motion: reduce) { #ap-status .ap-warn { animation: none; } }
 
   /* minimap (U7) */
@@ -471,10 +487,13 @@
     <span class="ap-mode" id="apm-ias">IAS</span>
     <span class="ap-mode" id="apm-nav">NAV</span>
     <span class="ap-mode" id="apm-wing">WNG</span>
+    <span class="ap-mode" id="apm-apr">APR</span>
     <span class="ap-vals" id="ap-vals"></span>
     <span class="ap-warn" id="ap-warn">AP DISCONNECT</span>
   </div>
+  <div id="annun"></div>
   <div id="ap-cdi"><div class="scale"><i></i></div><div class="needle"></div><div class="info"></div></div>
+  <div id="ap-gs"><i></i><b></b><span>GS</span></div>
   <div id="msg"></div>
   <div id="atc"></div>
   <div id="debrief"></div>
@@ -494,6 +513,7 @@
     <b>&uarr;&darr;</b> pitch &nbsp;<b>&larr;&rarr;</b> roll &nbsp;<b>A D</b> rudder<br>
     <b>W S</b> throttle &nbsp;<b>F</b>/<b>shift F</b> flaps &nbsp;<b>B</b> brakes &nbsp;<b>[ ]</b> trim<br>
     <b>C</b> camera &nbsp;<b>V</b> fly-by cam &nbsp;<b>WHEEL</b> zoom &nbsp;<b>DRAG</b> look around &nbsp;<b>K</b> smoke<br>
+    <b>P</b> autopilot &nbsp;<b>H G J</b> hdg/alt/speed hold &nbsp;<b>N</b> nav &nbsp;<b>O</b> ILS approach &nbsp;<b>L</b> wing leveler<br>
     <b>M</b> minimap &nbsp;<b>I</b> instruments &nbsp;<b>X</b> instant replay &nbsp;<b>R</b> reset &nbsp;<b>ESC</b> pause &nbsp;<b>?</b> hide
   </div>
 </div>

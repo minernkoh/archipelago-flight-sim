@@ -113,7 +113,7 @@ function crashWhy(snap, reason) {
   }
 }
 
-export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, autopilot, panel, replay }) {
+export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, autopilot, panel, replay, failures }) {
   let crashT = null; // delay before the crash screen so the debris burst reads
   let state = 'menu';           // menu | flying | paused | crash | results | replay
   let replayFrom = null;        // the state an instant replay returns to
@@ -366,6 +366,8 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
 
   function resetFlight() {
     replay?.clear();
+    // random failures: free flight only, never in lessons or races
+    failures?.setMode(sel.mode === 'free' ? settings.failures : 'off');
     const r = map.runway;
     resetOnRunway(ac, { x: r.spawn.x, z: r.spawn.z, y: r.y, headingRad: r.headingRad });
     controls.resetFlaps();

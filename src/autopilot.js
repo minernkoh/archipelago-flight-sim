@@ -1,5 +1,7 @@
-// Autopilot: HDG-hold, ALT-hold, IAS-hold (throttle), wing-leveler, and
-// NAV-hold (waypoint steering). Each mode is a simple proportional law with
+// Autopilot: HDG-hold, ALT-hold, IAS-hold (throttle), wing-leveler,
+// NAV-hold (waypoint steering) and APR (v12: a coupled ILS-style approach to
+// the map's runway: localizer on the centreline, 3 deg glideslope to the
+// PAPI aim point, disconnect at minimums). Each mode is a simple proportional law with
 // rate damping, writing CONTROL INPUTS (not forces) into controls.state.
 //
 // Integration contract (see main.js): the AP runs AFTER controls.poll() every
@@ -44,7 +46,13 @@ const G = {
   pitchBiasI: 0.6,               // deg/s of pitch bias per (m/s) VS error
   elevTrimI: 0.012,              // elevator/s per deg of pitch error
   maxPitchBias: 10, maxElevTrim: 0.6,
-  iasGain: 0.22,                 // throttle/s per (m/s) IAS error (integrator)
+  pitchAuthRef: 4, pitchAuthMax: 4,  // pitch-authority normalisation (see ALT-hold)
+  iasGain: 0.22,                 // throttle/s per (m/s) IAS error (integrator), for a quick engine
+  iasP: 0.06,                    // throttle per (m/s) IAS error (proportional)
+  // A pure integrator on a lagging engine overshoots: the heavy's turbofans
+  // spool with tau = 4 s, and its throttle went bang-bang 0 <-> 1 on approach,
+  // which the underslung engines turned into +-13 deg pitch swings. The
+  // integral rate is divided by the spool lag, the P term damps.
   stallMargin: 0.035,            // rad below alphaStall where nose-up authority hits zero
   taperBand: 0.05,               // rad band over which nose-up authority tapers
   overspeedFrac: 0.98,           // back throttle off above this fraction of maxSpeed
@@ -52,9 +60,25 @@ const G = {
 
 const CAPTURE = 300;             // m — sequence to the next fix inside this radius
 
+// APR: geometry of the approach and how the two beams are flown.
+export const APR = {
+  gsDeg: 3,                      // glideslope angle (the PAPI's on-slope angle)
+  aimPastSpawn: 300,             // m: the PAPI / flight-school aim point
+  locFullScaleDeg: 2.5,          // angular half-width of the localizer "beam" (5 dots)
+  gsFullScaleDeg: 0.7,           // glideslope half-width (5 dots)
+  locIntercept: 30,              // deg: steepest intercept angle onto the localizer
+  locGain: 0.06,                 // deg of track correction per m off the centreline
+  gsGain: 0.12,                  // m/s of extra descent per m above the glidepath
+  minimumsFt: 200,               // AP disconnects here (decision height); you land it
+  captureRangeM: 18000,
+};
+
 export function createAutopilot() {
   // Active modes and the selected reference values.
-  const m = { hdg: false, alt: false, ias: false, wing: false, nav: false };
+  const m = { hdg: false, alt: false, ias: false, wing: false, nav: false, apr: false };
+  // APR state: the runway it flies to, and whether each beam is captured
+  let rwy = null;            // { fx, fz, rx, rz, aimU, y, course } from setRunway()
+  let locCap = false, gsCap = false;
   const sel = { hdg: 0, alt: 0, ias: 0 }; // hdg deg, alt metres MSL, ias m/s (TAS-ish)
   let thrInt = 0;                          // throttle integrator (IAS hold)
   let pitchBias = 0, elevTrim = 0;         // ALT-hold auto-trim integrators
@@ -68,10 +92,11 @@ export function createAutopilot() {
   let plan = null; // { points: [[x,z,y?]...], origin: [x,z] | null }
   let navIdx = 0;
 
-  const anyOn = () => m.hdg || m.alt || m.ias || m.wing || m.nav;
+  const anyOn = () => m.hdg || m.alt || m.ias || m.wing || m.nav || m.apr;
 
   function disconnectAll(annunciate) {
-    m.hdg = m.alt = m.ias = m.wing = m.nav = false;
+    m.hdg = m.alt = m.ias = m.wing = m.nav = m.apr = false;
+    locCap = gsCap = false;
     resetCmd();
     if (annunciate) disconnectT = 4;
   }
@@ -123,6 +148,25 @@ export function createAutopilot() {
     }
   }
 
+  // Position relative to the approach: along-track distance to the aim point,
+  // cross-track (+ = right of the centreline), height above the glidepath and
+  // both deviations in "dots" (+-5 = full scale, + = fly right / fly up).
+  function approachGuidance(ac) {
+    if (!rwy) return null;
+    const u = ac.pos.x * rwy.fx + ac.pos.z * rwy.fz;
+    const xtk = ac.pos.x * rwy.rx + ac.pos.z * rwy.rz;
+    const dist = rwy.aimU - u;                                   // + = before the aim point
+    const gsAlt = rwy.y + Math.max(0, dist) * Math.tan(APR.gsDeg / RAD2DEG);
+    const above = ac.pos.y - gsAlt;
+    const locAng = Math.atan2(xtk, Math.max(50, dist + 1500)) * RAD2DEG;   // antenna ~1.5 km past the aim point
+    const gsAng = Math.atan2(ac.pos.y - rwy.y, Math.max(50, dist)) * RAD2DEG - APR.gsDeg;
+    return {
+      dist, xtk, gsAlt, above,
+      locDots: clamp(-locAng / APR.locFullScaleDeg * 5, -5, 5),
+      gsDots: clamp(-gsAng / APR.gsFullScaleDeg * 5, -5, 5),
+    };
+  }
+
   return {
     modes: m,
     sel,
@@ -134,6 +178,26 @@ export function createAutopilot() {
     toggleIas(ac, controls) { delete cmd.throttle; m.ias = !m.ias; if (m.ias) { sel.ias = ac.iasIndicated || ac.airspeed; thrInt = controls.state.throttle; } },
     toggleWing(ac) { delete cmd.aileron; m.wing = !m.wing; if (m.wing) m.hdg = m.nav = false; },
     toggleNav(ac) { delete cmd.aileron; m.nav = !m.nav; if (m.nav) { m.wing = false; navIdx = 0; } },
+    // APR: arm the approach. Holds the current altitude (ALT) until the
+    // glideslope comes down to meet it, steering onto the localizer first.
+    toggleApr(ac, controls) {
+      delete cmd.aileron;
+      m.apr = !m.apr && !!rwy;
+      locCap = gsCap = false;
+      if (m.apr) {
+        m.wing = false; m.nav = false; m.hdg = true;
+        if (!m.alt) { m.alt = true; sel.alt = ac.pos.y; armAlt(ac, controls); }
+      }
+    },
+    /** The runway APR flies to (map.runway). */
+    setRunway(r) {
+      if (!r) { rwy = null; return; }
+      const h = r.headingRad, fx = Math.cos(h), fz = -Math.sin(h);
+      rwy = { fx, fz, rx: Math.sin(h), rz: Math.cos(h), y: r.y, course: compassHdg(h),
+        aimU: r.spawn.x * fx + r.spawn.z * fz + APR.aimPastSpawn };
+      m.apr = false; locCap = gsCap = false;
+    },
+    approach(ac) { const g = approachGuidance(ac); return g ? { ...g, loc: locCap, gs: gsCap } : null; },
     // Master: engage HDG+ALT at current state, or disengage everything.
     toggleMaster(ac, controls) {
       if (anyOn()) { disconnectAll(false); }
@@ -152,6 +216,7 @@ export function createAutopilot() {
     update(ac, controls, dt) {
       if (disconnectT > 0) disconnectT = Math.max(0, disconnectT - dt);
       if (!anyOn()) return;
+      if (ac.avionics === false) { disconnectAll(true); return; }   // dead bus: the AP servos drop out
 
       const att = attitude(ac);
       const curHdg = compassHdg(att.heading);
@@ -165,6 +230,29 @@ export function createAutopilot() {
       if (m.nav && plan && plan.points.length) {
         const g = navGuidance(ac);
         if (g) { sel.hdg = g.bearing; trySequence(ac, g); }
+      }
+
+      // APR: steer onto the localizer by TRACK (so crosswind is flown out),
+      // then ride the glideslope down; disconnect at minimums.
+      let gsVs = null;
+      if (m.apr && rwy) {
+        const g = approachGuidance(ac);
+        const agl = (ac.agl ?? (ac.pos.y - rwy.y)) * 3.28084;
+        if (g.dist < -200 || (gsCap && agl < APR.minimumsFt)) {
+          disconnectAll(true);                                     // minimums: you have control
+          return;
+        }
+        if (!locCap && Math.abs(g.locDots) < 4.5 && g.dist < APR.captureRangeM) locCap = true;
+        const corr = clamp(g.xtk * APR.locGain * (locCap ? 1 : 0.6), -APR.locIntercept, APR.locIntercept);
+        const desiredTrack = rwy.course - corr;
+        const gs = Math.hypot(ac.vel.x, ac.vel.z);
+        const track = gs > 5 ? (90 - Math.atan2(-ac.vel.z, ac.vel.x) * RAD2DEG + 360) % 360 : curHdg;
+        sel.hdg = (curHdg + wrap180(desiredTrack - track) + 360) % 360;
+        if (!gsCap && locCap && (g.above <= 8 || Math.abs(g.gsDots) < 2) && g.dist > 0 && g.dist < APR.captureRangeM) gsCap = true;
+        if (gsCap) {
+          gsVs = -gs * Math.tan(APR.gsDeg / RAD2DEG) - g.above * APR.gsGain;
+          sel.alt = g.gsAlt;
+        }
       }
 
       // --- lateral: aileron (HDG / NAV / wing-leveler) ---
@@ -192,14 +280,21 @@ export function createAutopilot() {
           disconnectT = 4;
           drive(controls, 'elevator', clamp(G.pitchP * (-3 - pitchDeg), -0.6, 0), dt);
         } else {
+          // Pitch authority (rad/s^2 per unit elevator) spans ~40x across the
+          // fleet: a C172 on approach ~4, the heavy ~0.1. Like the roll loop,
+          // normalise: stiffen the inner pitch loop and slow the outer VS
+          // loop by the same factor, or the heavy porpoises on the glideslope.
+          const q = 0.5 * 1.225 * ac.airspeed * ac.airspeed;
+          const auth = Math.max(1e-3, q * p.wingArea * p.chord * p.Cmde / p.Iz);
+          const kA = clamp(Math.sqrt(G.pitchAuthRef / auth), 1, G.pitchAuthMax);
           const altErr = sel.alt - ac.pos.y;
-          const desiredVs = clamp(altErr * G.altToVs, -G.maxVs, G.maxVs);
+          const desiredVs = gsVs !== null ? clamp(gsVs, -G.maxVs * 1.5, 2) : clamp(altErr * G.altToVs, -G.maxVs, G.maxVs);
           const vsErr = desiredVs - ac.vel.y;
-          pitchBias = clamp(pitchBias + vsErr * G.pitchBiasI * dt, -G.maxPitchBias, G.maxPitchBias);
-          const desiredPitch = clamp(pitchBias + vsErr * G.vsToPitch, -G.maxPitch, G.maxPitch);
+          pitchBias = clamp(pitchBias + vsErr * G.pitchBiasI / kA * dt, -G.maxPitchBias, G.maxPitchBias);
+          const desiredPitch = clamp(pitchBias + vsErr * G.vsToPitch / kA, -G.maxPitch, G.maxPitch);
           const pitchErr = desiredPitch - pitchDeg;
-          elevTrim = clamp(elevTrim + pitchErr * G.elevTrimI * dt, -G.maxElevTrim, G.maxElevTrim);
-          let elev = clamp(elevTrim + G.pitchP * pitchErr - G.pitchD * pitchRate, -1, 1);
+          elevTrim = clamp(elevTrim + pitchErr * G.elevTrimI * kA * dt, -G.maxElevTrim, G.maxElevTrim);
+          let elev = clamp(elevTrim + kA * (G.pitchP * pitchErr - G.pitchD * pitchRate), -1, 1);
           // Taper nose-up authority as alpha approaches the limit.
           if (elev > 0 && ac.alpha > alphaMax - G.taperBand) {
             elev *= clamp((alphaMax - ac.alpha) / G.taperBand, 0, 1);
@@ -211,8 +306,10 @@ export function createAutopilot() {
       // --- speed: throttle (IAS-hold) with overspeed protection ---
       if (m.ias) {
         const iasErr = sel.ias - (ac.iasIndicated || ac.airspeed);
-        thrInt = clamp(thrInt + iasErr * G.iasGain * dt, 0, 1);
-        let thr = thrInt;
+        const lag = Math.max(0.15, p.engine?.tau ?? 0.15);
+        const ki = G.iasGain * Math.min(1, 0.6 / lag);
+        thrInt = clamp(thrInt + iasErr * ki * dt, 0, 1);
+        let thr = clamp(thrInt + iasErr * G.iasP, 0, 1);
         if (ac.eas > (p.limits?.vne ?? p.maxSpeed) * G.overspeedFrac) thr = Math.min(thr, 0.15);
         drive(controls, 'throttle', thr, dt);
       }
@@ -224,6 +321,8 @@ export function createAutopilot() {
       return {
         on: anyOn(),
         hdg: m.hdg || m.nav, alt: m.alt, ias: m.ias, wing: m.wing, nav: m.nav,
+        apr: m.apr ? { loc: locCap, gs: gsCap } : null,
+        ils: rwy ? (({ locDots, gsDots, dist }) => ({ locDots, gsDots, dist }))(approachGuidance(ac)) : null,
         selHdg: sel.hdg, selAlt: sel.alt, selIas: sel.ias,
         navData: nd ? { idx: nd.index + 1, total: nd.total, dme: nd.dist, xtk: nd.xtk } : null,
         warn: disconnectT > 0 ? 'AP DISCONNECT' : null,

@@ -274,6 +274,32 @@ export function createAudio() {
       src.connect(lp).connect(g).connect(sfx);
       src.start(t0, Math.random()); src.stop(tt + 2.4);
     },
+    /** A switch / button click in the cockpit. */
+    click() {
+      if (!ctx || !brownBuf) return;
+      const src = ctx.createBufferSource(); src.buffer = brownBuf;
+      const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 2400; f.Q.value = 1.5;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.5, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.035);
+      src.connect(f).connect(g).connect(sfx);
+      src.start(0, Math.random()); src.stop(ctx.currentTime + 0.05);
+    },
+    /** Master caution (two soft dings) or warning (three sharper ones). */
+    caution(warning = false) {
+      if (!ctx) return;
+      const n = warning ? 3 : 2, f = warning ? 1320 : 880;
+      for (let i = 0; i < n; i++) {
+        const t0 = ctx.currentTime + i * 0.28;
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = 'triangle'; o.frequency.value = f;
+        g.gain.setValueAtTime(0.0001, t0);
+        g.gain.exponentialRampToValueAtTime(0.22, t0 + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.24);
+        o.connect(g).connect(sfx);
+        o.start(t0); o.stop(t0 + 0.26);
+      }
+    },
     thud() {
       if (!ctx) return;
       const o = ctx.createOscillator(), g = ctx.createGain();
@@ -355,6 +381,7 @@ export function createAudio() {
           setP('ab', 0, t);
         }
         setP('gain', alive ? 1 : 0, t, 0.05);
+        setP('misfire', ac.systems?.power === false ? 1 : 0, t);
       }
       const legacy = !synth;
       const propOn = legacy && alive && !isJet;

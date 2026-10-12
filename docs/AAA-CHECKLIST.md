@@ -28,15 +28,15 @@ Those are marked as scope limits, not as defects.
 | Ground handling: gear, brakes, wet runway, crosswind landing | Met | `groundContact.js`, school lesson 7 (`npm run school`) |
 | Airframe limits: Vne, flap speeds, g limits, damage | Met | `envelope.js`, physics suite |
 | Engine start (cold and dark), battery, mags, mixture | Partial | Simplified next to study-level aircraft. e2e "start sequence" |
-| Autopilot: HDG, ALT and VS, auto-trim, flight plans | Partial | No VNAV, approach or LNAV coupling. `test/aptune.mjs`, `npm run checks` |
-| Failures | Partial | Engine failure only (school lesson) |
+| Autopilot: HDG, ALT, IAS, LNAV flight plans, coupled ILS approach (LOC + GS to minimums) | Met | Every type hands over at 200 ft within 12 m of the centreline and 6 m of the glidepath, calm and 15 kt crosswind (physics suite `autopilot APR`). No VNAV or autoland. |
+| Failures: engine, partial power, alternator, vacuum, pitot, static, flaps, hydraulics; random mode; annunciators | Met | `physics/failures.js`, physics suite `failure:` checks, e2e. Gear failure not modelled (gear is not simulated as retractable). |
 
 ## Aircraft
 
 | Area | Rating | Evidence |
 |---|---|---|
 | Exterior models: PBR paint, animated controls, gear, lights | Met | `src/aircraft/meshes.js`, `test/showroom.mjs` |
-| 3D cockpits with live instruments | Partial | `src/cockpit.js`. Instruments are live but not clickable, unlike MSFS/X-Plane. |
+| 3D cockpits with live instruments and clickable controls | Partial | `src/cockpit.js`. AP, battery, mags, starter, mixture and flap switches are clickable; individual knobs, radios and breakers are not, unlike study-level MSFS/X-Plane aircraft. |
 | Five distinct aircraft (trainer, aerobatic, fighter, airliner, flying wing) | Met | `src/aircraft/params.js` |
 
 ## World
@@ -84,5 +84,5 @@ Those are marked as scope limits, not as defects.
 2. **Sound:** listen to the engine (in the sim, or the WAVs from
    `npm run sounds`) and say whether it is good enough.
 3. **Priorities:** choose which "Partial" rows matter for "AAA". The obvious
-   next candidates are volumetric clouds, clickable cockpits, deeper failures
-   and systems, and ATC-controlled AI traffic.
+   remaining candidates are volumetric clouds, fully clickable study-level
+   cockpits, and ATC-controlled AI traffic.

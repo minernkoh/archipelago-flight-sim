@@ -12,14 +12,26 @@ const D2R = Math.PI / 180;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const num = (v, d = 0) => (Number.isFinite(v) ? v : d);
 
+/**
+ * Radio-nav state for the displays (v12): the ILS deviations of the active
+ * runway, in dots (+-5 full scale, + = fly right / fly up), or null when the
+ * receiver has no usable signal. main.js writes it once per frame.
+ */
+export const NAV = { ils: null };
+const MAG = '#ff4fd8';
+
 /** Values every display needs, in pilot units. */
 export function readout(ac) {
   let pitch = 0, roll = 0, hdg = 0;
-  try { const a = attitude(ac); pitch = a.pitch; roll = a.roll; hdg = (90 - a.heading / D2R + 720) % 360; } catch { /* hold level */ }
+  try {
+    // a failed vacuum pump leaves the gyro instruments showing ac.gyro
+    const a = ac.gyro && ac.p?.engine?.type !== 'jet' ? ac.gyro : attitude(ac);
+    pitch = a.pitch; roll = a.roll; hdg = (90 - a.heading / D2R + 720) % 360;
+  } catch { /* hold level */ }
   return {
     ias: num(ac.iasIndicated) * KT,
-    alt: num(ac.pos?.y) * FT,
-    vsi: num(ac.vel?.y) * FT * 60,
+    alt: num(ac.altIndicated ?? ac.pos?.y) * FT,
+    vsi: num(ac.vsIndicated ?? ac.vel?.y) * FT * 60,
     turn: -num(ac.omega?.y) / D2R,          // deg/s, + = right
     slip: num(ac.beta),
     pitch, roll, hdg,
@@ -169,6 +181,14 @@ function headingInd(x, cx, cy, r, hdg) {
   x.beginPath(); x.moveTo(cx, cy - r * 0.95); x.lineTo(cx - r * 0.07, cy - r * 0.8); x.lineTo(cx + r * 0.07, cy - r * 0.8); x.fill();
   x.strokeStyle = '#ffb300'; x.lineWidth = r * 0.04;
   x.beginPath(); x.moveTo(cx, cy - r * 0.35); x.lineTo(cx, cy + r * 0.35); x.moveTo(cx - r * 0.25, cy - r * 0.05); x.lineTo(cx + r * 0.25, cy - r * 0.05); x.stroke();
+  // ILS: crossed needles, localizer vertical and glideslope horizontal
+  if (NAV.ils) {
+    const k = r * 0.5 / 5, lx = cx + clamp(NAV.ils.locDots, -5, 5) * k, gy = cy - clamp(NAV.ils.gsDots, -5, 5) * k;
+    x.strokeStyle = '#f2f2ee'; x.lineWidth = r * 0.035;
+    x.beginPath(); x.moveTo(lx, cy - r * 0.55); x.lineTo(lx, cy + r * 0.55); x.moveTo(cx - r * 0.55, gy); x.lineTo(cx + r * 0.55, gy); x.stroke();
+    x.fillStyle = '#e8e8e2';
+    for (let d = -4; d <= 4; d += 2) { x.beginPath(); x.arc(cx + d * k, cy + r * 0.62, r * 0.025, 0, Math.PI * 2); x.fill(); }
+  }
   glassGlint(x, cx, cy, r);
 }
 function vsiInd(x, cx, cy, r, fpm) {
@@ -251,6 +271,25 @@ function pfd(x, X, Y, S, v, ac) {
   x.strokeStyle = '#ffd400'; x.lineWidth = S * 0.012;
   x.beginPath(); x.moveTo(cx - R * 0.7, cy); x.lineTo(cx - R * 0.25, cy); x.lineTo(cx - R * 0.25, cy + R * 0.1);
   x.moveTo(cx + R * 0.7, cy); x.lineTo(cx + R * 0.25, cy); x.lineTo(cx + R * 0.25, cy + R * 0.1); x.stroke();
+  // ILS: localizer diamond under the attitude ball, glideslope beside it
+  if (NAV.ils) {
+    const dot = R * 0.17;
+    x.strokeStyle = '#fff'; x.lineWidth = 2;
+    for (let d = -4; d <= 4; d += 2) {
+      if (!d) continue;
+      x.beginPath(); x.arc(cx + d * dot / 2 * 1, cy + R * 1.08, S * 0.007, 0, Math.PI * 2); x.stroke();
+      x.beginPath(); x.arc(cx + R * 1.08, cy + d * dot / 2, S * 0.007, 0, Math.PI * 2); x.stroke();
+    }
+    const diamond = (dx, dy) => {
+      const w = S * 0.018;
+      x.fillStyle = MAG;
+      x.beginPath(); x.moveTo(dx, dy - w); x.lineTo(dx + w, dy); x.lineTo(dx, dy + w); x.lineTo(dx - w, dy); x.closePath(); x.fill();
+    };
+    diamond(cx + clamp(NAV.ils.locDots, -5, 5) * dot / 2, cy + R * 1.08);
+    diamond(cx + R * 1.08, cy - clamp(NAV.ils.gsDots, -5, 5) * dot / 2);
+    x.fillStyle = MAG; x.font = `bold ${S * 0.03}px "B612 Mono", monospace`; x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.fillText('ILS', cx - R * 0.85, Y + S * 0.06);
+  }
   // speed + altitude tapes
   const tape = (tx, val, step, fmt, left) => {
     const th = R * 2, tw = S * 0.14;
@@ -335,6 +374,7 @@ export function drawGlassPanel(x, W, H, ac, layout = 'airliner') {
   slots.forEach((k, i) => {
     const X = gap + i * (S + gap);
     x.fillStyle = '#0e1013'; x.fillRect(X - 8, Y - 8, S + 16, S + 16);
+    if (ac.avionics === false) { x.fillStyle = '#020304'; x.fillRect(X, Y, S, S); return; }   // dead bus: blank glass
     if (k === 'pfd') pfd(x, X, Y, S, v, ac);
     else if (k === 'nd') nd(x, X, Y, S, v);
     else eicas(x, X, Y, S, v);

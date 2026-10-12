@@ -277,6 +277,25 @@ const pit = await sim(`(() => {
 })()`);
 check('cockpit view shows the 3D interior and hides the exterior hull',
   pit.cam === 'COCKPIT' && pit.interior && pit.hull > 0 && pit.hullShown === 0, JSON.stringify(pit));
+// v12 clickable cockpit: look down at the switch rows (a drag = free-look),
+// then a real click on the HDG button engages heading hold
+const ckClick = await page.evaluate(async () => {
+  const s = window.__sim, cv = document.querySelector('canvas');
+  const fire = (t, x, y, el = window) => el.dispatchEvent(new MouseEvent(t, { clientX: x, clientY: y, button: 0, bubbles: true }));
+  fire('mousedown', 640, 200, cv); fire('mousemove', 640, 420); fire('mouseup', 640, 420);
+  await new Promise(r => setTimeout(r, 700));
+  s.camera.updateMatrixWorld();
+  const p = s.cockpit.buttonWorld('ap-hdg');
+  if (!p) return { err: 'no button' };
+  p.project(s.camera);
+  const r = cv.getBoundingClientRect(), x = r.left + (p.x + 1) / 2 * r.width, y = r.top + (1 - p.y) / 2 * r.height;
+  const before = s.autopilot.modes.hdg;
+  if (Math.abs(p.x) > 1 || Math.abs(p.y) > 1) return { offscreen: [p.x, p.y], before };
+  fire('mousedown', x, y, cv); fire('mouseup', x, y);
+  return { x: Math.round(x), y: Math.round(y), before, after: s.autopilot.modes.hdg };
+});
+check('clicking the cockpit HDG button engages heading hold', ckClick.before === false && ckClick.after === true, JSON.stringify(ckClick));
+await press('h');   // HDG back off
 await press('c');
 await settle(400);
 await press('c');
@@ -533,6 +552,45 @@ const navSeq = await sim('__sim.autopilot.status(__sim.ac).navData.idx');
 check('NAV sequences to wp2 on capture radius', navSeq === 2, `idx=${navSeq}`);
 await press('p'); // master off — leave AP disengaged
 await settle(150);
+
+// v12 APR: 5 km out on the extended centreline, on the glideslope, C172 with
+// half flaps; O arms the approach, it captures both beams and flies the slope
+await page.evaluate(() => {
+  const s = window.__sim, r = s.map.runway, ac = s.ac, h = r.headingRad;
+  const fx = Math.cos(h), fz = -Math.sin(h);
+  const aimU = r.spawn.x * fx + r.spawn.z * fz + 300, u = aimU - 5000;
+  ac.pos = { x: fx * u + Math.sin(h) * 120, y: r.y + 5000 * Math.tan(3 * Math.PI / 180), z: fz * u + Math.cos(h) * 120 };
+  ac.vel = { x: fx * 36, y: -1.9, z: fz * 36 };
+  ac.q = { x: 0, y: Math.sin(h / 2), z: 0, w: Math.cos(h / 2) };
+  ac.omega = { x: 0, y: 0, z: 0 };
+  s.controls.state.flaps = 0.5; s.controls.state.throttle = 0.45;
+});
+await press('o'); await press('j');
+await page.evaluate(() => { window.__sim.autopilot.sel.ias = 34; });
+await simSettle(12000, '__sim.autopilot.status(__sim.ac).apr?.gs === true && __sim.simTime > 0');
+await simSettle(8000);
+const apr = await sim(`(() => { const s = __sim.autopilot.status(__sim.ac), a = __sim.autopilot.approach(__sim.ac);
+  return { apr: s.apr, loc: +a.locDots.toFixed(2), gs: +a.gsDots.toFixed(2), xtk: +a.xtk.toFixed(1), vs: +__sim.ac.vel.y.toFixed(1),
+    gsShown: document.querySelector('#ap-gs').classList.contains('show'), label: document.querySelector('#apm-apr').textContent, crashed: __sim.ac.crashed }; })()`);
+check('APR (O) captures localizer + glideslope and flies the slope down',
+  apr.apr && apr.apr.loc && apr.apr.gs && Math.abs(apr.loc) < 2 && Math.abs(apr.gs) < 2 && apr.vs < -0.5 && !apr.crashed, JSON.stringify(apr));
+check('APR annunciates and shows the glideslope scale', apr.gsShown && /LOC GS/.test(apr.label), JSON.stringify(apr));
+await press('p'); // AP off
+await settle(150);
+
+// v12 failures: an alternator failure lights the amber VOLTS annunciator with a
+// caution message; a blocked pitot (silent in real life too) lights nothing
+const failRow = await sim('!!document.querySelector(\'#settings [data-setting="failures"]\')');
+const failUi = await page.evaluate(() => {
+  const s = window.__sim, f = s.failures.trigger(s.ac, 'electrical');
+  s.failures.trigger(s.ac, 'pitot');
+  return { kind: f && f.kind, label: f && f.label };
+});
+await simSettle(1500);
+const ann = await sim('[...document.querySelectorAll("#annun i")].map(i => i.textContent)');
+check('FAILURES setting exists; alternator failure lights VOLTS, pitot stays silent',
+  failRow && failUi.kind === 'caution' && ann.length === 1 && ann[0] === 'VOLTS', JSON.stringify({ failRow, failUi, ann }));
+await page.evaluate(() => { window.__sim.game.toMenu?.(); });
 
 // --- Phase I: alpine map loads + time-of-day NIGHT darkens the scene ---
 // (assert env state / scalars via page.evaluate, never pixels).

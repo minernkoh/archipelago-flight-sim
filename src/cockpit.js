@@ -64,6 +64,56 @@ function panelFace(parent, { w, h, x, y, tilt = 0.2, cw, ch, draw }) {
   };
 }
 
+// A row of labelled push-buttons / switches on one canvas-textured plane (one
+// draw call). Clicks are hit-tested by the texture coordinate of the ray hit,
+// so the buttons need no geometry of their own. orient 'front' faces the
+// pilot (-x), 'up' lies on a console top with its labels reading forward.
+function buttonStrip(parent, { buttons, w, h, x, y, z = 0, tilt = 0, orient = 'front' }) {
+  const n = buttons.length, cw = 128 * n, ch = 96;
+  const canvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
+  let tex = null, ctx = null;
+  if (canvas) {
+    canvas.width = cw; canvas.height = ch; ctx = canvas.getContext('2d');
+    tex = new THREE.CanvasTexture(canvas); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+  }
+  const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, map: tex, emissive: 0xffffff, emissiveMap: tex,
+    emissiveIntensity: 0.25, roughness: 0.5, metalness: 0 });
+  const geo = new THREE.PlaneGeometry(w, h);
+  if (orient === 'up') { geo.rotateX(-Math.PI / 2); geo.rotateY(-Math.PI / 2); } else geo.rotateY(-Math.PI / 2);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(x, y, z);
+  if (orient === 'front') mesh.rotation.z = -tilt;
+  parent.add(mesh);
+  let key = '';
+  return {
+    mesh, mat, buttons,
+    /** states: { [id]: false | true | 'text' } (true = lit, a string relabels it) */
+    draw(states) {
+      const k = buttons.map(b => String(states[b.id])).join('|');
+      if (!ctx || k === key) return;
+      key = k;
+      ctx.fillStyle = '#17191c'; ctx.fillRect(0, 0, cw, ch);
+      buttons.forEach((b, i) => {
+        const st = states[b.id], lit = !!st, X = i * 128;
+        ctx.fillStyle = '#2b2f35'; ctx.fillRect(X + 8, 10, 112, 76);
+        ctx.fillStyle = '#3a3f46'; ctx.fillRect(X + 8, 10, 112, 6);
+        // annunciator bar: green when engaged / on
+        ctx.fillStyle = lit ? '#38e070' : '#0d2a16'; ctx.fillRect(X + 30, 20, 68, 9);
+        ctx.fillStyle = '#e8e8e2'; ctx.font = 'bold 26px "B612", Arial, sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(typeof st === 'string' ? st : b.label, X + 64, 60);
+      });
+      tex.needsUpdate = true;
+    },
+    pick(uv) { const i = Math.floor(uv.x * n); return buttons[Math.max(0, Math.min(n - 1, i))].id; },
+  };
+}
+
+const AP_BUTTONS = [
+  { id: 'ap', label: 'AP' }, { id: 'ap-hdg', label: 'HDG' }, { id: 'ap-alt', label: 'ALT' },
+  { id: 'ap-ias', label: 'IAS' }, { id: 'ap-nav', label: 'NAV' }, { id: 'ap-apr', label: 'APR' },
+];
+
 function yoke(parent, mat, grip, z, x, y) {
   const g = new THREE.Group();
   g.position.set(x, y, z);
@@ -90,7 +140,7 @@ function yoke(parent, mat, grip, z, x, y) {
  * @param {object} cfg catalog camera config ({ cockpit: { fwd, up, frame, glass } })
  * @param {object} hud catalog hud config (asiMaxKt)
  */
-export function createCockpit(cfg, hud) {
+export function createCockpit(cfg, hud, p = null) {
   const style = cfg?.cockpit?.frame || 'cabin';
   const glass = !!cfg?.cockpit?.glass || style === 'airliner';
   const group = new THREE.Group();          // follows the aircraft transform
@@ -101,6 +151,12 @@ export function createCockpit(cfg, hud) {
   const dark = std(0x24272b, 0.85), darker = std(0x16181b, 0.9), trim = std(0x3a3e44, 0.6, 0.2);
   const yokeM = std(0x1b1c1e, 0.5, 0.1), grip = std(0x101112, 0.7);
   let panel = null, yokes = [], stick = null, throttles = [], compass = null;
+  // clickable switch rows (v12): systems on the left, autopilot on the right
+  const sysButtons = [
+    ...(p?.startup ? [{ id: 'bat', label: 'BAT' }, { id: 'mags', label: 'MAGS' }, { id: 'start', label: 'START' }, { id: 'mix', label: 'MIX' }] : []),
+    { id: 'flap-up', label: 'FLAP ▲' }, { id: 'flap-dn', label: 'FLAP ▼' },
+  ];
+  const strips = [];
 
   if (style === 'cabin') {
     const head = std(0xbdb6a8, 0.95), wall = std(0x6e6a62, 0.9);
@@ -129,6 +185,8 @@ export function createCockpit(cfg, hud) {
     compass.add(card);
     eye.add(compass);
     yokes = [yoke(eye, yokeM, grip, -0.32, 0.46, -0.5), yoke(eye, yokeM, grip, 0.32, 0.46, -0.5)];
+    strips.push(buttonStrip(eye, { buttons: sysButtons, w: 0.085 * sysButtons.length, h: 0.064, x: 0.566, y: -0.575, z: -0.3 }));
+    strips.push(buttonStrip(eye, { buttons: AP_BUTTONS, w: 0.48, h: 0.064, x: 0.566, y: -0.575, z: 0.3 }));
     // throttle plunger, mixture next to it
     for (const [z, col] of [[0.0, 0x151515], [0.08, 0xb8372e]]) {
       const t = new THREE.Group();
@@ -170,6 +228,9 @@ export function createCockpit(cfg, hud) {
     t.add(lever);
     eye.add(t);
     throttles.push({ t, x0: -0.06, travel: 0.14 });
+    // side-console tops: flaps (and start switches) left, autopilot right
+    strips.push(buttonStrip(eye, { buttons: sysButtons, w: 0.2, h: 0.04 * sysButtons.length, x: 0.12, y: -0.262, z: -0.37, orient: 'up' }));
+    strips.push(buttonStrip(eye, { buttons: AP_BUTTONS, w: 0.2, h: 0.4, x: 0.12, y: -0.262, z: 0.37, orient: 'up' }));
   } else {
     // airliner
     const over = std(0x3c4148, 0.85);
@@ -180,8 +241,8 @@ export function createCockpit(cfg, hud) {
     box(eye, darker, 0.36, 0.56, 2.0, 1.12, -0.4, 0);
     box(eye, dark, 0.42, 0.05, 2.1, 0.92, -0.14, 0, 0, 0, 0.1);              // glareshield
     box(eye, std(0x1f2226, 0.6), 0.04, 0.06, 1.0, 0.72, -0.12, 0);          // MCP face
-    const lcd = new THREE.MeshBasicMaterial({ color: 0xc87a10 });
-    for (let i = 0; i < 5; i++) box(eye, lcd, 0.01, 0.014, 0.05, 0.699, -0.11, -0.36 + i * 0.18);
+    // MCP: the autopilot buttons along the glareshield
+    strips.push(buttonStrip(eye, { buttons: AP_BUTTONS, w: 0.84, h: 0.05, x: 0.697, y: -0.12, z: 0 }));
     box(eye, over, 1.4, 0.06, 1.9, 0.0, 0.5, 0);                              // overhead
     rodBetween(eye, trim, [1.08, -0.17, 0], [0.82, 0.47, 0], 0.022);         // centre post
     for (const s of [-1, 1]) {
@@ -202,16 +263,51 @@ export function createCockpit(cfg, hud) {
       throttles.push({ t, x0: 0.24, travel: 0.16 });
     }
     yokes = [yoke(eye, yokeM, grip, -0.5, 0.6, -0.45), yoke(eye, yokeM, grip, 0.5, 0.6, -0.45)];
+    strips.push(buttonStrip(eye, { buttons: sysButtons, w: 0.12 * sysButtons.length, h: 0.09, x: 0.52, y: -0.578, z: 0, orient: 'up' }));
   }
 
   group.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
   group.visible = false;
 
   let redrawT = 0, night = false;
+  const pickables = strips.map(st => st.mesh);
   return {
     group,
     style,
-    setNight(on) { night = !!on; if (panel) panel.mat.emissiveIntensity = night ? 0.85 : 0.12; },
+    strips,
+    setNight(on) {
+      night = !!on;
+      if (panel) panel.mat.emissiveIntensity = night ? 0.85 : 0.12;
+      for (const st of strips) st.mat.emissiveIntensity = night ? 0.7 : 0.25;
+    },
+    /** Lit/label state for the switch rows (main.js: AP status + switch positions). */
+    setUi(states) { for (const st of strips) st.draw(states); },
+    /**
+     * Which cockpit control a ray hits, or null. Only the button rows are
+     * clickable; the ray is tested against the live (visible) cockpit.
+     */
+    pick(raycaster) {
+      if (!group.visible || !pickables.length) return null;
+      group.updateMatrixWorld(true);
+      const hit = raycaster.intersectObjects(pickables, false)[0];
+      if (!hit || !hit.uv) return null;
+      const st = strips.find(s2 => s2.mesh === hit.object);
+      return st ? { id: st.pick(hit.uv), point: hit.point } : null;
+    },
+    /** World position of a button's centre (tests and tooltips). */
+    buttonWorld(id, out = new THREE.Vector3()) {
+      for (const st of strips) {
+        const i = st.buttons.findIndex(b => b.id === id);
+        if (i < 0) continue;
+        st.mesh.geometry.computeBoundingBox();
+        const bb = st.mesh.geometry.boundingBox, n = st.buttons.length, u = (i + 0.5) / n;
+        // uv.x runs along +z in strip space for both orientations
+        out.set((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2, bb.min.z + (bb.max.z - bb.min.z) * u);
+        group.updateMatrixWorld(true);
+        return st.mesh.localToWorld(out);
+      }
+      return null;
+    },
     update(ac, controls, dt) {
       group.position.set(ac.pos.x, ac.pos.y, ac.pos.z);
       group.quaternion.set(ac.q.x, ac.q.y, ac.q.z, ac.q.w);
