@@ -77,6 +77,13 @@ function cockpitAction(id) {
     case 'nav-dn': radios.step('nav', -1); break;
     case 'nav-up': radios.step('nav', 1); break;
     case 'nav-swap': radios.swap('nav'); break;
+    case 'lt-land': case 'lt-nav': case 'lt-strb': case 'lt-bcn': {
+      const k = { 'lt-land': 'land', 'lt-nav': 'nav', 'lt-strb': 'strobe', 'lt-bcn': 'beacon' }[id];
+      if (s && s.lights) s.lights[k] = !s.lights[k];
+      break;
+    }
+    case 'fuel': if (s) { const F = ['BOTH', 'L', 'R', 'OFF']; s.fuel = F[(F.indexOf(s.fuel || 'BOTH') + 1) % F.length]; } break;
+    case 'trim-dn': case 'trim-up': controls.state.trim = Math.max(-0.3, Math.min(0.3, (controls.state.trim || 0) + (id === 'trim-up' ? 0.03 : -0.03))); break;
     case 'cb-avn': case 'cb-ap': case 'cb-flap': { const k = id.slice(3); if (ac.breakers) ac.breakers[k] = !ac.breakers[k]; break; }
     case 'hdg-dn': case 'hdg-up': autopilot.sel.hdg = (Math.round(autopilot.sel.hdg / 5) * 5 + (id === 'hdg-up' ? 5 : -5) + 360) % 360; break;
     case 'alt-dn': case 'alt-up': autopilot.sel.alt = Math.max(0, (Math.round(autopilot.sel.alt * 3.28084 / 100) * 100 + (id === 'alt-up' ? 100 : -100)) / 3.28084); break;
@@ -629,6 +636,11 @@ function frame(now) {
       'hdg-up': '+' + String(Math.round(apS.selHdg) % 360).padStart(3, '0'), 'alt-up': '+' + (Math.round(apS.selAlt * 3.28084 / 100) * 100),
       bat: !!ac.sys?.battery, mix: (ac.sys?.mixture ?? 1) > 0.3, start: ac.sys?.mags === 'START',
       mags: ac.sys ? (ac.sys.mags === 'OFF' ? false : 'M ' + (ac.sys.mags === 'START' ? 'ST' : ac.sys.mags)) : false,
+      'lt-land': ac.sys?.lights?.land !== false, 'lt-nav': ac.sys?.lights?.nav !== false,
+      'lt-strb': ac.sys?.lights?.strobe !== false, 'lt-bcn': ac.sys?.lights?.beacon !== false,
+      fuel: ac.sys?.fuel === 'OFF' ? false : 'F ' + (ac.sys?.fuel || 'BOTH'),
+      'trim-up': (controls.state.trim || 0) > 0.005 ? 'T ' + Math.round(controls.state.trim * 100) : false,
+      'trim-dn': (controls.state.trim || 0) < -0.005 ? 'T ' + Math.round(controls.state.trim * 100) : false,
       'cb-avn': ac.breakers?.avn !== false, 'cb-ap': ac.breakers?.ap !== false, 'cb-flap': ac.breakers?.flap !== false,
       'flap-up': controls.flapDetent === 0, 'flap-dn': controls.flapDetent > 0 ? (flapNames?.[controls.flapDetent] ?? true) : false,
     }, ac.avionics === false ? null : {

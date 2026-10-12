@@ -285,8 +285,8 @@ export function drawSteamPanel(x, W, H, ac, hud, ui = null) {
   // master / mags / starter / mixture / flaps: a switch column at the left edge
   const sx = W * 0.012, sw = gx - r * 1.2 - sx;
   // two columns once it grows past six switches, so the lower ones stay above the HUD's status box
-  const cols = ui.sys.length > 6 ? 2 : 1, rows = Math.ceil(ui.sys.length / cols);
-  if (sw > 40 && ui.sys.length) hits.push(...drawButtons(x, ui.sys, ui.states, { x: sx, y: H * 0.05, w: sw, h: Math.min(H * 0.9, rows * H * 0.13) }, cols));
+  const cols = ui.sys.length > 12 ? 3 : ui.sys.length > 6 ? 2 : 1, rows = Math.ceil(ui.sys.length / cols);
+  if (sw > 40 && ui.sys.length) hits.push(...drawButtons(x, ui.sys, ui.states, { x: sx, y: H * 0.05, w: sw, h: Math.min(H * 0.86, rows * H * 0.13) }, cols));
   return hits;
 }
 

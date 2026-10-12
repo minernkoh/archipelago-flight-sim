@@ -302,6 +302,14 @@ const ckClick = await page.evaluate(async () => {
 });
 check('clicking the cockpit HDG button engages heading hold', ckClick.before === false && ckClick.after === true, JSON.stringify(ckClick));
 check('clicking the HDG+ knob steps the heading bug 5 deg', ckClick.bugStep === 5, JSON.stringify(ckClick));
+const sw = await page.evaluate(() => {
+  const s = window.__sim, t0 = s.controls.state.trim;
+  s.cockpitAction('trim-up'); s.cockpitAction('lt-strb'); s.cockpitAction('fuel');
+  const r = { trim: +(s.controls.state.trim - t0).toFixed(3), strobe: s.ac.sys.lights.strobe, fuel: s.ac.sys.fuel };
+  s.cockpitAction('trim-dn'); s.cockpitAction('lt-strb'); for (let i = 0; i < 3; i++) s.cockpitAction('fuel');   // put them back
+  return r;
+});
+check('cockpit trim, light and fuel selector switches act', sw.trim === 0.03 && sw.strobe === false && sw.fuel === 'L', JSON.stringify(sw));
 await press('h');   // HDG back off
 await press('c');
 await settle(400);

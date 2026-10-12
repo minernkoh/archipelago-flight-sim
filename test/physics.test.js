@@ -1754,6 +1754,24 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   check('radios: tune standby, swap to active; NAV off the ILS frequency is detected', !off && r.ilsTuned && fmtFreq(r.com.sby) === '121.525', fmtFreq(r.com.sby));
 }
 
+// ---- v12: fuel selector ----
+{
+  const { createAircraft, step, resetOnRunway } = await import('../src/physics/flightModel.js');
+  const { AIRCRAFT } = await import('../src/aircraft/params.js');
+  const env = { groundHeight: () => 0, terrainHeight: () => 0, isRunway: () => false };
+  const ac = createAircraft({ pos: { x: 0, y: 1000, z: 0 }, vel: { x: 55, y: 0, z: 0 } }); ac.p = { ...AIRCRAFT.c172 };
+  const c = { elevator: 0, aileron: 0, rudder: 0, throttle: 0.7, flaps: 0, brakes: false, trim: 0 };
+  ac.sys.fuel = 'OFF';
+  let quitAt = null;
+  for (let i = 0; i < 20 * 120; i++) { step(ac, c, env, 1 / 120); if (quitAt === null && !ac.engineRunning) quitAt = i / 120; }
+  check('fuel selector OFF: the engine runs on the lines ~12 s, then starves', quitAt > 11 && quitAt < 13.5, `quit at ${quitAt?.toFixed(1)} s`);
+  ac.sys.fuel = 'BOTH';
+  for (let i = 0; i < 240; i++) step(ac, c, env, 1 / 120);
+  check('fuel back on does not magically restart it (needs the starter)', ac.engineRunning === false);
+  resetOnRunway(ac, { x: 0, z: 0, y: 0, headingRad: 0 });
+  check('a respawn resets the fuel selector and the light switches', ac.sys.fuel === 'BOTH' && ac.sys.lights.nav === true && ac.fuelStarveT === 0);
+}
+
 // ---- v12: volumetric cloud noise (volclouds.js) ----
 {
   const { cloudNoise } = await import('../src/volclouds.js');

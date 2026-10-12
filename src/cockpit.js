@@ -166,6 +166,12 @@ export function createCockpit(cfg, hud, p = null) {
     { id: 'flap-up', label: 'FLAP ▲' }, { id: 'flap-dn', label: 'FLAP ▼' },
     // circuit breakers (lit = in): avionics bus, autopilot, flap motor
     { id: 'cb-avn', label: 'CB AVN' }, { id: 'cb-ap', label: 'CB AP' }, { id: 'cb-flap', label: 'CB FLP' },
+    // steam cockpits: light switches, fuel selector (start-up aircraft) and the trim wheel
+    ...(glass ? [] : [
+      { id: 'lt-land', label: 'LAND' }, { id: 'lt-nav', label: 'NAV' }, { id: 'lt-strb', label: 'STRB' }, { id: 'lt-bcn', label: 'BCN' },
+      ...(p?.startup ? [{ id: 'fuel', label: 'FUEL' }] : []),
+      { id: 'trim-dn', label: 'TRM ▼' }, { id: 'trim-up', label: 'TRM ▲' },
+    ]),
     // glass cockpits tune NAV 1 here (the steam panels have it in the radio stack)
     ...(glass ? [{ id: 'nav-dn', label: 'NAV−' }, { id: 'nav-up', label: 'NAV+' }, { id: 'nav-swap', label: 'NAV ⇄' }] : []),
   ];

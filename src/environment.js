@@ -843,7 +843,7 @@ export function createEnvironment(scene, renderer) {
 
       // Landing-light cone: nose-mounted spotlight pointing along body +x. Only
       // lit at night; a single no-shadow light, so it stays cheap.
-      if (tod.night) {
+      if (tod.night && ac.sys?.lights?.land !== false) {   // the cockpit LAND switch
         tmpQ.set(ac.q.x, ac.q.y, ac.q.z, ac.q.w);
         fwdV.set(1, 0, 0).applyQuaternion(tmpQ);
         landing.position.set(ac.pos.x, ac.pos.y, ac.pos.z);

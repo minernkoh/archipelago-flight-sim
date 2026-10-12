@@ -84,7 +84,9 @@ export function createAircraft(opts = {}) {
     breakers: { avn: true, ap: true, flap: true },
     // v5-R3: piston start/electrical state (only exercised for p.startup aircraft).
     // Defaults are ready-to-fly so every existing caller spawns hot.
-    sys: { battery: true, mags: 'BOTH', mixture: 1 }, // player switch positions
+    // player switch positions (v12: fuel selector and light switches)
+    sys: { battery: true, mags: 'BOTH', mixture: 1, fuel: 'BOTH', lights: { land: true, nav: true, strobe: true, beacon: true } },
+    fuelStarveT: 0,        // seconds the fuel selector has been OFF (the lines run dry after ~12 s)
     engineRunning: true,   // is the engine actually turning under its own power
     batteryCharge: 1,      // 0..1; alternator recharges, loads drain
     crankT: 0,             // seconds the starter has been engaged
@@ -129,14 +131,15 @@ export function resetSystems(ac) {
   ac._flapJam = null; ac.gyro = null;
   ac.breakers = { avn: true, ap: true, flap: true };
   // Ready-to-fly: master on, mags BOTH, mixture rich, engine turning, full battery.
-  ac.sys = { battery: true, mags: 'BOTH', mixture: 1 };
+  ac.sys = { battery: true, mags: 'BOTH', mixture: 1, fuel: 'BOTH', lights: { land: true, nav: true, strobe: true, beacon: true } };
+  ac.fuelStarveT = 0;
   ac.engineRunning = true; ac.batteryCharge = 1; ac.crankT = 0; ac.avionics = true;
 }
 
 // Cold & dark (v5-R3): master OFF, mags OFF, mixture cut, engine stopped. The
 // player must run the start sequence. Battery is charged — it's just switched off.
 export function setColdStart(ac) {
-  ac.sys = { battery: false, mags: 'OFF', mixture: 0 };
+  ac.sys = { battery: false, mags: 'OFF', mixture: 0, fuel: 'BOTH', lights: { land: false, nav: false, strobe: false, beacon: false } };
   ac.engineRunning = false; ac.spool = 0; ac.crankT = 0;
   ac.batteryCharge = 1; ac.avionics = false;
 }
@@ -158,7 +161,9 @@ export function updateEngineSystems(ac, dt) {
   const s = ac.sys;
   const magsHot = s.mags === 'L' || s.mags === 'R' || s.mags === 'BOTH' || s.mags === 'START';
   const mixOk = s.mixture > 0.3;
-  const fuelOk = ac.fuelKg > 0;
+  // fuel selector OFF: the engine runs on what is in the lines for ~12 s, then starves
+  ac.fuelStarveT = s.fuel === 'OFF' ? (ac.fuelStarveT || 0) + dt : 0;
+  const fuelOk = ac.fuelKg > 0 && ac.fuelStarveT < 12;
   if (ac.engineRunning) {
     // Runs on its own magnetos; quits if mags cut, mixture starved, out of fuel, or failed.
     if (!magsHot || !mixOk || !fuelOk || ac.engineFailed) ac.engineRunning = false;

@@ -105,7 +105,7 @@ function navMats(col) {
   return [_navCoreMat[col], _navGlowMat[col]];
 }
 function navLights(parent, s, specs) {
-  const blinkers = [];
+  const blinkers = [], steady = [];
   for (const [kind, x, y, z] of specs) {
     const col = kind === 'strobe' ? 'white' : kind === 'beacon' ? 'red' : kind;
     const [cm, gm] = navMats(col);
@@ -119,16 +119,20 @@ function navLights(parent, s, specs) {
     grp.add(core, glow);
     parent.add(grp);
     if (strong) blinkers.push({ grp, kind });
+    else steady.push(grp);
   }
   let t = 0;
-  // Called once per frame; allocation free.
-  return function tick(dt) {
+  // Called once per frame; allocation free. sw = the cockpit light switches
+  // ({ nav, strobe, beacon }, ac.sys.lights); absent (AI traffic) = all on.
+  return function tick(dt, sw) {
     t += dt;
     const sp = t % 1.2;
     const strobeOn = sp < 0.07 || (sp > 0.18 && sp < 0.25);
     const beaconOn = (t % 0.95) < 0.22;
+    const navSw = !sw || sw.nav !== false, strobeSw = !sw || sw.strobe !== false, beaconSw = !sw || sw.beacon !== false;
+    for (let i = 0; i < steady.length; i++) steady[i].visible = navSw;
     for (let i = 0; i < blinkers.length; i++) {
-      blinkers[i].grp.visible = blinkers[i].kind === 'strobe' ? strobeOn : beaconOn;
+      blinkers[i].grp.visible = blinkers[i].kind === 'strobe' ? strobeOn && strobeSw : beaconOn && beaconSw;
     }
   };
 }
@@ -377,7 +381,7 @@ function c172() {
       propAngle += spinner(rpmNorm) * dt;
       blades.rotation.x = propAngle;
       propBlur(disc, blades, rpmNorm);
-      lights(dt);
+      lights(dt, st && st.sys && st.sys.lights);
     },
   };
 }
@@ -521,7 +525,7 @@ function extra300() {
       propAngle += (4 + 130 * rpmNorm) * dt;
       blades.rotation.x = propAngle;
       propBlur(disc, blades, rpmNorm);
-      lights(dt);
+      lights(dt, st && st.sys && st.sys.lights);
     },
   };
 }
@@ -693,7 +697,7 @@ function hornet() {
     group: g,
     animate(controls, rpmNorm, dt, st) {
       gear(dt, st);
-      lights(dt);
+      lights(dt, st && st.sys && st.sys.lights);
       const e = 0.28 * controls.elevator;
       stabs[0].set(e); stabs[1].set(-e);
       const ael = 0.4 * controls.aileron;
@@ -901,7 +905,7 @@ function heavy() {
     group: g,
     animate(controls, rpmNorm, dt, st) {
       gear(dt, st);
-      lights(dt);
+      lights(dt, st && st.sys && st.sys.lights);
       const e = 0.12 * controls.elevator;
       HR.elev.set(e); HL.elev.set(-e);
       const ael = 0.15 * controls.aileron;
@@ -1018,7 +1022,7 @@ function spirit() {
     group: g,
     animate(controls, rpmNorm, dt, st) {
       gear(dt, st);
-      lights(dt);
+      lights(dt, st && st.sys && st.sys.lights);
       const eR = 0.3 * controls.elevator + 0.35 * controls.aileron;
       const eL = 0.3 * controls.elevator - 0.35 * controls.aileron;
       RW.elev.set(eR); LW.elev.set(-eL);
