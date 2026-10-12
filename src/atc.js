@@ -48,8 +48,8 @@ export const PHRASES = {
   offField:  (c) => `${c.callsign}, we show you down off the field. Say your intentions.`,
   // v12: traffic (aitraffic.js). c.traffic = aircraft type, c.clock, c.miles, c.rel.
   holdShort: (c) => `${c.callsign}, hold position, traffic on short final.`,
-  sequence:  (c) => `${c.callsign}, number two, follow the ${c.traffic} on final.`,
-  trafficInfo: (c) => `${c.callsign}, traffic, ${c.clock} o'clock, ${c.miles} ${c.miles === 'one' ? 'mile' : 'miles'}, ${c.rel}, ${c.traffic} in the pattern.`,
+  sequence:  (c) => `${c.callsign}, number two, follow the ${c.traffic} on final${c.wake ? ', caution wake turbulence' : ''}.`,
+  trafficInfo: (c) => `${c.callsign}, traffic, ${c.clock} o'clock, ${c.miles} ${c.miles === 'one' ? 'mile' : 'miles'}, ${c.rel}, ${c.traffic}${c.wake ? ' on final' : ' in the pattern'}.`,
   goAroundTraffic: (c) => `${c.callsign}, go around, traffic on the runway. Climb runway heading.`,
 };
 const NUM = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
@@ -143,7 +143,7 @@ export function createAtc({ field, rwyName, callsign, say } = {}) {
       // v12 traffic: ai = aitraffic state (or null), toAim = our distance before the aim point
       const ai = snap.ai || null;
       const aiShort = !!ai && (ai.onRunway || (ai.phase === 'final' && ai.toAim < LIMITS.shortFinal));
-      const tx = ai ? { traffic: ai.type || 'Cessna' } : null;
+      const tx = ai ? { traffic: ai.type || 'Cessna', wake: !!ai.heavy } : null;
 
       switch (phase) {
         case 'hold':

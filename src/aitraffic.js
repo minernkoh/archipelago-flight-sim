@@ -98,3 +98,72 @@ export function clockOf(headingRad, dx, dz) {
   const c = Math.round(rel / (Math.PI / 6)) % 12;
   return c === 0 ? 12 : c;
 }
+
+/**
+ * An airliner on a straight-in ILS arrival (v12): appears `out` m out on the
+ * extended centreline, flies the 3 deg glideslope to the same aim point at
+ * approach speed, flares, rolls out decelerating, and vacates near the end of
+ * the runway, then is gone until the next arrival `period` seconds later.
+ * `offset` shifts the cycle (traffic.js times it into a gap in the circuit).
+ */
+export function createStraightInTraffic(rwy, { out = 14000, vapp = 72, period = 596, offset = 0, type = 'Heavy jet' } = {}) {
+  const h = rwy.headingRad;
+  const fx = Math.cos(h), fz = -Math.sin(h), rx = Math.sin(h), rz = Math.cos(h);
+  const spawnU = rwy.spawn.x * fx + rwy.spawn.z * fz;
+  const aim = spawnU + 300;
+  const x1 = Number.isFinite(rwy.x1) ? rwy.x1 : aim + 2500;
+  const tFinal = out / vapp;                                  // seconds on the glideslope
+  const decel = 2.2, vTaxi = 12;
+  const rollLen = Math.max(200, Math.min((vapp * vapp - vTaxi * vTaxi) / (2 * decel), x1 - aim - 150));
+  const tRoll = (vapp - Math.sqrt(Math.max(vTaxi * vTaxi, vapp * vapp - 2 * decel * rollLen))) / decel;
+  const out_ = { x: 0, y: 0, z: 0, u: 0, v: 0, yaw: h, pitch: 0, bank: 0, phase: 'gone', onRunway: false, toAim: 1e9,
+    type, heavy: true, speed: 0, agl: 0, visible: false };
+  return {
+    period, tFinal, tRoll,
+    /** Arrival-cycle time (s) at absolute time t; 0 = appears on the extended centreline. */
+    cycle(t) { return (((t + offset) % period) + period) % period; },
+    at(t) {
+      const c = this.cycle(t);
+      let u, y, spd;
+      if (c < tFinal) {
+        u = aim - out + vapp * c; spd = vapp;
+        y = (aim - u) * Math.tan(3 * Math.PI / 180);
+        if (aim - u < 400) y *= 0.55 + 0.45 * (aim - u) / 400;   // the flare: shallower over the threshold
+        out_.phase = 'final'; out_.pitch = aim - u < 400 ? 0.05 : 0.035;
+      } else if (c < tFinal + tRoll) {
+        const tr = c - tFinal;
+        u = aim + vapp * tr - 0.5 * decel * tr * tr; spd = vapp - decel * tr; y = 0;
+        out_.phase = 'runway'; out_.pitch = 0;
+      } else {
+        out_.phase = 'gone'; out_.visible = false; out_.onRunway = false; out_.toAim = 1e9; out_.speed = 0;
+        return out_;
+      }
+      out_.visible = true;
+      out_.u = u; out_.v = 0; out_.speed = spd; out_.agl = y;
+      out_.x = fx * u; out_.z = fz * u; out_.y = (rwy.y || 0) + y;
+      out_.yaw = h; out_.bank = 0;
+      out_.onRunway = out_.phase === 'runway' || y < 15;
+      out_.toAim = aim - u;
+      return out_;
+    },
+  };
+}
+
+/**
+ * The airliner, timed into the circuit: its last 1.5 km and rollout must fall
+ * in a gap where neither club aircraft (`circuit` at t and t + spacing) is on
+ * short final or the runway. Both cycles repeat every two circuit laps.
+ */
+export function slotStraightIn(rwy, circuit, spacing) {
+  const clubPeriod = circuit.total / circuit.speed;
+  const busy = (t) => [0, spacing].some(o => { const a = circuit.at(t + o); return a.onRunway || (a.phase === 'final' && a.toAim < 1500); });
+  const probe = createStraightInTraffic(rwy, { period: 2 * clubPeriod });
+  const t0 = probe.tFinal - 1500 / 72 - 6, t1 = probe.tFinal + probe.tRoll + 10;
+  for (let off = 0; off < 2 * clubPeriod; off += 2) {
+    let ok = true;
+    // with offset `off` the jet's cycle time c happens at absolute t = c - off
+    for (let c = t0; c <= t1 && ok; c += 0.5) if (busy(c - off)) ok = false;
+    if (ok) return Object.assign(createStraightInTraffic(rwy, { period: 2 * clubPeriod, offset: off }), { slotted: true });
+  }
+  return Object.assign(createStraightInTraffic(rwy, { period: 2 * clubPeriod }), { slotted: false });   // no gap: still fly it
+}

@@ -850,6 +850,8 @@ check('tower clears you for takeoff on spawn',
   JSON.stringify(atcSpawn));
 const aiNow = await sim('(() => { const a = __sim.world.aiTraffic(); return a && { phase: a.phase, y: Math.round(a.y) }; })()');
 check('AI circuit traffic is flying the pattern', !!aiNow && typeof aiNow.phase === 'string', JSON.stringify(aiNow));
+const jetArr = await sim(`(() => { for (let t = 0; t < 700; t += 2) { const j = __sim.traffic.aiStates(t).find(a => a.heavy); if (j) return { t, phase: j.phase, toAim: Math.round(j.toAim) }; } return null; })()`);
+check('an AI airliner arrives on a straight-in ILS', !!jetArr && jetArr.phase === 'final', JSON.stringify(jetArr));
 
 // A lesson must leave the frequency to the instructor.
 await page.evaluate(() => window.__sim.game.toMenu());

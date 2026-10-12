@@ -11,7 +11,8 @@
 // allocation and no Math.random.
 
 import * as THREE from 'three';
-import { createCircuitTraffic } from './aitraffic.js';
+import { createCircuitTraffic, slotStraightIn } from './aitraffic.js';
+import { MESH_BUILDERS } from './aircraft/meshes.js';
 import { loft, surface, mergeGeos, PROFILE } from './aircraft/modelkit.js';
 
 const CELL = 2000;
@@ -284,7 +285,12 @@ export function createTraffic(scene, map, opts = {}) {
   const ai = hasRunway ? createCircuitTraffic(rwy) : null;
   const AI_SPACING = ai ? ai.total / ai.speed / 2 : 0;   // seconds between the two aircraft
   let aiT = 0;
-  const aiOut = [{}, {}];
+  const aiOut = [{}, {}, {}];
+  // An airliner on a straight-in ILS arrival, timed so its last 2.5 km and
+  // rollout fall in a gap where neither club aircraft is on short final or
+  // the runway (both cycles repeat every two circuit laps).
+  let jet = null, jetMesh = null;
+  if (ai) jet = slotStraightIn(rwy, ai, AI_SPACING);
   const planeGeo = hasRunway ? clubPlaneGeometry() : null;
   const planeMat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.45, metalness: 0.05, envMapIntensity: 0.4 });
   const planeMeshes = [];
@@ -298,6 +304,17 @@ export function createTraffic(scene, map, opts = {}) {
     }
   }
   let bank0 = 0, bank1 = 0;
+  let jetAnim = null;
+  if (jet) {
+    jetAnim = MESH_BUILDERS.heavy();
+    jetMesh = jetAnim.group;
+    jetMesh.rotation.order = 'YXZ';
+    jetMesh.traverse(o => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+    jetMesh.visible = false;
+    group.add(jetMesh);
+  }
+  const jetCtl = { elevator: 0, aileron: 0, rudder: 0, throttle: 0.35, flaps: 1, brakes: false };
+  const jetSt = { onGround: false, agl: 300, airspeed: 72, groundSpeed: 72, rpmNorm: 0.5, vel: { x: 0, y: 0, z: 0 }, q: { x: 0, y: 0, z: 0, w: 1 }, flapsEff: 1, gearPos: 1 };
 
   // ---------- birds ----------
   const birds = new THREE.InstancedMesh(birdGeometry(), new THREE.MeshLambertMaterial({ color: 0xf6f6f4, side: THREE.DoubleSide, flatShading: true }), MAX_FLOCKS * BIRDS_PER_FLOCK);
@@ -414,6 +431,18 @@ export function createTraffic(scene, map, opts = {}) {
     }
     writeBoats(t);
     writeBirds(t);
+    if (jet && jetMesh) {
+      const j = jet.at(t);
+      const near = Math.hypot(camPos.x - j.x, camPos.z - j.z) < 20000;
+      jetMesh.visible = j.visible && near;
+      if (jetMesh.visible) {
+        jetMesh.position.set(j.x, j.y + 5.5, j.z);
+        jetMesh.rotation.set(0, j.yaw, j.pitch);
+        jetSt.onGround = j.phase === 'runway'; jetSt.agl = j.agl; jetSt.airspeed = jetSt.groundSpeed = j.speed;
+        jetCtl.throttle = j.phase === 'runway' ? 0 : 0.35;
+        try { jetAnim.animate(jetCtl, j.phase === 'runway' ? 0.3 : 0.55, dt, jetSt); } catch { /* cosmetic only */ }
+      }
+    }
     if (hasRunway) {
       for (let i = 0; i < planeMeshes.length; i++) {
         const mesh = planeMeshes[i];
@@ -448,7 +477,9 @@ export function createTraffic(scene, map, opts = {}) {
     /** Both circuit aircraft (copies), for the tower to pick the one that matters. */
     aiStates(t = aiT) {
       if (!enabled || !ai) return [];
-      return [0, 1].map(i => Object.assign(aiOut[i], ai.at(t + i * AI_SPACING), { id: i }));
+      const list = [0, 1].map(i => Object.assign(aiOut[i], ai.at(t + i * AI_SPACING), { id: i }));
+      if (jet) { const j = jet.at(t); if (j.visible) list.push(Object.assign(aiOut[2], j, { id: 2 })); }
+      return list;
     },
     setEnabled(on) { enabled = !!on; group.visible = enabled; },
     dispose() {

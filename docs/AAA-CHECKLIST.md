@@ -48,7 +48,7 @@ Those are marked as scope limits, not as defects.
 | Planet-wide coverage, satellite imagery, photogrammetry | Not met (scope) | Needs licensed imagery and streaming servers |
 | Detailed fictional maps (archipelago, Singapore, alpine) | Met | `src/maps/` |
 | Airports: ICAO markings, approach lights, PAPI, aprons, hangars | Met | `runwayPaint.js`, `runwayLights.js`, `airfieldKit.js` |
-| AI traffic | Partial | Two AI aircraft fly real touch-and-goes, half a circuit apart, and the tower works the one that matters: hold short, number two, runway-occupied go-around, traffic calls (`aitraffic.js`, physics suite + e2e). Scripted paths, no airliner/IFR traffic, no collision avoidance. |
+| AI traffic | Partial | Two club aircraft fly real touch-and-goes and an airliner flies a straight-in ILS arrival every ~10 min, slotted so nobody shares short final or the runway. The tower works whichever matters: hold short, number two (with a wake turbulence caution behind the airliner), runway-occupied go-around, traffic calls (`aitraffic.js`, physics suite + e2e). Scripted paths: no departures, no ground taxi traffic, no collision avoidance. |
 
 ## Atmosphere and rendering
 

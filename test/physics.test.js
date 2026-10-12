@@ -1654,6 +1654,22 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   { let clash = 0; for (let t = 0; t < period; t += 0.5) { const p1 = { ...ai.at(t) }, p2 = ai.at(t + period / 2);
       if ((p1.onRunway || p1.phase === 'final') && (p2.onRunway || p2.phase === 'final')) clash++; }
     check('AI traffic: two aircraft half a lap apart never share final or the runway', clash === 0, `${clash} clashes`); }
+  // the airliner: straight-in on the glideslope, slotted between the club aircraft
+  { const { slotStraightIn } = await import('../src/aitraffic.js');
+    const jet = slotStraightIn(rwy, ai, period / 2);
+    let clash = 0, onGs = true, seenRoll = false;
+    for (let t = 0; t < 2 * period; t += 0.5) {
+      const j = { ...jet.at(t) };
+      if (!j.visible) continue;
+      if (j.phase === 'final' && j.toAim > 500 && Math.abs((j.y - 5) - j.toAim * Math.tan(3 * Math.PI / 180)) > 1) onGs = false;
+      if (j.phase === 'runway') seenRoll = true;
+      const jetBusy = j.onRunway || j.toAim < 1500;
+      const club = [0, period / 2].some(o => { const a = ai.at(t + o); return a.onRunway || (a.phase === 'final' && a.toAim < 1500); });
+      if (jetBusy && club) clash++;
+    }
+    check('AI airliner: straight-in on the 3 deg glideslope, lands and rolls out', onGs && seenRoll);
+    check('AI airliner: slotted so it never shares short final (1.5 km) or the runway with the circuit traffic', clash === 0 && jet.slotted === true, `${clash} clashes, slotted ${jet.slotted}`);
+  }
   check('clock positions', clockOf(0, 100, 0) === 12 && clockOf(0, 0, 100) === 3 && clockOf(0, -100, 0) === 6 && clockOf(0, 0, -100) === 9);
 
   const said = [];
@@ -1696,6 +1712,11 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   d.update({ onGround: false, agl: 300, vsFpm: 0, cross: 2000, pos: { x: 0, y: 300, z: 0 }, headingRad: 0,
     ai: aiAt({ x: 1000, z: 0, y: 320 }) }, 10);
   check('ATC: traffic calls are rate-limited', said.length === 1);
+  const e = tower();
+  e.update({ onGround: false, agl: 800, cross: 0 }, 0);
+  e.update({ onGround: false, agl: 300, vsFpm: -400, cross: 10, toAim: 6000, ai: aiAt({ phase: 'final', toAim: 3000, y: 160, type: 'Heavy jet', heavy: true }) }, 5);
+  e.update({ onGround: false, agl: 290, vsFpm: -400, cross: 10, toAim: 5800, ai: aiAt({ phase: 'final', toAim: 2800, y: 150, type: 'Heavy jet', heavy: true }) }, 5);
+  check('ATC: behind an airliner the sequence adds a wake turbulence caution', /follow the Heavy jet on final, caution wake turbulence/.test(said.find(x => x.id === 'sequence')?.t || ''), said.map(x => x.t).join(' | '));
 }
 
 // ---- v12: volumetric cloud noise (volclouds.js) ----
