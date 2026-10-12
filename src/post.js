@@ -38,8 +38,10 @@ const GradeShader = {
         g+=vec3(0.6,0.85,1.0)*disc(vUv,sun+ax*0.95,0.07,0.95)*0.35;
         g+=vec3(1.0,0.7,0.5)*disc(vUv,sun+ax*1.45,0.035,0.8)*0.5;
         g+=vec3(0.7,1.0,0.8)*disc(vUv,sun+ax*1.9,0.1,0.97)*0.22;
-        float ring=disc(vUv,sun+ax*1.15,0.16,0.04)-disc(vUv,sun+ax*1.15,0.145,0.04);
-        g+=vec3(0.9,0.9,1.0)*max(ring,0.0)*0.18;
+        // the halo ghost: soft and wide (a thin hard ring read as an artefact
+        // drawn around the aircraft, which usually sits near the screen centre)
+        float ring=disc(vUv,sun+ax*1.15,0.2,0.45)-disc(vUv,sun+ax*1.15,0.13,0.6);
+        g+=vec3(0.9,0.9,1.0)*max(ring,0.0)*0.08;
         c+=g*flare*0.14;
       }
       // vignette

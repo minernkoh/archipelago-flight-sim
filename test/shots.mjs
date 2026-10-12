@@ -37,7 +37,8 @@ const pose = (dx, alt, pitchDeg = 0, yawOff = 0) => page.evaluate((dx, alt, pitc
   const h = r.headingRad + yawOff;
   const fx = Math.cos(h), fz = -Math.sin(h);
   ac.pos.x = r.spawn.x + fx * dx; ac.pos.z = r.spawn.z + fz * dx;
-  ac.pos.y = (dx < 0 ? s.map.runway.y : s.map.height(ac.pos.x, ac.pos.z)) + alt;
+  // never under the ground (the alpine approach climbs above the threshold)
+  ac.pos.y = Math.max(dx < 0 ? s.map.runway.y : -Infinity, s.map.height(ac.pos.x, ac.pos.z)) + alt;
   const sp = 55; ac.vel.x = fx * sp; ac.vel.y = 0; ac.vel.z = fz * sp;
   const qy = [0, Math.sin(h / 2), 0, Math.cos(h / 2)];
   const p = pitchDeg * Math.PI / 360; const qz = [0, 0, Math.sin(p), Math.cos(p)];

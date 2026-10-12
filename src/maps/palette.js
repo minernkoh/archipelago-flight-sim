@@ -17,7 +17,7 @@ export const PAL = {
   scrub:     new THREE.Color(0x8f915e),
   rock:      new THREE.Color(0x958b80),
   rockDark:  new THREE.Color(0x6f6660),
-  snow:      new THREE.Color(0xf4f6fa),
+  snow:      new THREE.Color(0xdde2ea),   // below white so the slope shading still reads in full sun
   shallow:   new THREE.Color(0x74cfc0),
   midwater:  new THREE.Color(0x2f8ea3),
   deep:      new THREE.Color(0x1b4f73),

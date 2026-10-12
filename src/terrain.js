@@ -195,6 +195,17 @@ function terrainMaterial(far) {
           // sun-dried patches and darker damp hollows on vegetation
           c = mix(c, c * vec3(1.18, 1.06, 0.7), veg * smoothstep(0.55, 0.78, macro) * 0.55);
           c = mix(c, c * vec3(0.78, 0.86, 0.8), veg * smoothstep(0.6, 0.85, mid) * 0.4 * midK);
+          // snowfields: bright and unsaturated, so the multiplicative detail above
+          // barely survives tone mapping; give them their own structure: bluish
+          // wind-packed / shadowed patches, and rock outcrops breaking through on
+          // the macro scale (visible from altitude, where a flat white sheet read
+          // as paper)
+          float snow = smoothstep(0.6, 0.74, min(c.r, min(c.g, c.b))) * (1.0 - veg);
+          if (snow > 0.01) {
+            c = mix(c, c * vec3(0.8, 0.86, 0.97), snow * smoothstep(0.42, 0.78, mid * 0.6 + macro * 0.4) * 0.65);
+            float outcrop = smoothstep(0.66, 0.74, macro * 0.55 + mid * 0.3 + fine * 0.15 * nearK + slope * 0.35);
+            c = mix(c, vec3(0.3, 0.29, 0.28), snow * outcrop * 0.85);
+          }
           // crags on steep faces: noise projected on the two vertical planes
           // (triplanar minus the top), blended by the surface normal
           float rockK = smoothstep(0.22, 0.5, slope);

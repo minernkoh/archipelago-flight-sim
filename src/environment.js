@@ -473,6 +473,15 @@ export function createEnvironment(scene, renderer) {
         // shallows only near the aircraft: far off the seabed is coarse and
         // smooth-shaded, and showing it through would paint glowing bands
         float a=mix(mix(0.5,0.96,fres),1.0,smoothstep(900.0,2400.0,d));
+        // and only through SHALLOW water: past ~8 m the sea is opaque, as real
+        // water is (seeing the 40 m seabed showed the terrain tiers' square
+        // boundary through the water as a hard-edged rectangle)
+        if(depthOn>0.5){
+          vec2 duv=(p-depthRect.xy)/depthRect.z+0.5;
+          float ddep=-(texture2D(depthTex,duv).r*50.0-40.0);
+          float din=1.0-smoothstep(0.40,0.48,max(abs(duv.x-0.5),abs(duv.y-0.5)));
+          a=mix(1.0,a,din*(1.0-smoothstep(5.0,14.0,ddep)));
+        } else a=1.0;
         // coastal foam: a soft band over the shallows, drifting in and out
         float foam=0.0;
         if(depthOn>0.5){
@@ -711,6 +720,23 @@ export function createEnvironment(scene, renderer) {
   // closes to a whiteout.
   let wx = { visF: 1, cloudF: 1 };
   const screenFog = new THREE.Color();
+  // Altitude clears the haze (v12): the boundary layer holds most of it, so in
+  // clear air the fog opens up as the camera climbs, up to 1.75x by ~3 km.
+  // Capped at 9 km so it still closes before the coarse terrain tier ends
+  // (~9.9 km). From altitude a short fixed fog drowned every distant ridge in
+  // near-white, brighter than the sky behind it.
+  const fogBase = { near: tod.fogNear, far: tod.fogFar, clear: true, k: 1 };
+  function setFogDistances(near, far) {
+    scene.fog.near = near; scene.fog.far = far;
+    oceanMat.uniforms.fogNear.value = near; oceanMat.uniforms.fogFar.value = far;
+    cloudMat.uniforms.fogNear.value = near; cloudMat.uniforms.fogFar.value = far;
+  }
+  function altitudeFog(camY) {
+    const k = fogBase.clear ? 1 + 0.75 * Math.min(1, Math.max(0, (camY - 400) / 2600)) : 1;
+    if (Math.abs(k - fogBase.k) < 0.01) return;
+    fogBase.k = k;
+    setFogDistances(fogBase.near * k, Math.min(Math.max(fogBase.far, 9000), fogBase.far * k));
+  }
   function applyWeather() {
     const visF = wx.visF * wxSky.vis;
     let near = tod.fogNear * Math.min(1, visF), far = tod.fogFar * visF;
@@ -724,12 +750,10 @@ export function createEnvironment(scene, renderer) {
       oceanMat.uniforms.fogColor.value.copy(scene.fog.color);
       cloudMat.uniforms.fogColor.value.copy(scene.fog.color);
     }
-    scene.fog.near = near; scene.fog.far = far;
-    oceanMat.uniforms.fogNear.value = near;
-    oceanMat.uniforms.fogFar.value = far;
+    fogBase.near = near; fogBase.far = far; fogBase.clear = ic <= 0 && visF >= 0.8;
+    fogBase.k = 1;                 // the next update re-applies the altitude factor
+    setFogDistances(near, far);
     setCover(wxSky.overcast > 0.3 ? 0 : wx.cloudF);
-    cloudMat.uniforms.fogNear.value = near;
-    cloudMat.uniforms.fogFar.value = far;
     cloudsShown = wx.cloudF > 0.06 && wxSky.overcast <= 0.3;
     applyCloudMode();
     // Custom shaders fade toward the fog as it is DISPLAYED on built-in
@@ -830,6 +854,7 @@ export function createEnvironment(scene, renderer) {
     setHeightFn(fn) { heightFn = fn; depthValid = false; build = null; oceanMat.uniforms.depthOn.value = 0; },
     update(ac, dt, elapsed, camPos, cam) {
       oceanMat.uniforms.time.value = elapsed;
+      if (camPos) altitudeFog(camPos.y);
       if (envDirty && (envAt < 0 || elapsed - envAt > 0.5)) regenEnv(elapsed);
       if (rwyLights && cam && renderer) rwyLights.update(cam, elapsed, renderer);
       skyMat.uniforms.time.value = elapsed;

@@ -56,19 +56,20 @@ function glowTex() {
     [0.5, 'rgba(255,255,255,0.16)'], [1, 'rgba(255,255,255,0)'],
   ]));
 }
-// Prop blur: translucent hub, denser band toward the tips, feathered edge.
+// Prop blur: a faint veil, a little denser toward the tips, feathered edge
+// (a real disc barely reads, and a hard band makes it look like a grey plate).
 function propTex() {
   return _propTex || (_propTex = radialTex([
-    [0, 'rgba(70,70,74,0.25)'], [0.3, 'rgba(60,60,64,0.45)'],
-    [0.75, 'rgba(50,50,54,0.8)'], [0.92, 'rgba(50,50,54,0.55)'],
-    [1, 'rgba(50,50,54,0)'],
-  ], 128));
+    [0, 'rgba(70,70,74,0.3)'], [0.4, 'rgba(62,62,66,0.38)'],
+    [0.82, 'rgba(56,56,60,0.55)'], [0.93, 'rgba(56,56,60,0.3)'],
+    [1, 'rgba(56,56,60,0)'],
+  ], 256));
 }
 
 // Prop blur disc whose opacity follows rpm (see propBlur()).
 function propDisc(radius) {
   const disc = new THREE.Mesh(
-    new THREE.CircleGeometry(radius, 24),
+    new THREE.CircleGeometry(radius, 48),
     new THREE.MeshBasicMaterial({
       map: propTex(), color: 0xffffff, transparent: true, opacity: 0,
       side: THREE.DoubleSide, depthWrite: false,
@@ -79,7 +80,7 @@ function propDisc(radius) {
   return disc;
 }
 function propBlur(disc, blades, rpmNorm) {
-  const o = Math.min(1, Math.max(0, (rpmNorm - 0.12) / 0.6)) * 0.55;
+  const o = Math.min(1, Math.max(0, (rpmNorm - 0.12) / 0.6)) * 0.42;
   disc.visible = o > 0.01;
   disc.material.opacity = o;
   blades.visible = rpmNorm < 0.85; // past that the blades are just the disc

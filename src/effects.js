@@ -4,7 +4,7 @@
 
 import * as THREE from 'three';
 
-const PUFF_COUNT = 72;   // smoke/dust/fireball — icosahedron blobs, shared geometry
+const PUFF_COUNT = 72;   // smoke/dust/fireball: soft camera-facing sprites
 const DEBRIS_COUNT = 20; // crash chunks — box geometry
 const GRAVITY = 9.81;    // local copy; this file can't import physics/
 
@@ -14,13 +14,29 @@ export function createEffects(scene) {
   const group = new THREE.Group();
   scene.add(group);
 
-  const puffGeo = new THREE.IcosahedronGeometry(1, 0);
+  // Puffs are soft camera-facing sprites (they were faceted icosahedra, which
+  // read as hard polyhedra up close): a procedural cloud of overlapping blobs.
+  const puffTex = (() => {
+    if (typeof document === 'undefined') return null;
+    const n = 128, c = document.createElement('canvas'); c.width = c.height = n;
+    const x = c.getContext('2d');
+    let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    for (let i = 0; i < 9; i++) {
+      const a = rnd() * Math.PI * 2, d = rnd() * n * 0.16, r = n * (0.2 + rnd() * 0.14);
+      const cx = n / 2 + Math.cos(a) * d, cy = n / 2 + Math.sin(a) * d;
+      const g = x.createRadialGradient(cx, cy, 0, cx, cy, r);
+      g.addColorStop(0, 'rgba(255,255,255,0.42)'); g.addColorStop(0.55, 'rgba(255,255,255,0.18)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+      x.fillStyle = g; x.fillRect(0, 0, n, n);
+    }
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  })();
   const debrisGeo = new THREE.BoxGeometry(1, 1, 1);
 
   const puffs = [];
   for (let i = 0; i < PUFF_COUNT; i++) {
-    const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0 });
-    const mesh = new THREE.Mesh(puffGeo, mat);
+    const mat = new THREE.SpriteMaterial({ map: puffTex, color: 0xffffff, transparent: true, opacity: 0, depthWrite: false, rotation: Math.random() * Math.PI * 2 });
+    const mesh = new THREE.Sprite(mat);
     mesh.visible = false;
     group.add(mesh);
     puffs.push({
@@ -55,7 +71,7 @@ export function createEffects(scene) {
     p.scaleFrom = o.scaleFrom; p.scaleTo = o.scaleTo;
     p.easePow = o.easePow; p.opacityMax = o.opacityMax;
     p.mesh.position.set(pos.x, pos.y, pos.z);
-    p.mesh.scale.setScalar(o.scaleFrom);
+    p.mesh.scale.setScalar(o.scaleFrom * 2.4);              // sprite: diameter of the old blob
     p.mesh.visible = true;
     p.mat.color.setHex(o.color);
     p.mat.opacity = o.opacityMax;
@@ -198,7 +214,8 @@ export function createEffects(scene) {
     p.mesh.position.y += (p.vy + p.riseAccel * p.age) * dt;
     p.mesh.position.z += p.vz * dt;
     const et = 1 - Math.pow(1 - t, p.easePow); // ease-out expansion
-    p.mesh.scale.setScalar(p.scaleFrom + (p.scaleTo - p.scaleFrom) * et);
+    p.mesh.scale.setScalar((p.scaleFrom + (p.scaleTo - p.scaleFrom) * et) * 2.4);
+    p.mat.rotation += dt * 0.15;                               // a slow curl
     p.mat.opacity = Math.max(0, p.opacityMax * (1 - t));
   }
 
@@ -222,7 +239,7 @@ export function createEffects(scene) {
 
   function dispose() {
     scene.remove(group);
-    puffGeo.dispose();
+    puffTex?.dispose();
     debrisGeo.dispose();
     for (const p of puffs) p.mat.dispose();
     for (const d of debris) d.mat.dispose();
