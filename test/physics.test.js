@@ -1827,6 +1827,34 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   check('ATC: squawk 7700 gets an emergency landing clearance, once, and is never sent around', said.map(x => x.id).join(',') === 'emergency' && /all runways available/i.test(said.find(x => x.id === 'emergency')?.t || ''), said.map(x => x.id).join(','));
 }
 
+// ---- v12: every cockpit panel draws without throwing (stub 2D context) ----
+// The panels are canvas code that only runs in a browser; a stub context that
+// accepts any call lets Node execute every line of them, so a reference to an
+// out-of-scope variable fails here instead of blanking a cockpit at runtime.
+{
+  const { drawSteamPanel, drawGlassPanel } = await import('../src/instruments.js');
+  const { createAircraft, step, failSystem, setColdStart } = await import('../src/physics/flightModel.js');
+  const { AIRCRAFT } = await import('../src/aircraft/params.js');
+  const stub = () => new Proxy({}, { get: (o, k) => (k in o ? o[k] : (k === 'measureText' ? () => ({ width: 10 }) : k.startsWith('create') ? () => ({ addColorStop() {} }) : () => {})), set: (o, k, v) => { o[k] = v; return true; } });
+  const env = { groundHeight: () => 0, terrainHeight: () => 0, isRunway: () => false };
+  const ui = { sys: [], ap: [], states: {}, radio: { nav: { act: '110.15', sby: '108.00', ils: true }, com: { act: '118.30', sby: '121.50' } } };
+  const errs = [];
+  for (const id of Object.keys(AIRCRAFT)) {
+    const ac = createAircraft({ pos: { x: 0, y: 1000, z: 0 }, vel: { x: 60, y: 0, z: 0 } }); ac.p = { ...AIRCRAFT[id] };
+    if (ac.p.fuel) ac.fuelKg = ac.p.fuel.capacityKg;
+    for (let i = 0; i < 60; i++) step(ac, { elevator: 0, aileron: 0, rudder: 0, throttle: 0.6, flaps: 0, brakes: false, trim: 0 }, env, 1 / 120);
+    for (const variant of ['healthy', 'failed', 'cold']) {
+      if (variant === 'failed') for (const f of ['vacuum', 'hydraulics', 'oil', 'electrical']) failSystem(ac, f);
+      if (variant === 'cold') setColdStart(ac);
+      for (const [name, fn] of [['steam', () => drawSteamPanel(stub(), 1152, 420, ac, { asiMaxKt: 200 }, null)], ['steam+ui', () => drawSteamPanel(stub(), 1152, 420, ac, { asiMaxKt: 200 }, ui)],
+        ['airliner', () => drawGlassPanel(stub(), 1152, 420, ac, 'airliner', ui)], ['fighter', () => drawGlassPanel(stub(), 1152, 384, ac, 'fighter', ui)]]) {
+        try { fn(); } catch (e) { errs.push(`${id}/${variant}/${name}: ${e.message}`); }
+      }
+    }
+  }
+  check('instruments: every panel layout draws for every aircraft, healthy, failed and cold', errs.length === 0, errs.slice(0, 3).join(' | '));
+}
+
 // ---- v12: circuit breakers and radios ----
 {
   const { createAircraft, step } = await import('../src/physics/flightModel.js');

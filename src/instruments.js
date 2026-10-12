@@ -280,7 +280,7 @@ export function drawSteamPanel(x, W, H, ac, hud, ui = null) {
         ui.states, { x: rx + rw * 0.6, y: y + H * 0.015, w: rw * 0.38, h: H * 0.17 }, 3));
     } else if (!ui) {
       x.font = `bold ${Math.min(H * 0.06, rw * 0.11)}px "B612 Mono", monospace`;
-      x.fillText(['COM 118.30', 'NAV 110.50', 'XPDR 1200'][i], rx + rw * 0.08, y + H * 0.11);
+      x.fillText(['COM 118.30', 'NAV 110.50', `XPDR ${ac.sys?.xpdr ?? 1200}`][i], rx + rw * 0.08, y + H * 0.11);
     }   // (ui without a radio view = avionics bus dead: the displays stay dark)
   }
   if (!ui) return [];
@@ -401,7 +401,7 @@ function nd(x, X, Y, S, v, radio = null) {
     x.restore();
   }
 }
-function eicas(x, X, Y, S, v) {
+function eicas(x, X, Y, S, v, ac) {
   x.save(); x.beginPath(); x.rect(X, Y, S, S); x.clip();
   x.fillStyle = '#05070a'; x.fillRect(X, Y, S, S);
   const n1 = 20 + 80 * v.spool;
@@ -439,7 +439,7 @@ export function drawGlassPanel(x, W, H, ac, layout = 'airliner', ui = null) {
     if (ac.avionics === false) { x.fillStyle = '#020304'; x.fillRect(X, Y, S, S); return; }   // dead bus: blank glass
     if (k === 'pfd') pfd(x, X, Y, S, v, ac);
     else if (k === 'nd') nd(x, X, Y, S, v, ui?.radio);
-    else eicas(x, X, Y, S, v);
+    else eicas(x, X, Y, S, v, ac);
   });
   if (!band) return [];
   const list = [...ui.sys, ...ui.ap];
