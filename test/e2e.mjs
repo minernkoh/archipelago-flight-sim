@@ -321,22 +321,42 @@ const xp = await page.evaluate(() => {
   for (let i = 0; i < 6; i++) s.cockpitAction('xp-2');                 // 8 steps: back where it was
   return { x0, two, back: s.ac.sys.xpdr };
 });
+// split master ALT half, avionics master and the alternator field breaker
+const el = await page.evaluate(async () => {
+  const s = window.__sim, t0 = s.simTime;
+  s.cockpitAction('alt'); s.cockpitAction('avm');
+  while (s.simTime - t0 < 0.3) await new Promise(r => setTimeout(r, 50));
+  const r = { alt: s.ac.sys.alt, charging: s.ac.charging, avionics: s.ac.avionics, volts: s.annunciators().includes('VOLTS') };
+  s.cockpitAction('alt'); s.cockpitAction('avm'); s.cockpitAction('cb-alt'); r.fld = s.ac.breakers.altFld; s.cockpitAction('cb-alt');
+  return r;
+});
+check('cockpit ALT, AV MSTR and ALT FLD act (LOW VOLTS, dark avionics)',
+  el.alt === false && el.charging === false && el.avionics === false && el.volts && el.fld === false, JSON.stringify(el));
 check('transponder knobs set any code, digit by digit, octal', xp.x0 === 1200 && xp.two === 1400 && xp.back === 1200, JSON.stringify(xp));
 // every control must be clickable from the default cockpit view (free-look
 // springs back): the XPDR knobs, the page button and, after a page flip, the breakers
 const onScreen = (ids) => page.evaluate((ids) => {
   const s = window.__sim; s.camera.updateMatrixWorld();
   return Object.fromEntries(ids.map(id => { const p = s.cockpit.buttonWorld(id); if (!p) return [id, 'missing']; p.project(s.camera);
-    return [id, Math.abs(p.x) <= 0.98 && Math.abs(p.y) <= 0.98 ? 'ok' : `off ${p.x.toFixed(2)},${p.y.toFixed(2)}`]; }));
+    if (Math.abs(p.x) > 0.98 || Math.abs(p.y) > 0.98) return [id, `off ${p.x.toFixed(2)},${p.y.toFixed(2)}`];
+    // on screen, and not hidden under an opaque HUD panel (DOM over the canvas)
+    const px = (p.x + 1) / 2 * innerWidth, py = (1 - p.y) / 2 * innerHeight;
+    const cover = [...document.querySelectorAll('#hud *, #hud')].find(el => {
+      const cs = getComputedStyle(el), r = el.getBoundingClientRect();
+      if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity < 0.2 || el.offsetParent === null) return false;
+      if (cs.backgroundColor === 'rgba(0, 0, 0, 0)' || cs.backgroundColor === 'transparent') return false;
+      return px >= r.left && px <= r.right && py >= r.top && py <= r.bottom;
+    });
+    return [id, cover ? `under ${cover.id || cover.className}` : 'ok']; }));
 }, ids);
-const reach0 = await onScreen(['xp-1', 'xp-4', 'page', 'bat', 'ap-apr', 'hdg-up']);
+const reach0 = await onScreen(['xp-1', 'xp-4', 'page', 'bat', 'alt', 'avm', 'trim-up', 'altstat', 'ap-apr', 'hdg-up']);
 await page.evaluate(() => window.__sim.cockpitAction('page'));
 await page.waitForFunction('!!window.__sim.cockpit.buttonWorld("cb-tc")', { timeout: 60000, polling: 300 });
-const reach1 = await onScreen(['cb-avn', 'cb-tc', 'cb-xpdr', 'page']);
+const reach1 = await onScreen(['cb-avn', 'cb-tc', 'cb-xpdr', 'cb-alt', 'page']);
 await page.evaluate(() => window.__sim.cockpitAction('page'));
 await page.waitForFunction('!!window.__sim.cockpit.buttonWorld("bat")', { timeout: 60000, polling: 300 });
 check('every cockpit control is in the default view (switches, breaker page, XPDR knobs)',
-  Object.values({ ...reach0, ...reach1 }).every(v => v === 'ok'), JSON.stringify({ reach0, reach1 }));
+  [...Object.values(reach0), ...Object.values(reach1)].every(v => v === 'ok'), JSON.stringify({ reach0, reach1 }));
 await press('h');   // HDG back off
 await press('c');
 await settle(400);

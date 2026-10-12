@@ -1128,6 +1128,41 @@ import { setColdStart } from '../src/physics/flightModel.js';
   resetOnRunway(a6, { x: 0, z: 0, y: 0, headingRad: 0 });
   check('coldstart: resetOnRunway restores ready-to-fly', a6.engineRunning && a6.sys.mags === 'BOTH' && a6.avionics);
 
+  // Split master, avionics master, load shedding: with the ALT half off (or its
+  // field breaker out) the alternator stops charging, LOW VOLTS lights, and the
+  // battery lasts in proportion to the load left on the bus.
+  {
+    const { electricalLoad } = await import('../src/physics/flightModel.js');
+    const { annunciators } = await import('../src/physics/failures.js');
+    const flying = () => { const a = createAircraft({ params: AIRCRAFT.c172, pos: v3(0, 1.3, 0), vel: v3(0, 0, 0) }); a.batteryCharge = 0.8; return a; };
+    const e1 = flying(); e1.sys.alt = false;
+    run(e1, { throttle: 0.4 }, 5);
+    check('electrical: ALT off -> no charging, battery drains, LOW VOLTS lit',
+      e1.batteryCharge < 0.8 && e1.charging === false && annunciators(e1).includes('VOLTS'), `charge ${e1.batteryCharge.toFixed(4)}`);
+    const e2 = flying(); e2.breakers.altFld = false;
+    run(e2, { throttle: 0.4 }, 5);
+    check('electrical: ALT FLD breaker out -> alternator off line', e2.batteryCharge < 0.8 && annunciators(e2).includes('VOLTS'));
+    const e3 = flying();
+    run(e3, { throttle: 0.4 }, 2);
+    check('electrical: healthy charging shows no VOLTS', e3.charging && !annunciators(e3).includes('VOLTS'));
+    // endurance: everything on vs shed to the essentials (no avionics, no lights)
+    const endurance = (shed) => {
+      const a = flying(); a.sys.alt = false; a.batteryCharge = 1;
+      if (shed) { a.sys.avMaster = false; a.sys.lights = { land: false, nav: false, strobe: false, beacon: false }; a.sys.pitotHeat = false; }
+      const load = electricalLoad(a);
+      let t = 0; while (a.batteryCharge > 0.1 && t < 7200) { run(a, { throttle: 0.4 }, 5); t += 5; }
+      return { t, load };
+    };
+    const full = endurance(false), shed = endurance(true);
+    check('electrical: shedding load stretches the battery (~6 min -> ~50 min)',
+      full.t > 240 && full.t < 600 && shed.t > 6 * full.t, `${full.load} A ${(full.t / 60).toFixed(1)} min, ${shed.load} A ${(shed.t / 60).toFixed(1)} min`);
+    const e4 = flying(); e4.sys.avMaster = false;
+    run(e4, { throttle: 0.4 }, 0.2);
+    check('electrical: AV MSTR off darkens the avionics, engine unaffected', e4.avionics === false && e4.engineRunning);
+    resetOnRunway(e4, { x: 0, z: 0, y: 0, headingRad: 0 });
+    check('electrical: reset restores ALT, AV MSTR and the ALT FLD breaker', e4.sys.alt && e4.sys.avMaster && e4.breakers.altFld && e4.avionics);
+  }
+
   // Hot aircraft without p.startup are untouched by the machinery.
   const hot = createAircraft({ params: AIRCRAFT.hornet, pos: v3(0, 1000, 0), vel: v3(150, 0, 0) });
   run(hot, { throttle: 1, brakes: false }, 2);

@@ -162,19 +162,21 @@ export function createCockpit(cfg, hud, p = null) {
   let panel = null, yokes = [], stick = null, throttles = [], compass = null;
   // clickable switch rows (v12): systems on the left, autopilot on the right
   const sysButtons = [
-    ...(p?.startup ? [{ id: 'bat', label: 'BAT' }, { id: 'mags', label: 'MAGS' }, { id: 'start', label: 'START' }, { id: 'mix', label: 'MIX' },
+    ...(p?.startup ? [{ id: 'bat', label: 'BAT' }, { id: 'alt', label: 'ALT' }, { id: 'mags', label: 'MAGS' }, { id: 'start', label: 'START' }, { id: 'mix', label: 'MIX' },
       { id: 'mix-ln', label: 'LEAN' }, { id: 'mix-rc', label: 'RICH' }] : []),
     { id: 'flap-up', label: 'FLAP ▲' }, { id: 'flap-dn', label: 'FLAP ▼' },
-    // circuit breakers (lit = in): avionics bus, autopilot, flap motor
+    // circuit breakers (lit = in): avionics bus, autopilot, flap motor, ... and the alternator field
     { id: 'cb-avn', label: 'CB AVN' }, { id: 'cb-ap', label: 'CB AP' }, { id: 'cb-flap', label: 'CB FLP' },
     { id: 'cb-lts', label: 'CB LTS' }, { id: 'cb-com', label: 'CB COM' }, { id: 'cb-xpdr', label: 'CB XPD' },
     ...(glass ? [] : [{ id: 'cb-tc', label: 'CB TC' }, { id: 'cb-pitot', label: 'CB PITOT' }]),
+    ...(p?.startup ? [{ id: 'cb-alt', label: 'CB ALT FLD' }] : []),
     // steam cockpits: light switches, fuel selector (start-up aircraft) and the trim wheel
     ...(glass ? [] : [
+      { id: 'avm', label: 'AV MSTR' },
       { id: 'lt-land', label: 'LAND' }, { id: 'lt-nav', label: 'NAV' }, { id: 'lt-strb', label: 'STRB' }, { id: 'lt-bcn', label: 'BCN' },
       ...(p?.startup ? [{ id: 'fuel', label: 'FUEL' }, { id: 'carb', label: 'CARB' }, { id: 'prime', label: 'PRIME' }, { id: 'cabin', label: 'CABIN HT' }, { id: 'vent', label: 'VENT' }] : []),
       { id: 'pitot', label: 'PITOT HT' },
-      { id: 'xpdr', label: 'XPDR' }, { id: 'altstat', label: 'ALT STC' },
+      { id: 'altstat', label: 'ALT STC' },   // (the transponder is set from its knobs in the radio stack)
       { id: 'trim-dn', label: 'TRM ▼' }, { id: 'trim-up', label: 'TRM ▲' },
     ]),
     // glass cockpits tune NAV 1 here (the steam panels have it in the radio stack)

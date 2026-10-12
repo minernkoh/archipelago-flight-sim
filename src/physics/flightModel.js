@@ -81,12 +81,12 @@ export function createAircraft(opts = {}) {
     altIndicated: opts.pos ? opts.pos.y : 1000, vsIndicated: 0,   // static-port instruments
     gyro: null,            // drifting gyro attitude after a vacuum failure, else null
     // circuit breakers the pilot can pull (cockpit.js): avionics bus, autopilot, flap motor
-    breakers: { avn: true, ap: true, flap: true, lts: true, com: true, xpdr: true, tc: true, pitot: true },
+    breakers: { avn: true, ap: true, flap: true, lts: true, com: true, xpdr: true, tc: true, pitot: true, altFld: true },
     // v5-R3: piston start/electrical state (only exercised for p.startup aircraft).
     // Defaults are ready-to-fly so every existing caller spawns hot.
     // player switch positions (v12: fuel selector and light switches)
     sys: { battery: true, mags: 'BOTH', mixture: 1, fuel: 'BOTH', lights: { land: true, nav: true, strobe: true, beacon: true },
-      carbHeat: false, primes: 2, xpdr: 1200 },
+      carbHeat: false, primes: 2, xpdr: 1200, alt: true, avMaster: true },
     carbIce: 0,            // 0..1 carburettor ice (start-up piston aircraft, moist air, low power)
     fuelStarveT: 0,        // seconds the fuel selector has been OFF (the lines run dry after ~12 s)
     engineRunning: true,   // is the engine actually turning under its own power
@@ -134,11 +134,11 @@ export function resetSystems(ac) {
   ac._flapJam = null; ac.gyro = null;
   ac.oilQty = 1; ac.oilT = null; ac.oilLowT = 0;      // oil warms up again from the next update
   ac.cht = null; ac.chtRate = 0; ac.shockCooling = false; ac.engineWear = 0; ac.pitotIce = 0; ac.screenMist = 0;   // a fresh engine on every respawn
-  ac.breakers = { avn: true, ap: true, flap: true, lts: true, com: true, xpdr: true, tc: true, pitot: true };
+  ac.breakers = { avn: true, ap: true, flap: true, lts: true, com: true, xpdr: true, tc: true, pitot: true, altFld: true };
   // Ready-to-fly: master on, mags BOTH, mixture rich, engine turning, full battery.
   ac.sys = { battery: true, mags: 'BOTH', mixture: 1, fuel: 'BOTH', lights: { land: true, nav: true, strobe: true, beacon: true },
     carbHeat: false, primes: 2, xpdr: 1200, altStatic: false, cabinHeat: false, vent: false,
-    pitotHeat: !(ac.p && ac.p.startup) };   // transport/fighter probes are always heated
+    pitotHeat: !(ac.p && ac.p.startup), alt: true, avMaster: true };   // transport/fighter probes are always heated
   ac.fuelStarveT = 0; ac.carbIce = 0;
   ac.engineRunning = true; ac.batteryCharge = 1; ac.crankT = 0; ac.avionics = true;
 }
@@ -147,7 +147,8 @@ export function resetSystems(ac) {
 // player must run the start sequence. Battery is charged — it's just switched off.
 export function setColdStart(ac) {
   ac.sys = { battery: false, mags: 'OFF', mixture: 0, fuel: 'BOTH', lights: { land: false, nav: false, strobe: false, beacon: false },
-    carbHeat: false, primes: 0, xpdr: 1200, altStatic: false, cabinHeat: false, vent: false, pitotHeat: false };   // a cold engine wants priming
+    carbHeat: false, primes: 0, xpdr: 1200, altStatic: false, cabinHeat: false, vent: false, pitotHeat: false,   // a cold engine wants priming
+    alt: true, avMaster: true };
   ac.engineRunning = false; ac.spool = 0; ac.crankT = 0;
   ac.batteryCharge = 1; ac.avionics = false;
   ac.oilT = 59; ac.oilP = 0; ac.oilQty = 1; ac.oilLowT = 0;   // a cold engine: oil at ambient
@@ -225,6 +226,21 @@ function updateCylinders(ac, dt, V) {
   if (wear > 0) ac.engineWear = Math.min(1, (ac.engineWear || 0) + wear);
 }
 
+// Electrical load on the bus (amps) for a start-up aircraft: instruments and
+// annunciators, the avionics (radios, AP, transponder) when their master and
+// breaker are in, each exterior light that is on, and pitot heat. Battery drain
+// without the alternator is proportional to it (game-compressed: ~6 min with
+// everything on, ~50 min shed to the essentials).
+export const BATT_PER_AMP = 0.0001;
+export function electricalLoad(ac) {
+  const s = ac.sys || {}, b = ac.breakers || {};
+  let a = 3;
+  if (s.avMaster !== false && b.avn !== false) a += 7;
+  if (b.lts !== false && s.lights) a += (s.lights.land ? 8 : 0) + (s.lights.nav ? 3 : 0) + (s.lights.strobe ? 3 : 0) + (s.lights.beacon ? 2 : 0);
+  if (s.pitotHeat && b.pitot !== false) a += 10;
+  return a;
+}
+
 // Piston start/electrical state machine. Only meaningful for p.startup aircraft;
 // everything else just mirrors the engineFailed flag so behaviour is unchanged.
 export function updateEngineSystems(ac, dt, env = null, throttle = 0) {
@@ -236,6 +252,7 @@ export function updateEngineSystems(ac, dt, env = null, throttle = 0) {
       ac.batteryCharge = Math.max(0, ac.batteryCharge - 0.0021 * dt);
       ac.avionics = ac.batteryCharge > 0.1;
     } else ac.avionics = true;
+    if (ac.sys && ac.sys.avMaster === false) ac.avionics = false;        // avionics master off
     if (ac.breakers && ac.breakers.avn === false) ac.avionics = false;   // breaker pulled
     updateOil(ac, dt, throttle);
     return;
@@ -272,14 +289,19 @@ export function updateEngineSystems(ac, dt, env = null, throttle = 0) {
   } else {
     ac.crankT = 0;
   }
-  // Battery: alternator recharges while running; loads (and the starter) drain it when off.
+  // Battery: the alternator recharges it while running; without the alternator
+  // the bus load (electricalLoad) drains it, so shedding load is what buys time.
+  // The alternator charges only with the ALT half of the split master on and
+  // its field breaker in; the starter draws ~60 A on top.
+  const charging = ac.engineRunning && ac.systems.electrical !== false && s.alt !== false && ac.breakers?.altFld !== false;
+  ac.charging = !!(s.battery && charging);
   if (s.battery) {
-    const charging = ac.engineRunning && ac.systems.electrical !== false;
-    const rate = charging ? -0.05 : (ac.engineRunning ? 0.0021 : (0.008 + (s.mags === 'START' ? 0.06 : 0))); // per second
+    const rate = charging ? -0.05 : BATT_PER_AMP * electricalLoad(ac) + (s.mags === 'START' ? 0.06 : 0); // per second
     ac.batteryCharge = Math.max(0, Math.min(1, ac.batteryCharge - rate * dt));
   }
   // Instruments have power from the battery (while charged) or the running alternator.
-  ac.avionics = s.battery && (ac.batteryCharge > 0.1 || (ac.engineRunning && ac.systems.electrical !== false));
+  ac.avionics = s.battery && (ac.batteryCharge > 0.1 || charging);
+  if (s.avMaster === false) ac.avionics = false;                        // avionics master off
   if (ac.breakers && ac.breakers.avn === false) ac.avionics = false;   // breaker pulled
   updateOil(ac, dt, throttle);
 }

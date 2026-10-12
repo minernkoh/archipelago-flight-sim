@@ -97,6 +97,9 @@ function cockpitAction(id) {
     case 'xpdr': if (s) { const X = [1200, 7000, 7600, 7700]; s.xpdr = X[(X.indexOf(s.xpdr ?? 1200) + 1) % X.length]; } break;
     case 'fuel': if (s) { const F = ['BOTH', 'L', 'R', 'OFF']; s.fuel = F[(F.indexOf(s.fuel || 'BOTH') + 1) % F.length]; } break;
     case 'trim-dn': case 'trim-up': controls.state.trim = Math.max(-0.3, Math.min(0.3, (controls.state.trim || 0) + (id === 'trim-up' ? 0.03 : -0.03))); break;
+    case 'alt': if (s) s.alt = !s.alt; break;
+    case 'avm': if (s) s.avMaster = s.avMaster === false; break;
+    case 'cb-alt': if (ac.breakers) ac.breakers.altFld = ac.breakers.altFld === false; break;
     case 'cb-avn': case 'cb-ap': case 'cb-flap': case 'cb-lts': case 'cb-com': case 'cb-xpdr': case 'cb-tc': case 'cb-pitot': { const k = id.slice(3); if (ac.breakers) ac.breakers[k] = !ac.breakers[k]; break; }
     // transponder code knobs: each digit steps 0-7 (squawk codes are octal)
     case 'xp-1': case 'xp-2': case 'xp-3': case 'xp-4': if (s) {
@@ -581,7 +584,7 @@ function updateTcas(active) {
   }
 }
 
-window.__sim = { get tcas() { return tcasState; }, tcasInject: (list) => { tcasInject = list; }, tcasForceRa: (on) => { tcasForceRa = on; }, ac, controls, game, world, autopilot, audio, failures, radios, env, windField, minimap, camRig, camera, weatherFx, physEnv, replay, get simTime() { return elapsed; }, get cockpit() { return cockpit; }, cockpitAction: (id) => cockpitAction(id), get plane() { return plane; },
+window.__sim = { get tcas() { return tcasState; }, tcasInject: (list) => { tcasInject = list; }, tcasForceRa: (on) => { tcasForceRa = on; }, ac, controls, game, world, autopilot, audio, failures, radios, env, windField, minimap, camRig, camera, weatherFx, physEnv, replay, get simTime() { return elapsed; }, get cockpit() { return cockpit; }, cockpitAction: (id) => cockpitAction(id), annunciators: () => annunciators(ac), get plane() { return plane; },
   terrainCounts: () => terrain.counts(),
   get rings() { return gauntletRings || rings; }, get map() { return currentMap; },
   get camName() { return camRig.modeName; }, get trails() { return trails; }, get traffic() { return traffic; }, scene, renderer };
@@ -704,7 +707,8 @@ function frame(now) {
       carb: !!ac.sys?.carbHeat, prime: ac.sys?.primes ? 'PR ' + ac.sys.primes : false,
       xpdr: String(ac.sys?.xpdr ?? 1200),
       altstat: !!ac.sys?.altStatic, cabin: !!ac.sys?.cabinHeat, vent: !!ac.sys?.vent, pitot: !!ac.sys?.pitotHeat,
-      'cb-pitot': ac.breakers?.pitot !== false,
+      'cb-pitot': ac.breakers?.pitot !== false, 'cb-alt': ac.breakers?.altFld !== false,
+      alt: ac.sys?.alt !== false && !!ac.sys?.battery, avm: ac.sys?.avMaster !== false,
       'trim-up': (controls.state.trim || 0) > 0.005 ? 'T ' + Math.round(controls.state.trim * 100) : false,
       'trim-dn': (controls.state.trim || 0) < -0.005 ? 'T ' + Math.round(controls.state.trim * 100) : false,
       'cb-avn': ac.breakers?.avn !== false, 'cb-ap': ac.breakers?.ap !== false, 'cb-flap': ac.breakers?.flap !== false,

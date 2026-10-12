@@ -5,7 +5,7 @@
 //  - glass (jets/airliner): PFD, ND and engine displays.
 // Everything reads the live aircraft state; nothing here owns any state.
 
-import { KT, FT, attitude } from './physics/flightModel.js';
+import { KT, FT, attitude, electricalLoad } from './physics/flightModel.js';
 import { vSpeeds } from './physics/envelope.js';
 
 const D2R = Math.PI / 180;
@@ -255,8 +255,8 @@ export function engineAux(ac) {
   const batt = ac.sys ? !!ac.sys.battery : true;
   if (batt) {
     if (ac.sys?.mags === 'START' && !ac.engineRunning) amps = -60;
-    else if (running && ac.systems?.electrical !== false) amps = Math.min(30, 2 + 28 * (1 - num(ac.batteryCharge, 1)));
-    else amps = -(8 + (ac.avionics ? 6 : 0) + (ac.sys?.pitotHeat ? 10 : 0));   // pitot heat draws ~10 A
+    else if (running && ac.systems?.electrical !== false && ac.sys?.alt !== false && ac.breakers?.altFld !== false) amps = Math.min(30, 2 + 28 * (1 - num(ac.batteryCharge, 1)));
+    else amps = -electricalLoad(ac);   // the bus load, read off the battery
   }
   return { vac, amps };
 }

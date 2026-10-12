@@ -93,6 +93,9 @@ export function annunciators(ac) {
     if (f.ann && ac.systems?.[id] === false && !out.includes(f.ann)) out.push(f.ann);
   }
   if (ac.systems?.electrical === false && ac.avionics === false && !out.includes('VOLTS')) out.push('VOLTS');
+  // LOW VOLTS: engine running but the alternator is not charging (ALT switch
+  // off or its field breaker out), the same light as a failed alternator
+  if (ac.p?.startup && ac.engineRunning && ac.sys?.battery && ac.charging === false && !out.includes('VOLTS')) out.push('VOLTS');
   // low oil pressure lights with the engine running, whatever the cause (it
   // also glows for a moment after every start, as in the aeroplane)
   if (ac.engineRunning && ac.oilP != null && ac.oilP < 20 && !out.includes('OIL')) out.push('OIL');
