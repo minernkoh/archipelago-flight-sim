@@ -164,11 +164,13 @@ export function createCockpit(cfg, hud, p = null) {
   const sysButtons = [
     ...(p?.startup ? [{ id: 'bat', label: 'BAT' }, { id: 'mags', label: 'MAGS' }, { id: 'start', label: 'START' }, { id: 'mix', label: 'MIX' }] : []),
     { id: 'flap-up', label: 'FLAP ▲' }, { id: 'flap-dn', label: 'FLAP ▼' },
+    // circuit breakers (lit = in): avionics bus, autopilot, flap motor
+    ...(glass ? [] : [{ id: 'cb-avn', label: 'CB AVN' }, { id: 'cb-ap', label: 'CB AP' }, { id: 'cb-flap', label: 'CB FLP' }]),
   ];
   const strips = [];
   // switch rows drawn INTO the instrument panel canvas (instruments.js), so
   // they are always in view: cockpit free-look springs back on release
-  const ui = { sys: sysButtons, ap: AP_BUTTONS, states: {} };
+  const ui = { sys: sysButtons, ap: AP_BUTTONS, states: {}, radio: null };
 
   if (style === 'cabin') {
     const head = std(0xbdb6a8, 0.95), wall = std(0x6e6a62, 0.9);
@@ -287,7 +289,7 @@ export function createCockpit(cfg, hud, p = null) {
       for (const st of strips) st.mat.emissiveIntensity = night ? 0.7 : 0.25;
     },
     /** Lit/label state for the switch rows (main.js: AP status + switch positions). */
-    setUi(states) { ui.states = states; for (const st of strips) st.draw(states); },
+    setUi(states, radio = null) { ui.states = states; ui.radio = radio; for (const st of strips) st.draw(states); },
     /**
      * Which cockpit control a ray hits, or null. Only the button rows are
      * clickable; the ray is tested against the live (visible) cockpit.

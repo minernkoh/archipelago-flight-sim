@@ -80,6 +80,8 @@ export function createAircraft(opts = {}) {
       power: true, flaps: true, vacuum: true, static: true },
     altIndicated: opts.pos ? opts.pos.y : 1000, vsIndicated: 0,   // static-port instruments
     gyro: null,            // drifting gyro attitude after a vacuum failure, else null
+    // circuit breakers the pilot can pull (cockpit.js): avionics bus, autopilot, flap motor
+    breakers: { avn: true, ap: true, flap: true },
     // v5-R3: piston start/electrical state (only exercised for p.startup aircraft).
     // Defaults are ready-to-fly so every existing caller spawns hot.
     sys: { battery: true, mags: 'BOTH', mixture: 1 }, // player switch positions
@@ -125,6 +127,7 @@ export function resetSystems(ac) {
   ac.systems.pitot = true;
   ac.systems.power = true; ac.systems.flaps = true; ac.systems.vacuum = true; ac.systems.static = true;
   ac._flapJam = null; ac.gyro = null;
+  ac.breakers = { avn: true, ap: true, flap: true };
   // Ready-to-fly: master on, mags BOTH, mixture rich, engine turning, full battery.
   ac.sys = { battery: true, mags: 'BOTH', mixture: 1 };
   ac.engineRunning = true; ac.batteryCharge = 1; ac.crankT = 0; ac.avionics = true;
@@ -149,6 +152,7 @@ export function updateEngineSystems(ac, dt) {
       ac.batteryCharge = Math.max(0, ac.batteryCharge - 0.0021 * dt);
       ac.avionics = ac.batteryCharge > 0.1;
     } else ac.avionics = true;
+    if (ac.breakers && ac.breakers.avn === false) ac.avionics = false;   // breaker pulled
     return;
   }
   const s = ac.sys;
@@ -172,6 +176,7 @@ export function updateEngineSystems(ac, dt) {
   }
   // Instruments have power from the battery (while charged) or the running alternator.
   ac.avionics = s.battery && (ac.batteryCharge > 0.1 || (ac.engineRunning && ac.systems.electrical !== false));
+  if (ac.breakers && ac.breakers.avn === false) ac.avionics = false;   // breaker pulled
 }
 
 // controls: { elevator -1..1 (+=nose up), aileron -1..1 (+=roll right),
@@ -201,10 +206,10 @@ export function step(ac, controls, env, dt) {
   // at or below Vfe, so nothing in normal flight changes.
   let flapsEff = flapBlowback(ac.eas, controls.flaps, p);
   // jammed flaps (flap motor, or hydraulics on the jets) stay where they were
-  if (ac.systems.flaps === false || (ac.systems.hydraulics === false && p.engine.type === 'jet')) {
+  if (ac.systems.flaps === false || (ac.systems.hydraulics === false && p.engine.type === 'jet') || (ac.breakers && ac.breakers.flap === false)) {
     if (ac._flapJam == null) ac._flapJam = ac.flapsEff ?? 0;
     flapsEff = ac._flapJam;
-  }
+  } else if (ac._flapJam != null) ac._flapJam = null;    // breaker reset: the motor runs again
   ac.flapsEff = flapsEff;
   // A stopped or windmilling propeller is a large flat-plate drag source. It
   // is why the POH glide (9.0 : 1) is so much worse than the clean airframe

@@ -17,6 +17,8 @@ import { createHUD } from './hud.js';
 import { createRings } from './rings.js';
 import { createAudio } from './audio.js';
 import { NAV } from './instruments.js';
+import { createRadios, ilsFrequency, fmtFreq } from './radios.js';
+const radios = createRadios();
 import { createGameFlow } from './modes.js';
 import { createTrainingSystem } from './training.js';
 import { createEffects } from './effects.js';
@@ -69,6 +71,13 @@ function cockpitAction(id) {
     case 'mags': if (s && s.mags !== 'START') { const C = ['OFF', 'R', 'L', 'BOTH']; s.mags = C[(C.indexOf(s.mags) + 1) % C.length]; } break;
     case 'flap-up': controls.flapStep(-1); break;
     case 'flap-dn': controls.flapStep(1); break;
+    case 'com-dn': radios.step('com', -1); break;
+    case 'com-up': radios.step('com', 1); break;
+    case 'com-swap': radios.swap('com'); break;
+    case 'nav-dn': radios.step('nav', -1); break;
+    case 'nav-up': radios.step('nav', 1); break;
+    case 'nav-swap': radios.swap('nav'); break;
+    case 'cb-avn': case 'cb-ap': case 'cb-flap': { const k = id.slice(3); if (ac.breakers) ac.breakers[k] = !ac.breakers[k]; break; }
     case 'hdg-dn': case 'hdg-up': autopilot.sel.hdg = (Math.round(autopilot.sel.hdg / 5) * 5 + (id === 'hdg-up' ? 5 : -5) + 360) % 360; break;
     case 'alt-dn': case 'alt-up': autopilot.sel.alt = Math.max(0, (Math.round(autopilot.sel.alt * 3.28084 / 100) * 100 + (id === 'alt-up' ? 100 : -100)) / 3.28084); break;
     default: if (id.startsWith('ap')) controls.fire(id === 'ap' ? 'ap' : id);
@@ -208,6 +217,7 @@ async function loadMap(map) {
   currentMap = map;
   env.setHeightFn(map.height);
   autopilot.setRunway(map.runway);       // APR flies to this map's runway
+  radios.setIls(ilsFrequency(map.id + ':' + map.runway.name));   // and NAV 1 comes pre-tuned to its ILS
   // Real-world maps stream elevation tiles; wait for the ones around the spawn
   // before building terrain so chunks/minimap sample real ground, not sea. Caps
   // at 12 s so a slow network degrades to a flat world rather than hanging;
@@ -496,9 +506,14 @@ controls.on('ap-alt', () => { if (flying()) autopilot.toggleAlt(ac, controls); }
 controls.on('ap-ias', () => { if (flying()) autopilot.toggleIas(ac, controls); });
 controls.on('ap-nav', () => { if (flying()) autopilot.toggleNav(ac); });
 controls.on('ap-wing', () => { if (flying()) autopilot.toggleWing(ac); });
-controls.on('ap-apr', () => { if (flying()) autopilot.toggleApr(ac, controls); });
+controls.on('ap-apr', () => {
+  if (!flying()) return;
+  // APR flies the ILS, so NAV 1 has to be on it (it comes pre-tuned)
+  if (!radios.ilsTuned && !autopilot.modes.apr) { hud.message(`APR needs the ILS: tune NAV 1 to ${fmtFreq(radios.ils)}`, 3500); return; }
+  autopilot.toggleApr(ac, controls);
+});
 
-window.__sim = { ac, controls, game, world, autopilot, audio, failures, env, windField, minimap, camRig, camera, weatherFx, physEnv, replay, get simTime() { return elapsed; }, get cockpit() { return cockpit; }, cockpitAction: (id) => cockpitAction(id), get plane() { return plane; },
+window.__sim = { ac, controls, game, world, autopilot, audio, failures, radios, env, windField, minimap, camRig, camera, weatherFx, physEnv, replay, get simTime() { return elapsed; }, get cockpit() { return cockpit; }, cockpitAction: (id) => cockpitAction(id), get plane() { return plane; },
   terrainCounts: () => terrain.counts(),
   get rings() { return gauntletRings || rings; }, get map() { return currentMap; },
   get camName() { return camRig.modeName; }, get trails() { return trails; }, get traffic() { return traffic; }, scene, renderer };
@@ -614,7 +629,11 @@ function frame(now) {
       'hdg-up': '+' + String(Math.round(apS.selHdg) % 360).padStart(3, '0'), 'alt-up': '+' + (Math.round(apS.selAlt * 3.28084 / 100) * 100),
       bat: !!ac.sys?.battery, mix: (ac.sys?.mixture ?? 1) > 0.3, start: ac.sys?.mags === 'START',
       mags: ac.sys ? (ac.sys.mags === 'OFF' ? false : 'M ' + (ac.sys.mags === 'START' ? 'ST' : ac.sys.mags)) : false,
+      'cb-avn': ac.breakers?.avn !== false, 'cb-ap': ac.breakers?.ap !== false, 'cb-flap': ac.breakers?.flap !== false,
       'flap-up': controls.flapDetent === 0, 'flap-dn': controls.flapDetent > 0 ? (flapNames?.[controls.flapDetent] ?? true) : false,
+    }, ac.avionics === false ? null : {
+      com: { act: fmtFreq(radios.com.act), sby: fmtFreq(radios.com.sby) },
+      nav: { act: fmtFreq(radios.nav.act), sby: fmtFreq(radios.nav.sby), ils: radios.ilsTuned },
     });
     cockpit.update(ac, c, dt);
   }
@@ -665,7 +684,7 @@ function frame(now) {
     hud.setAnnunciators?.(annunciators(ac));
     // ILS receiver: needles live inside the localizer beam out to 18 km (or whenever APR is armed)
     const appr = apS.ils;
-    NAV.ils = appr && appr.dist > -300 && appr.dist < 18000 && (apS.apr || Math.abs(appr.locDots) < 5) ? appr : null;
+    NAV.ils = radios.ilsTuned && appr && appr.dist > -300 && appr.dist < 18000 && (apS.apr || Math.abs(appr.locDots) < 5) ? appr : null;
     audioView.x = camera.position.x; audioView.y = camera.position.y; audioView.z = camera.position.z;
     audioView.mode = camRig.modeName;
     audio.update(ac, c, audioView);

@@ -216,7 +216,7 @@ export function createAutopilot() {
     update(ac, controls, dt) {
       if (disconnectT > 0) disconnectT = Math.max(0, disconnectT - dt);
       if (!anyOn()) return;
-      if (ac.avionics === false) { disconnectAll(true); return; }   // dead bus: the AP servos drop out
+      if (ac.avionics === false || ac.breakers?.ap === false) { disconnectAll(true); return; }   // dead bus or AP breaker pulled
 
       const att = attitude(ac);
       const curHdg = compassHdg(att.heading);

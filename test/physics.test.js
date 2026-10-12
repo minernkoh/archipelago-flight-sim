@@ -1719,6 +1719,37 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   check('ATC: behind an airliner the sequence adds a wake turbulence caution', /follow the Heavy jet on final, caution wake turbulence/.test(said.find(x => x.id === 'sequence')?.t || ''), said.map(x => x.t).join(' | '));
 }
 
+// ---- v12: circuit breakers and radios ----
+{
+  const { createAircraft, step } = await import('../src/physics/flightModel.js');
+  const { AIRCRAFT } = await import('../src/aircraft/params.js');
+  const { createAutopilot } = await import('../src/autopilot.js');
+  const { createRadios, ilsFrequency, fmtFreq } = await import('../src/radios.js');
+  const env = { groundHeight: () => 0, terrainHeight: () => 0, isRunway: () => false };
+  const ac = createAircraft({ pos: { x: 0, y: 1000, z: 0 }, vel: { x: 55, y: 0, z: 0 } }); ac.p = { ...AIRCRAFT.c172 };
+  const c = { elevator: 0, aileron: 0, rudder: 0, throttle: 0.6, flaps: 0.5, brakes: false, trim: 0 };
+  const ctl = { state: c, axisActive: () => false };
+  for (let i = 0; i < 480; i++) step(ac, c, env, 1 / 120);
+  ac.breakers.avn = false; step(ac, c, env, 1 / 120);
+  const avOff = ac.avionics === false; ac.breakers.avn = true; step(ac, c, env, 1 / 120);
+  check('breaker: pulling AVN kills the avionics bus, pushing it in restores it', avOff && ac.avionics === true);
+  const ap = createAutopilot(); ap.toggleMaster(ac, ctl); ac.breakers.ap = false; ap.update(ac, ctl, 1 / 120);
+  check('breaker: pulling AP drops the autopilot', !ap.on && ap.status(ac).warn === 'AP DISCONNECT');
+  ac.breakers.ap = true;
+  const f0 = ac.flapsEff; ac.breakers.flap = false; c.flaps = 1; for (let i = 0; i < 360; i++) step(ac, c, env, 1 / 120);
+  const jammed = Math.abs(ac.flapsEff - f0) < 1e-9; ac.breakers.flap = true; for (let i = 0; i < 360; i++) step(ac, c, env, 1 / 120);
+  check('breaker: FLAP breaker freezes the flaps, resetting it lets them run', jammed && ac.flapsEff > f0 + 0.1, `${f0.toFixed(2)} -> ${ac.flapsEff.toFixed(2)}`);
+
+  const fq = ilsFrequency('archipelago:09');
+  check('radios: every field gets an ILS frequency in the 108-112 MHz ILS band (odd tenths)',
+    ['archipelago:09', 'singapore:02L', 'alpine:27', 'changi:02L'].every(k => { const f = ilsFrequency(k); return f >= 108100 && f <= 111950 && Math.floor(f / 100) % 2 === 1; }), fmtFreq(fq));
+  const r = createRadios(fq);
+  r.step('nav', 1); r.swap('nav');
+  const off = r.ilsTuned; r.swap('nav');
+  r.step('com', 1);
+  check('radios: tune standby, swap to active; NAV off the ILS frequency is detected', !off && r.ilsTuned && fmtFreq(r.com.sby) === '121.525', fmtFreq(r.com.sby));
+}
+
 // ---- v12: volumetric cloud noise (volclouds.js) ----
 {
   const { cloudNoise } = await import('../src/volclouds.js');

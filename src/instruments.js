@@ -258,21 +258,35 @@ export function drawSteamPanel(x, W, H, ac, hud, ui = null) {
   // radio stack: COM + NAV, then the autopilot (KAP 140 style) when clickable
   const rx = ex + r * 1.0, rw = W - rx - W * 0.03;
   const radios = ui ? 2 : 3;
+  const hits = [];
   for (let i = 0; i < radios; i++) {
     const y = H * 0.1 + i * H * 0.27;
     x.fillStyle = '#121416'; x.fillRect(rx, y, rw, H * 0.2);
     x.fillStyle = '#3e4248'; x.fillRect(rx + 4, y + 4, rw - 8, 6);
-    x.fillStyle = '#34ff6a'; x.font = `bold ${Math.min(H * 0.06, rw * 0.11)}px "B612 Mono", monospace`; x.textAlign = 'left'; x.textBaseline = 'middle';
-    x.fillText(['COM 118.30', 'NAV 110.50', 'XPDR 1200'][i], rx + rw * 0.08, y + H * 0.11);
+    x.fillStyle = '#34ff6a'; x.textAlign = 'left'; x.textBaseline = 'middle';
+    if (ui && ui.radio) {
+      // active frequency big, standby small, then the tune / swap buttons
+      const id = i === 0 ? 'com' : 'nav', rd = ui.radio[id];
+      x.font = `bold ${Math.min(H * 0.055, rw * 0.095)}px "B612 Mono", monospace`;
+      x.fillText(`${id.toUpperCase()} ${rd.act}`, rx + rw * 0.05, y + H * 0.08);
+      x.fillStyle = '#c8a43a'; x.font = `${Math.min(H * 0.04, rw * 0.07)}px "B612 Mono", monospace`;
+      x.fillText(`SBY ${rd.sby}${id === 'nav' && rd.ils ? '  ILS' : ''}`, rx + rw * 0.05, y + H * 0.155);
+      hits.push(...drawButtons(x, [{ id: id + '-dn', label: '−' }, { id: id + '-up', label: '+' }, { id: id + '-swap', label: '⇄' }],
+        ui.states, { x: rx + rw * 0.6, y: y + H * 0.015, w: rw * 0.38, h: H * 0.17 }, 3));
+    } else if (!ui) {
+      x.font = `bold ${Math.min(H * 0.06, rw * 0.11)}px "B612 Mono", monospace`;
+      x.fillText(['COM 118.30', 'NAV 110.50', 'XPDR 1200'][i], rx + rw * 0.08, y + H * 0.11);
+    }   // (ui without a radio view = avionics bus dead: the displays stay dark)
   }
   if (!ui) return [];
-  const hits = [];
   const apY = H * 0.1 + 2 * H * 0.27 - H * 0.02;
   x.fillStyle = '#121416'; x.fillRect(rx, apY, rw, H * 0.34);
   hits.push(...drawButtons(x, ui.ap, ui.states, { x: rx, y: apY, w: rw, h: H * 0.34 }, Math.ceil(ui.ap.length / 2)));
   // master / mags / starter / mixture / flaps: a switch column at the left edge
   const sx = W * 0.012, sw = gx - r * 1.2 - sx;
-  if (sw > 40 && ui.sys.length) hits.push(...drawButtons(x, ui.sys, ui.states, { x: sx, y: H * 0.05, w: sw, h: H * 0.9 }, 1));
+  // two columns once it grows past six switches, so the lower ones stay above the HUD's status box
+  const cols = ui.sys.length > 6 ? 2 : 1, rows = Math.ceil(ui.sys.length / cols);
+  if (sw > 40 && ui.sys.length) hits.push(...drawButtons(x, ui.sys, ui.states, { x: sx, y: H * 0.05, w: sw, h: Math.min(H * 0.9, rows * H * 0.13) }, cols));
   return hits;
 }
 

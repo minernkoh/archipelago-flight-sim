@@ -572,6 +572,12 @@ await page.evaluate(() => {
   ac.omega = { x: 0, y: 0, z: 0 };
   s.controls.state.flaps = 0.5; s.controls.state.throttle = 0.45;
 });
+// v12: APR flies the ILS, so it refuses with NAV 1 off the ILS frequency
+await page.evaluate(() => { window.__sim.cockpitAction('nav-up'); window.__sim.cockpitAction('nav-swap'); });
+await press('o');
+const aprRefused = await sim('({ apr: !!__sim.autopilot.modes.apr, msg: document.querySelector("#msg").textContent })');
+check('APR refuses until NAV 1 is on the ILS', !aprRefused.apr && /tune NAV 1/.test(aprRefused.msg), JSON.stringify(aprRefused));
+await page.evaluate(() => { window.__sim.cockpitAction('nav-swap'); });
 await press('o'); await press('j');
 await page.evaluate(() => { window.__sim.autopilot.sel.ias = 34; });
 await simSettle(12000, '__sim.autopilot.status(__sim.ac).apr?.gs === true && __sim.simTime > 0');
@@ -582,7 +588,12 @@ const apr = await sim(`(() => { const s = __sim.autopilot.status(__sim.ac), a = 
 check('APR (O) captures localizer + glideslope and flies the slope down',
   apr.apr && apr.apr.loc && apr.apr.gs && Math.abs(apr.loc) < 2 && Math.abs(apr.gs) < 2 && apr.vs < -0.5 && !apr.crashed, JSON.stringify(apr));
 check('APR annunciates and shows the glideslope scale', apr.gsShown && /LOC GS/.test(apr.label), JSON.stringify(apr));
-await press('p'); // AP off
+await page.evaluate(() => { window.__sim.cockpitAction('cb-ap'); });
+await settle(300);
+const cbAp = await sim('({ on: __sim.autopilot.on, warn: __sim.autopilot.status(__sim.ac).warn })');
+check('pulling the AP circuit breaker drops the autopilot', !cbAp.on, JSON.stringify(cbAp));
+await page.evaluate(() => { window.__sim.cockpitAction('cb-ap'); });
+if (await sim('__sim.autopilot.on')) await press('p'); // AP off (the breaker check already dropped it)
 await settle(150);
 
 // v12 failures: an alternator failure lights the amber VOLTS annunciator with a
