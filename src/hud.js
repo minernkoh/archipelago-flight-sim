@@ -273,8 +273,11 @@ export function createHUD() {
       // Amber STALL WARN leads the red STALL light by ~2.5 deg of angle of
       // attack — the margin a real aural warning gives you. Hysteresis (arm at
       // 0.045 rad, clear at 0.065) stops it flickering on the edge.
+      // The real sensor is a vane/reed in the leading-edge airflow, so it is
+      // silent while parked or taxiing slowly (alpha is meaningless at 0 kt).
       const margin = ac.alphaMargin ?? 1;
-      warnOn = ac.stalled ? false : (warnOn ? margin < 0.065 : margin < 0.045);
+      const airflow = (ac.iasIndicated ?? 0) > 10;
+      warnOn = ac.stalled || !airflow ? false : (warnOn ? margin < 0.065 : margin < 0.045);
       annWarn.classList.toggle('show', warnOn);
       annStall.classList.toggle('show', ac.stalled);
       // Vne is an INDICATED speed. This used to compare true airspeed against

@@ -5,7 +5,8 @@
 
 import * as THREE from 'three';
 import { makeNoise, woodland } from './noise.js';
-import { PAL, seabed, beach, facetJitter, decalMaterial } from './palette.js';
+import { PAL, seabed, beach, facetJitter } from './palette.js';
+import { runwayDressing, reciprocal } from './runwayPaint.js';
 import {
   addMBS, addFlyer, addEsplanade, addCBD, addHDBEstate, addPort, addShips, addChangi,
   setNightGlow, addBeacon,
@@ -227,31 +228,11 @@ function mulberry(seed) {
 }
 
 function runwayStrip(g, vOffset, label1, label2) {
-  const canvas = document.createElement('canvas');
-  canvas.width = 4096; canvas.height = 192;
-  const ctx = canvas.getContext('2d');
-  ctx.scale(4096 / 1024, 192 / 64);
-  ctx.fillStyle = '#3a3d42'; ctx.fillRect(0, 0, 1024, 64);
-  ctx.fillStyle = '#c9cdd2';
-  for (let x = 40; x < 984; x += 48) ctx.fillRect(x, 30.5, 26, 3);
-  for (let i = 0; i < 6; i++) { ctx.fillRect(8, 6 + i * 9, 22, 5); ctx.fillRect(994, 6 + i * 9, 22, 5); }
-  ctx.fillRect(0, 0, 1024, 1.4); ctx.fillRect(0, 62.6, 1024, 1.4);
-  ctx.font = 'bold 22px sans-serif';
-  ctx.save(); ctx.translate(78, 32); ctx.rotate(Math.PI / 2); ctx.textAlign = 'center'; ctx.fillText(label1, 0, 8); ctx.restore();
-  ctx.save(); ctx.translate(946, 32); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center'; ctx.fillText(label2, 0, 8); ctx.restore();
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 8;
-  const strip = new THREE.Mesh(
-    new THREE.PlaneGeometry(RWY_LEN, RWY_HALFW * 2),
-    decalMaterial(tex),
-  );
-  strip.rotation.x = -Math.PI / 2;
-  // Euler XYZ applies Z (in-plane) before X (lay flat): local +x -> world (cos h, 0, -sin h)
-  strip.rotation.z = RWY_HEADING;
-  const cx = (RWY_LEN / 2) * FWD.x + vOffset * PERP.x;
-  const cz = (RWY_LEN / 2) * FWD.z + vOffset * PERP.z;
-  strip.position.set(cx, RWY_Y + 0.06, cz);
+  // Asphalt + ICAO markings as geometry (runwayPaint.js); group local +x runs
+  // down the runway, +z to its right — the same frame as FWD/PERP here.
+  const strip = runwayDressing({ length: RWY_LEN, halfWidth: RWY_HALFW, labels: [label1, label2] });
+  strip.rotation.y = RWY_HEADING;
+  strip.position.set(vOffset * PERP.x, RWY_Y + 0.06, vOffset * PERP.z);
   g.add(strip);
 }
 

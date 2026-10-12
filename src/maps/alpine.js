@@ -5,7 +5,8 @@
 
 import * as THREE from 'three';
 import { makeNoise, woodland } from './noise.js';
-import { PAL, facetJitter, decalMaterial } from './palette.js';
+import { PAL, facetJitter } from './palette.js';
+import { runwayDressing, reciprocal } from './runwayPaint.js';
 
 const SEED = 20260709;
 
@@ -170,29 +171,8 @@ function vertexColor(h, slope, x, z, out) {
 export function createAirfield(scene) {
   const g = new THREE.Group();
 
-  const canvas = document.createElement('canvas');
-  canvas.width = 4096; canvas.height = 192;
-  const ctx = canvas.getContext('2d');
-  const sx = 4096 / 1024, sy = 192 / 64;
-  ctx.scale(sx, sy);
-  ctx.fillStyle = '#4a4d47'; ctx.fillRect(0, 0, 1024, 64);
-  ctx.fillStyle = '#c9cdd2';
-  for (let x = 40; x < 984; x += 48) ctx.fillRect(x, 30.5, 26, 3);        // centerline
-  for (let i = 0; i < 6; i++) { ctx.fillRect(8, 6 + i * 9, 22, 5); ctx.fillRect(994, 6 + i * 9, 22, 5); } // thresholds
-  ctx.fillRect(0, 0, 1024, 1.4); ctx.fillRect(0, 62.6, 1024, 1.4);        // edges
-  ctx.font = 'bold 26px sans-serif'; ctx.fillStyle = '#c9cdd2';
-  ctx.save(); ctx.translate(70, 32); ctx.rotate(Math.PI / 2); ctx.textAlign = 'center'; ctx.fillText('15', 0, 9); ctx.restore();
-  ctx.save(); ctx.translate(954, 32); ctx.rotate(-Math.PI / 2); ctx.textAlign = 'center'; ctx.fillText('33', 0, 9); ctx.restore();
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 8;
-
-  const strip = new THREE.Mesh(
-    new THREE.PlaneGeometry(RUNWAY.x1 - RUNWAY.x0, RUNWAY.halfWidth * 2),
-    decalMaterial(tex),
-  );
-  strip.rotation.x = -Math.PI / 2;
-  strip.position.set((RUNWAY.x0 + RUNWAY.x1) / 2, RUNWAY.y + 0.06, 0);
+  const strip = runwayDressing({ length: RUNWAY.x1 - RUNWAY.x0, halfWidth: RUNWAY.halfWidth, labels: ['15', '33'], tone: 0x484b46 });
+  strip.position.set(RUNWAY.x0, RUNWAY.y + 0.06, 0);
   g.add(strip);
 
   const mat = (c) => new THREE.MeshLambertMaterial({ color: c, flatShading: true });

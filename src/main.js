@@ -359,7 +359,7 @@ controls.on('ap-ias', () => { if (flying()) autopilot.toggleIas(ac, controls); }
 controls.on('ap-nav', () => { if (flying()) autopilot.toggleNav(ac); });
 controls.on('ap-wing', () => { if (flying()) autopilot.toggleWing(ac); });
 
-window.__sim = { ac, controls, game, world, autopilot, env, windField, minimap,
+window.__sim = { ac, controls, game, world, autopilot, env, windField, minimap, camRig, camera,
   terrainCounts: () => terrain.counts(),
   get rings() { return gauntletRings || rings; }, get map() { return currentMap; },
   get camName() { return camRig.modeName; }, get trails() { return trails; }, get traffic() { return traffic; }, scene, renderer };
@@ -483,7 +483,7 @@ function frame(now) {
   // terrain bakes as flat sea. Cheap: at z12 a tile spans ~7-10 km, so this is
   // single digits of tiles (TILE_CAP is 220).
   if (!mapLoading && currentMap.prefetch) currentMap.prefetch(ac.pos.x, ac.pos.z, COARSE_TILE_RADIUS);
-  env.update(ac, dt, elapsed, camera.position);
+  env.update(ac, dt, elapsed, camera.position, camera);
   traffic.update(dt, camera.position, elapsed);
   camRig.setInput(isFlying);
   if (game.state === 'menu') camRig.updateMenu(ac, dt);

@@ -6,6 +6,7 @@
 
 import * as THREE from 'three';
 import { getTerrainHeight as archipelagoHeight } from './maps/archipelago.js';
+import { createRunwayLights } from './runwayLights.js';
 
 const D2R = Math.PI / 180;
 // Sun/moon direction from azimuth (deg, 0 = +x, increasing toward -z) and
@@ -424,49 +425,31 @@ export function createEnvironment(scene, renderer) {
   shadow.scale.set(1.35, 1, 1); // wingspan-ish ellipse
   scene.add(shadow);
 
-  // --- Night runway lighting (built generically from map.runway) ---
-  // Edge lights down both sides + a 4-box PAPI abeam the touchdown zone. Cheap
-  // MeshBasic emissive-look quads, fog-fading; hidden except at night.
+  // --- Airfield lighting (runwayLights.js): edge/centreline/threshold
+  // lights, approach lights with sequenced flashers, and a live PAPI. Lit at
+  // dawn, dusk and night or whenever the weather pulls visibility in; the PAPI
+  // shows in daylight too.
   let rwyLights = null;
   const disposeRwy = () => {
     if (!rwyLights) return;
-    scene.remove(rwyLights);
-    rwyLights.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+    scene.remove(rwyLights.group);
+    rwyLights.dispose();
     rwyLights = null;
   };
   function buildRunwayLights(map) {
     disposeRwy();
-    const r = map.runway;
-    rwyLights = new THREE.Group();
-    const h = r.headingRad;
-    const fwd = { x: Math.cos(h), z: -Math.sin(h) };
-    const right = { x: -fwd.z, z: fwd.x };
-    const edgeMat = new THREE.MeshBasicMaterial({ color: 0xfff0c8 });
-    const endMat = new THREE.MeshBasicMaterial({ color: 0x3fd06a });   // threshold (green)
-    const geo = new THREE.SphereGeometry(1.3, 6, 4);
-    const at = (u, v, mat, y = 1.0) => {
-      const m = new THREE.Mesh(geo, mat);
-      m.position.set(fwd.x * u + right.x * v, r.y + y, fwd.z * u + right.z * v);
-      rwyLights.add(m);
-    };
-    const len = r.x1 - r.x0, nSeg = 26;
-    for (let i = 0; i <= nSeg; i++) {
-      const u = r.x0 + len * (i / nSeg);
-      const mat = (i === 0 || i === nSeg) ? endMat : edgeMat;
-      at(u, r.halfWidth, mat); at(u, -r.halfWidth, mat);
-    }
-    // PAPI bar: 4 lights left of the touchdown zone (~300 m in from threshold)
-    const papiRed = new THREE.MeshBasicMaterial({ color: 0xff3b30 });
-    const papiWhite = new THREE.MeshBasicMaterial({ color: 0xf4f6ff });
-    for (let k = 0; k < 4; k++) at(r.x0 + 300, -(r.halfWidth + 12 + k * 6), k < 2 ? papiWhite : papiRed, 1.4);
-    rwyLights.visible = tod.night;
-    scene.add(rwyLights);
+    rwyLights = createRunwayLights(map);
+    scene.add(rwyLights.group);
+  }
+  function lightLevel() {
+    const todK = tod.night ? 1 : tod === TIMES.day ? 0 : 0.75;
+    return Math.max(todK, wx.visF < 0.75 ? 0.8 : 0);
   }
 
   // Re-apply night content (glow, beacons, runway lights, landing light gate)
   // to whatever scenery/map is current. Called on time change and map load.
   function applyNightContent() {
-    if (rwyLights) rwyLights.visible = tod.night;
+    if (rwyLights) { rwyLights.setMode(lightLevel()); rwyLights.setFog(scene.fog.far); }
     if (scenery && scenery.userData) {
       scenery.userData.nightGlow?.(tod.night);
       const beacons = scenery.userData.beacons;
@@ -519,6 +502,7 @@ export function createEnvironment(scene, renderer) {
     cloudMat.uniforms.fogNear.value = scene.fog.near;
     cloudMat.uniforms.fogFar.value = scene.fog.far;
     clouds.visible = wx.cloudF > 0.06;
+    if (rwyLights) { rwyLights.setMode(lightLevel()); rwyLights.setFog(scene.fog.far); }
   }
 
   return {
@@ -549,6 +533,8 @@ export function createEnvironment(scene, renderer) {
       if (!on) sun.position.copy(tod.sunDir).multiplyScalar(1000);
     },
     get shadowsOn() { return sun.castShadow; },
+    /** White PAPI units seen from the camera (null before a map loads). */
+    papiWhites() { return rwyLights ? rwyLights.papiWhites() : null; },
     setTimeOfDay,
     sunDirection() { return tod.sunDir.clone(); },
     // DOM/state probe for tests: string + darkening scalars (not pixels).
@@ -563,8 +549,9 @@ export function createEnvironment(scene, renderer) {
     },
     /** Ocean shallows/foam read the active map's height (cosmetic, read-only). */
     setHeightFn(fn) { heightFn = fn; depthValid = false; build = null; oceanMat.uniforms.depthOn.value = 0; },
-    update(ac, dt, elapsed, camPos) {
+    update(ac, dt, elapsed, camPos, cam) {
       oceanMat.uniforms.time.value = elapsed;
+      if (rwyLights && cam && renderer) rwyLights.update(cam, elapsed, renderer);
       skyMat.uniforms.time.value = elapsed;
       ocean.position.x = ac.pos.x;
       ocean.position.z = ac.pos.z;

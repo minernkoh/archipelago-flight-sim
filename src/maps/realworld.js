@@ -11,7 +11,8 @@
 
 import * as THREE from 'three';
 import { makeNoise, woodland } from './noise.js';
-import { PAL, seabed, beach, facetJitter, decalMaterial } from './palette.js';
+import { PAL, seabed, beach, facetJitter } from './palette.js';
+import { runwayDressing, reciprocal } from './runwayPaint.js';
 import { makeProjection, tileOfPixel, decodeTerrarium, bilerp, bearingToHeadingRad } from './tilesampler.js';
 
 const TILE_BASE = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium';
@@ -218,29 +219,19 @@ export function createRealWorldMap(preset) {
 
   const runway = {
     spawn, y: elev, headingRad, name: preset.rwyName,
-    halfWidth, x0: 0, x1: preset.lengthM, // x0/x1 nominal — fixes[] drives the demo plan
+    halfWidth, x0: -halfLen, x1: halfLen, // centred on the origin (lights/minimap use x0..x1)
   };
 
   function createScenery(scene) {
     const g = new THREE.Group();
     const mat = (c) => new THREE.MeshLambertMaterial({ color: c, flatShading: true });
 
-    // Runway slab with painted centreline / thresholds, rotated to the bearing.
-    const cv = document.createElement('canvas');
-    cv.width = 2048; cv.height = 128;
-    const ctx = cv.getContext('2d');
-    ctx.fillStyle = '#43464150'; ctx.fillStyle = '#454842'; ctx.fillRect(0, 0, 2048, 128);
-    ctx.fillStyle = '#c9cdd2';
-    for (let x = 80; x < 1968; x += 96) ctx.fillRect(x, 61, 52, 6);          // centreline
-    for (let i = 0; i < 6; i++) { ctx.fillRect(16, 12 + i * 18, 44, 10); ctx.fillRect(1988, 12 + i * 18, 44, 10); }
-    ctx.fillRect(0, 0, 2048, 3); ctx.fillRect(0, 125, 2048, 3);              // edges
-    ctx.fillStyle = '#c9cdd2'; ctx.font = 'bold 52px sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText(preset.rwyName, 150, 82);
-    const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 8;
-    const geo = new THREE.PlaneGeometry(preset.lengthM, halfWidth * 2);
-    geo.rotateX(-Math.PI / 2); geo.rotateY(headingRad); // long axis -> runway forward
-    const strip = new THREE.Mesh(geo, decalMaterial(tex));
-    strip.position.set(0, elev + 0.08, 0);
+    // Asphalt + ICAO markings as geometry (runwayPaint.js), rotated to the
+    // bearing. The runway is centred on the origin, so start half a length back.
+    const strip = runwayDressing({ length: preset.lengthM, halfWidth, tone: 0x45484a,
+      labels: [preset.rwyName, reciprocal(preset.rwyName)] });
+    strip.rotation.y = headingRad;
+    strip.position.set(-fwd.x * halfLen, elev + 0.08, -fwd.z * halfLen);
     g.add(strip);
 
     // Simple control tower + windsock beside the strip.
