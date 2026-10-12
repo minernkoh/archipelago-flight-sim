@@ -9,6 +9,7 @@ import { PAL, facetJitter } from './palette.js';
 import { runwayDressing, reciprocal } from './runwayPaint.js';
 import { taxiwayDressing } from './airfieldKit.js';
 import { buildAutogen } from './autogen.js';
+import { facade, setFacadeNight } from './sgLandmarks.js';
 import * as taxinet from '../taxinet.js';
 
 const SEED = 20260709;
@@ -239,7 +240,8 @@ export function createAirfield(scene) {
     }
     return d;
   };
-  const wood = [0x6b4a32, 0x7a5a3e, 0x5e4330, 0xe2ddd2, 0xd9d2c4].map(mat);
+  // walls carry the shared facade shader: windows by day, warm lit ones at night
+  const wood = [0x6b4a32, 0x7a5a3e, 0x5e4330, 0xe2ddd2, 0xd9d2c4].map(c => facade(mat(c), 1));
   const roofs = [0x3d3d40, 0x4a3a32, 0x5a3a2c, 0x45464a].map(mat);
   const village = buildAutogen({
     bounds: [-2600, 7000, -1400, 1400], cell: 90, ground: getTerrainHeight, rng,
@@ -254,6 +256,7 @@ export function createAirfield(scene) {
   });
   g.add(village);
   g.userData.autogen = village.userData.autogen;
+  g.userData.nightGlow = (on) => setFacadeNight(on);   // the environment calls it at dusk / dawn
 
   scene.add(g);
   return g;
