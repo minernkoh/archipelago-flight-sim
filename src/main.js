@@ -70,6 +70,9 @@ function cockpitAction(id) {
   switch (id) {
     case 'bat': if (s) s.battery = !s.battery; break;
     case 'mix': if (s) s.mixture = s.mixture > 0.3 ? 0 : 1; break;
+    // leaning: 3% of travel a click; RICH stops at full rich, LEAN can starve it
+    case 'mix-ln': if (s && s.mixture > 0.3) s.mixture = Math.max(0.31, +(s.mixture - 0.03).toFixed(2)); break;
+    case 'mix-rc': if (s && s.mixture > 0.3) s.mixture = Math.min(1, +(s.mixture + 0.03).toFixed(2)); break;
     case 'mags': if (s && s.mags !== 'START') { const C = ['OFF', 'R', 'L', 'BOTH']; s.mags = C[(C.indexOf(s.mags) + 1) % C.length]; } break;
     case 'flap-up': controls.flapStep(-1); break;
     case 'flap-dn': controls.flapStep(1); break;
@@ -678,7 +681,8 @@ function frame(now) {
       'ap-apr': apS.apr ? (apS.apr.loc && apS.apr.gs ? true : 'APR·') : false,
       // the + knobs show the selected value, so the setting is readable in the cockpit
       'hdg-up': '+' + String(Math.round(apS.selHdg) % 360).padStart(3, '0'), 'alt-up': '+' + (Math.round(apS.selAlt * 3.28084 / 100) * 100),
-      bat: !!ac.sys?.battery, mix: (ac.sys?.mixture ?? 1) > 0.3, start: ac.sys?.mags === 'START',
+      bat: !!ac.sys?.battery, start: ac.sys?.mags === 'START',
+      mix: (ac.sys?.mixture ?? 1) <= 0.3 ? false : (ac.sys?.mixture ?? 1) >= 0.995 ? true : 'MIX ' + Math.round(ac.sys.mixture * 100),
       mags: ac.sys ? (ac.sys.mags === 'OFF' ? false : 'M ' + (ac.sys.mags === 'START' ? 'ST' : ac.sys.mags)) : false,
       'lt-land': ac.sys?.lights?.land !== false, 'lt-nav': ac.sys?.lights?.nav !== false,
       'lt-strb': ac.sys?.lights?.strobe !== false, 'lt-bcn': ac.sys?.lights?.beacon !== false,

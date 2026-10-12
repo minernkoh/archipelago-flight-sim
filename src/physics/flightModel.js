@@ -174,6 +174,25 @@ function updateOil(ac, dt, throttle) {
   if (ac.oilLowT > 40) ac.systems.engine = false;              // seized
 }
 
+// Mixture (start-up pistons, v12). `r` = mixture setting over the best-power
+// setting for this air density (full rich IS best power at sea level and grows
+// richer with altitude, so leaning pays off up high). Power peaks at r = 1,
+// falls slowly rich and fast lean; the engine runs rough below r 0.75 and
+// quits below 0.55. Exhaust gas temperature peaks a little lean of best power.
+// Everything is normalised to FULL RICH: at mixture 1 the power and fuel-flow
+// multipliers are exactly 1, so healthy flight and the cruise hash are untouched.
+const mixPower = (r) => r >= 1 ? Math.max(0, 1 - 0.5 * (r - 1) * (r - 1))
+  : r >= 0.8 ? 1 - 2.2 * (1 - r) * (1 - r) : Math.max(0, 0.912 * (r - 0.55) / 0.25);
+export function mixtureState(mixture, rho) {
+  const ideal = Math.min(1, rho / RHO0);
+  const r = mixture / ideal;
+  const power = mixPower(r) / mixPower(1 / ideal);
+  // EGT (deg F): peak ~1450 at r 0.93, cooler rich (excess fuel) and lean (less heat)
+  const dr = r - 0.93;
+  const egtShape = 1 - (dr > 0 ? 0.55 : 1.6) * dr * dr;
+  return { r, power, fuelFlow: mixture, egtShape, rough: r < 0.75, quits: r < 0.55 };
+}
+
 // Piston start/electrical state machine. Only meaningful for p.startup aircraft;
 // everything else just mirrors the engineFailed flag so behaviour is unchanged.
 export function updateEngineSystems(ac, dt, env = null, throttle = 0) {
@@ -191,7 +210,9 @@ export function updateEngineSystems(ac, dt, env = null, throttle = 0) {
   }
   const s = ac.sys;
   const magsHot = s.mags === 'L' || s.mags === 'R' || s.mags === 'BOTH' || s.mags === 'START';
-  const mixOk = s.mixture > 0.3;
+  const mx = mixtureState(s.mixture, airDensity(ac.pos.y));
+  ac.mixRatio = mx.r; ac.mixRough = ac.engineRunning && mx.rough;
+  const mixOk = s.mixture > 0.3 && !mx.quits;
   // fuel selector OFF: the engine runs on what is in the lines for ~12 s, then starves
   ac.fuelStarveT = s.fuel === 'OFF' ? (ac.fuelStarveT || 0) + dt : 0;
   const fuelOk = ac.fuelKg > 0 && ac.fuelStarveT < 12;
@@ -329,6 +350,17 @@ export function step(ac, controls, env, dt) {
   }
   if (ac.systems.power === false && !noPower) thrust *= 0.5;   // rough-running engine
   if (p.startup && (ac.carbIce > 0 || ac.sys.carbHeat)) thrust *= (1 - 0.6 * ac.carbIce) * (ac.sys.carbHeat ? 0.9 : 1);
+  let fuelMix = 1;
+  if (p.startup && ac.sys.mixture !== 1) {
+    const mx = mixtureState(ac.sys.mixture, rho);
+    thrust *= mx.power; fuelMix = mx.fuelFlow;
+  }
+  if (p.startup) {
+    // EGT gauge: rises with power, shaped by the mixture; ambient when stopped
+    const mx = mixtureState(ac.sys.mixture, rho);
+    const target = ac.engineRunning ? (900 + 600 * (0.3 + 0.7 * ac.spool)) * mx.egtShape : 70;
+    ac.egt = (ac.egt ?? target) + (target - (ac.egt ?? target)) * Math.min(1, dt / 6);
+  }
   F = vAdd(F, v3(thrust, 0, 0));
   ac.thrust = thrust;
 
@@ -336,7 +368,7 @@ export function step(ac, controls, env, dt) {
   // Mass is kept CONSTANT this phase (burned fuel is tracked, not subtracted from
   // p.mass) so the c172 cruise state-hash guard stays byte-identical.
   if (p.fuel) {
-    ac.fuelKg = Math.max(0, ac.fuelKg - thrust * p.fuel.tsfc * dt);
+    ac.fuelKg = Math.max(0, ac.fuelKg - thrust * p.fuel.tsfc * dt * fuelMix);
     ac.fuelFrac = ac.fuelKg / p.fuel.capacityKg;
     if (ac.fuelKg <= 0) ac.engineFailed = true; // flameout -> cmdThrottle 0 next step
   }

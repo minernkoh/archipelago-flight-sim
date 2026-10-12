@@ -488,11 +488,16 @@ export function createPanel() {
       `<button class="ap-sw" data-sw="mags">MAGS BOTH</button>` +
       `<button class="ap-sw" data-sw="start">START</button>` +
       `<button class="ap-sw" data-sw="mix">MIX RICH</button>` +
-      `<button class="ap-sw" data-sw="prime">PRIME</button>`;
+      `<button class="ap-sw" data-sw="prime">PRIME</button>` +
+      `<button class="ap-sw" data-sw="lean">LEAN</button>` +
+      `<button class="ap-sw" data-sw="rich">RICH</button>`;
     root.appendChild(swEl);
     const sw = (n) => swEl.querySelector(`[data-sw="${n}"]`);
     sw('bat').addEventListener('click', () => { if (curAc) curAc.sys.battery = !curAc.sys.battery; });
     sw('mix').addEventListener('click', () => { if (curAc) curAc.sys.mixture = curAc.sys.mixture > 0.3 ? 0 : 1; });
+    const lean = (d) => { if (curAc && curAc.sys.mixture > 0.3) curAc.sys.mixture = Math.max(0.31, Math.min(1, +(curAc.sys.mixture + d).toFixed(2))); };
+    sw('lean').addEventListener('click', () => lean(-0.03));
+    sw('rich').addEventListener('click', () => lean(0.03));
     sw('prime').addEventListener('click', () => { if (curAc && !curAc.engineRunning) curAc.sys.primes = Math.min(9, (curAc.sys.primes || 0) + 1); });
     const MAG_CYCLE = ['OFF', 'R', 'L', 'BOTH'];
     sw('mags').addEventListener('click', () => {
@@ -523,7 +528,7 @@ export function createPanel() {
       const q = (n) => swEl.querySelector(`[data-sw="${n}"]`);
       q('bat').classList.toggle('on', !!s.battery);
       q('mix').classList.toggle('on', s.mixture > 0.3);
-      q('mix').textContent = s.mixture > 0.3 ? 'MIX RICH' : 'MIX CUT';
+      q('mix').textContent = s.mixture <= 0.3 ? 'MIX CUT' : s.mixture >= 0.995 ? 'MIX RICH' : `MIX ${Math.round(s.mixture * 100)}%`;
       q('mags').classList.toggle('on', s.mags !== 'OFF');
       q('mags').textContent = 'MAGS ' + (s.mags === 'START' ? 'START' : s.mags);
       q('start').classList.toggle('on', s.mags === 'START');

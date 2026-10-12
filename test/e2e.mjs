@@ -305,13 +305,15 @@ check('clicking the HDG+ knob steps the heading bug 5 deg', ckClick.bugStep === 
 const sw = await page.evaluate(() => {
   const s = window.__sim, t0 = s.controls.state.trim;
   s.cockpitAction('trim-up'); s.cockpitAction('lt-strb'); s.cockpitAction('fuel'); s.cockpitAction('carb'); s.cockpitAction('xpdr');
-  const r = { trim: +(s.controls.state.trim - t0).toFixed(3), strobe: s.ac.sys.lights.strobe, fuel: s.ac.sys.fuel, carb: s.ac.sys.carbHeat, xpdr: s.ac.sys.xpdr };
+  s.cockpitAction('mix-ln'); s.cockpitAction('mix-ln');
+  const r = { trim: +(s.controls.state.trim - t0).toFixed(3), strobe: s.ac.sys.lights.strobe, fuel: s.ac.sys.fuel, carb: s.ac.sys.carbHeat, xpdr: s.ac.sys.xpdr, mix: s.ac.sys.mixture };
+  s.cockpitAction('mix-rc'); s.cockpitAction('mix-rc'); s.cockpitAction('mix-rc'); r.rich = s.ac.sys.mixture;
   s.cockpitAction('trim-dn'); s.cockpitAction('lt-strb'); for (let i = 0; i < 3; i++) s.cockpitAction('fuel');   // put them back
   s.cockpitAction('carb'); for (let i = 0; i < 3; i++) s.cockpitAction('xpdr');
   return r;
 });
-check('cockpit trim, light, fuel, carb heat and transponder switches act',
-  sw.trim === 0.03 && sw.strobe === false && sw.fuel === 'L' && sw.carb === true && sw.xpdr === 7000, JSON.stringify(sw));
+check('cockpit trim, light, fuel, carb heat, transponder and mixture leaning switches act',
+  sw.trim === 0.03 && sw.strobe === false && sw.fuel === 'L' && sw.carb === true && sw.xpdr === 7000 && sw.mix === 0.94 && sw.rich === 1, JSON.stringify(sw));
 await press('h');   // HDG back off
 await press('c');
 await settle(400);

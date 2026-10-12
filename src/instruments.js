@@ -228,10 +228,15 @@ function vsiInd(x, cx, cy, r, fpm) {
   needle(x, cx, cy, A(fpm) - Math.PI / 2, r * 0.85, r * 0.04);
   glassGlint(x, cx, cy, r);
 }
-function smallGauge(x, cx, cy, r, frac, txt, red = 0.92) {
+function smallGauge(x, cx, cy, r, frac, txt, red = 0.92, lowRed = false) {
   bezel(x, cx, cy, r);
-  arc(x, cx, cy, r * 0.82, -2.2 + 4.4 * 0.55, -2.2 + 4.4 * red, '#3fbf4f', r * 0.1);
-  arc(x, cx, cy, r * 0.82, -2.2 + 4.4 * red, -2.2 + 4.4 * 0.97, '#e0302a', r * 0.1);
+  if (lowRed) {                                   // quantity gauges: red at empty, green above
+    arc(x, cx, cy, r * 0.82, -2.2 + 4.4 * 0.03, -2.2 + 4.4 * 0.12, '#e0302a', r * 0.1);
+    arc(x, cx, cy, r * 0.82, -2.2 + 4.4 * 0.12, -2.2 + 4.4 * 0.97, '#3fbf4f', r * 0.1);
+  } else {
+    arc(x, cx, cy, r * 0.82, -2.2 + 4.4 * 0.55, -2.2 + 4.4 * red, '#3fbf4f', r * 0.1);
+    arc(x, cx, cy, r * 0.82, -2.2 + 4.4 * red, -2.2 + 4.4 * 0.97, '#e0302a', r * 0.1);
+  }
   needle(x, cx, cy, -2.2 + 4.4 * clamp(frac, 0, 1), r * 0.8, r * 0.07);
   label(x, cx, cy + r * 0.55, txt, r * 0.22);
 }
@@ -257,9 +262,11 @@ export function drawSteamPanel(x, W, H, ac, hud, ui = null) {
   // under it, and fuel quantity
   const oilP = num(ac.oilP, 0), oilT = num(ac.oilT, 59);
   smallGauge(x, ex, gy + dy * 0.55, r * 0.5, oilP / 115, `OIL ${Math.round(oilP)}`, 100 / 115);
-  label(x, ex, gy + dy * 0.55 + r * 0.32, `${Math.round(oilT)}\u00b0F`, r * 0.16);
+  label(x, ex, gy + dy * 0.55 - r * 0.2, `${Math.round(oilT)}\u00b0F`, r * 0.12);   // temperature above the hub
   const cap = num(ac.p?.fuel?.capacityKg, 1) || 1;
-  smallGauge(x, ex, gy + dy, r * 0.5, num(ac.fuelKg, 0) / cap * 0.97, 'FUEL', 0.98);
+  smallGauge(x, ex, gy + dy, r * 0.5, num(ac.fuelKg, 0) / cap * 0.97, 'FUEL', 0.98, true);
+  // EGT (lean by it: peak, then richen ~50 F) above the tachometer
+  if (ac.p?.startup) label(x, ex, gy - r * 0.84, `EGT ${Math.round(num(ac.egt, 70))}\u00b0F`, r * 0.15);
   // radio stack: COM + NAV, then the autopilot (KAP 140 style) when clickable
   const rx = ex + r * 1.0, rw = W - rx - W * 0.03;
   const radios = ui ? 2 : 3;

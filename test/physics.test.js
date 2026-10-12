@@ -1632,6 +1632,27 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   { const ac = mk('c172'); const { setColdStart } = await import('../src/physics/flightModel.js'); setColdStart(ac);
     check('oil: cold and dark: no pressure, oil at ambient', ac.oilP === 0 && ac.oilT === 59);
     check('failure pool: an oil leak only on piston aircraft', failurePool(AIRCRAFT.c172).includes('oil') && !failurePool(AIRCRAFT.heavy).includes('oil')); }
+  // mixture: leaning at altitude gains power and saves fuel; too lean runs rough, then quits
+  { const { mixtureState, airDensity } = await import('../src/physics/flightModel.js');
+    const rhoHi = airDensity(2400), rhoSl = airDensity(0);
+    let best = null; for (let m = 1; m >= 0.5; m -= 0.01) { const x = mixtureState(m, rhoHi); if (!best || x.power > best.power) best = { m, ...x }; }
+    let peakEgt = null; for (let m = 1; m >= 0.5; m -= 0.01) { const x = mixtureState(m, rhoHi); if (!peakEgt || x.egtShape > peakEgt.egt) peakEgt = { m, egt: x.egtShape }; }
+    const sl = Math.max(...Array.from({ length: 50 }, (_, i) => mixtureState(1 - i * 0.01, rhoSl).power));
+    check('mixture: full rich is exactly the reference (power and fuel flow x1, at any height)',
+      mixtureState(1, rhoHi).power === 1 && mixtureState(1, rhoSl).power === 1 && mixtureState(1, rhoHi).fuelFlow === 1);
+    check('mixture: at 8000 ft leaning to best power gains power, and peak EGT is lean of best power',
+      best.power > 1.03 && best.m < 0.9 && peakEgt.m < best.m, `best power x${best.power.toFixed(3)} at ${best.m.toFixed(2)}, peak EGT at ${peakEgt.m.toFixed(2)}`);
+    check('mixture: at sea level leaning never adds power', sl <= 1 + 1e-12, `max x${sl.toFixed(4)}`);
+    const ac = mk('c172'); ac.pos.y = 2400; const c = cs({ throttle: 0.75 });
+    const pin = () => { ac.q = { x: 0, y: 0, z: 0, w: 1 }; ac.omega = { x: 0, y: 0, z: 0 }; ac.vel = { x: 55, y: 0, z: 0 }; ac.pos.y = 2400; };
+    fly(ac, c, 20, pin); const richT = ac.thrust, egtRich = ac.egt; let f0 = ac.fuelKg; fly(ac, c, 60, pin); const richBurn = f0 - ac.fuelKg;
+    ac.sys.mixture = +best.m.toFixed(2); fly(ac, c, 20, pin); const leanT = ac.thrust, egtLean = ac.egt; f0 = ac.fuelKg; fly(ac, c, 60, pin); const leanBurn = f0 - ac.fuelKg;
+    check('mixture: leaned at 8000 ft: more thrust, hotter EGT, less fuel per minute',
+      leanT > richT * 1.02 && egtLean > egtRich + 40 && leanBurn < richBurn * 0.95,
+      `thrust ${richT.toFixed(0)} -> ${leanT.toFixed(0)} N, EGT ${egtRich.toFixed(0)} -> ${egtLean.toFixed(0)} F, burn ${(richBurn * 60).toFixed(1)} -> ${(leanBurn * 60).toFixed(1)} kg/h`);
+    ac.sys.mixture = 0.56; fly(ac, c, 1, pin); const rough = ac.mixRough && ac.engineRunning;
+    ac.sys.mixture = 0.42; fly(ac, c, 1, pin);
+    check('mixture: too lean runs rough, then the engine quits', rough && !ac.engineRunning, `rough ${rough}, running ${ac.engineRunning}`); }
   // electrical (jet without a start sequence): battery carries ~7 min, then the AP drops out
   { const ac = mk('heavy', 125); const c = cs({ throttle: 0.55 }); const ap = createAutopilot();
     const ctl = { state: c, axisActive: () => false }; step(ac, c, env, 1 / 120); ap.toggleMaster(ac, ctl); ap.toggleIas(ac, ctl); ap.sel.ias = 125;

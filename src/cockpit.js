@@ -162,7 +162,8 @@ export function createCockpit(cfg, hud, p = null) {
   let panel = null, yokes = [], stick = null, throttles = [], compass = null;
   // clickable switch rows (v12): systems on the left, autopilot on the right
   const sysButtons = [
-    ...(p?.startup ? [{ id: 'bat', label: 'BAT' }, { id: 'mags', label: 'MAGS' }, { id: 'start', label: 'START' }, { id: 'mix', label: 'MIX' }] : []),
+    ...(p?.startup ? [{ id: 'bat', label: 'BAT' }, { id: 'mags', label: 'MAGS' }, { id: 'start', label: 'START' }, { id: 'mix', label: 'MIX' },
+      { id: 'mix-ln', label: 'LEAN' }, { id: 'mix-rc', label: 'RICH' }] : []),
     { id: 'flap-up', label: 'FLAP ▲' }, { id: 'flap-dn', label: 'FLAP ▼' },
     // circuit breakers (lit = in): avionics bus, autopilot, flap motor
     { id: 'cb-avn', label: 'CB AVN' }, { id: 'cb-ap', label: 'CB AP' }, { id: 'cb-flap', label: 'CB FLP' },
@@ -217,7 +218,7 @@ export function createCockpit(cfg, hud, p = null) {
       const knob = new THREE.Mesh(new THREE.SphereGeometry(0.02, 10, 8), std(col, 0.5));
       t.add(sh, knob);
       eye.add(t);
-      throttles.push({ t, x0: 0.58, travel: z === 0 ? 0.08 : 0 });
+      throttles.push({ t, x0: 0.58, travel: 0.08, mixture: z !== 0 });
     }
   } else if (style === 'canopy') {
     panel = panelFace(eye, glass
@@ -346,7 +347,7 @@ export function createCockpit(cfg, hud, p = null) {
       const e = controls.elevator || 0, a = controls.aileron || 0;
       for (const y of yokes) { y.g.position.x = y.x0 + 0.07 * e; y.wheel.rotation.x = -0.6 * a; }
       if (stick) { stick.rotation.z = -0.25 * e; stick.rotation.x = -0.25 * a; }
-      for (const th of throttles) th.t.position.x = th.x0 + th.travel * (controls.throttle || 0);
+      for (const th of throttles) th.t.position.x = th.x0 + th.travel * (th.mixture ? (ac.sys?.mixture ?? 1) : (controls.throttle || 0));
       if (compass) compass.children[1].rotation.x = Math.sin(performance.now() * 0.0013) * 0.05 + (controls.rudder || 0) * 0.05;
     },
     dispose() {
