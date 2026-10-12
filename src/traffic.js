@@ -282,7 +282,9 @@ export function createTraffic(scene, map, opts = {}) {
   // the second pattern aircraft flies real touch-and-goes (aitraffic.js) so
   // the tower has traffic to sequence you with; the first keeps orbiting
   const ai = hasRunway ? createCircuitTraffic(rwy) : null;
+  const AI_SPACING = ai ? ai.total / ai.speed / 2 : 0;   // seconds between the two aircraft
   let aiT = 0;
+  const aiOut = [{}, {}];
   const planeGeo = hasRunway ? clubPlaneGeometry() : null;
   const planeMat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.45, metalness: 0.05, envMapIntensity: 0.4 });
   const planeMeshes = [];
@@ -418,12 +420,13 @@ export function createTraffic(scene, map, opts = {}) {
         const near = Math.hypot(camPos.x - pat.cx, camPos.z - pat.cz) < 9000;
         mesh.visible = near;
         if (!near) continue;
-        if (i === 1 && ai) {
+        if (ai) {
+          // both club aircraft fly the touch-and-go circuit, half a lap apart
           aiT = t;
-          const a = ai.at(t);
+          const a = ai.at(t + i * AI_SPACING);
           mesh.position.set(a.x, a.y + 1.1, a.z);
-          bank1 += (a.bank - bank1) * Math.min(1, dt * 1.5);
-          mesh.rotation.set(bank1, a.yaw, a.pitch);
+          if (i === 0) { bank0 += (a.bank - bank0) * Math.min(1, dt * 1.5); mesh.rotation.set(bank0, a.yaw, a.pitch); }
+          else { bank1 += (a.bank - bank1) * Math.min(1, dt * 1.5); mesh.rotation.set(bank1, a.yaw, a.pitch); }
           continue;
         }
         const p = patternPose(pat.speed * t + i * pat.total * 0.5);
@@ -442,6 +445,11 @@ export function createTraffic(scene, map, opts = {}) {
     get counts() { return { boats: nBoats, flocks: nFlocks, planes: planeMeshes.length }; },
     /** The AI lander's state for the tower (null when traffic is off or there is no runway). */
     aiState(t = aiT) { return enabled && ai ? ai.at(t) : null; },
+    /** Both circuit aircraft (copies), for the tower to pick the one that matters. */
+    aiStates(t = aiT) {
+      if (!enabled || !ai) return [];
+      return [0, 1].map(i => Object.assign(aiOut[i], ai.at(t + i * AI_SPACING), { id: i }));
+    },
     setEnabled(on) { enabled = !!on; group.visible = enabled; },
     dispose() {
       scene.remove(group);

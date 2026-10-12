@@ -370,7 +370,17 @@ const world = {
   get resScale() { return resScale; },
   get detail() { return GROUND_DETAIL.value; },
   /** The AI circuit aircraft (aitraffic.js) as the tower sees it, or null. */
-  aiTraffic() { return traffic?.aiState?.() ?? null; },
+  aiTraffic(pos = ac.pos) {
+    // the aircraft that matters to the tower: one on the runway or short final
+    // first, otherwise the nearest
+    const list = traffic?.aiStates?.() ?? [];
+    if (!list.length) return null;
+    const busy = list.find(a => a.onRunway) || list.find(a => a.phase === 'final' && a.toAim < 2500);
+    if (busy) return busy;
+    let best = null, bd = Infinity;
+    for (const a of list) { const d = Math.hypot(a.x - pos.x, a.y - pos.y, a.z - pos.z); if (d < bd) { bd = d; best = a; } }
+    return best;
+  },
   // Tests/tools: force the full or lite shading path (overrides the auto drop).
   forceDetail(k) { detailAuto = false; setDetail(k); },
   // v6 quality knob: HIGH = coarse terrain tier out to 9 km + real shadows.

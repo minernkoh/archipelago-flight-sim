@@ -1650,6 +1650,10 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
     `${[...seen].join(',')} downwind >= ${minAir.toFixed(0)} m`);
   check('AI traffic: touches down at the PAPI aim point (spawn + 300 m)', Math.abs(tdU - (-1200)) < 15, `u ${tdU?.toFixed(0)}`);
   check('AI traffic: a left-hand circuit (downwind on the left)', (() => { for (let t = 0; t < period; t += 1) { const p = ai.at(t); if (p.phase === 'downwind') return p.v < -900; } return false; })());
+  // two aircraft half a lap apart never share the runway or the final
+  { let clash = 0; for (let t = 0; t < period; t += 0.5) { const p1 = { ...ai.at(t) }, p2 = ai.at(t + period / 2);
+      if ((p1.onRunway || p1.phase === 'final') && (p2.onRunway || p2.phase === 'final')) clash++; }
+    check('AI traffic: two aircraft half a lap apart never share final or the runway', clash === 0, `${clash} clashes`); }
   check('clock positions', clockOf(0, 100, 0) === 12 && clockOf(0, 0, 100) === 3 && clockOf(0, -100, 0) === 6 && clockOf(0, 0, -100) === 9);
 
   const said = [];
