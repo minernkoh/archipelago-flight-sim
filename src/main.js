@@ -88,6 +88,7 @@ function cockpitAction(id) {
       break;
     }
     case 'page': cockpit?.togglePage?.(); break;
+    case 'cabin': if (s) s.cabinHeat = !s.cabinHeat; break;
     case 'altstat': if (s) s.altStatic = !s.altStatic; break;
     case 'carb': if (s) s.carbHeat = !s.carbHeat; break;
     case 'prime': if (s && !ac.engineRunning) s.primes = Math.min(9, (s.primes || 0) + 1); break;
@@ -700,7 +701,7 @@ function frame(now) {
       fuel: ac.sys?.fuel === 'OFF' ? false : 'F ' + (ac.sys?.fuel || 'BOTH'),
       carb: !!ac.sys?.carbHeat, prime: ac.sys?.primes ? 'PR ' + ac.sys.primes : false,
       xpdr: String(ac.sys?.xpdr ?? 1200),
-      altstat: !!ac.sys?.altStatic,
+      altstat: !!ac.sys?.altStatic, cabin: !!ac.sys?.cabinHeat,
       'trim-up': (controls.state.trim || 0) > 0.005 ? 'T ' + Math.round(controls.state.trim * 100) : false,
       'trim-dn': (controls.state.trim || 0) < -0.005 ? 'T ' + Math.round(controls.state.trim * 100) : false,
       'cb-avn': ac.breakers?.avn !== false, 'cb-ap': ac.breakers?.ap !== false, 'cb-flap': ac.breakers?.flap !== false,

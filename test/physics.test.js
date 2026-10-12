@@ -1674,6 +1674,16 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   { const a = mk('c172'), b = mk('c172'); const c = cs({ throttle: 0.6 }); b.sys.mags = 'L'; fly(a, c, 3); fly(b, c, 3);
     const drop = (a.rpmNorm - b.rpmNorm) * 2000;              // panel tach: 700 + 2000 x rpmNorm
     check('mag check: one magneto drops ~50-125 rpm and a little power, engine keeps running', drop > 50 && drop < 125 && b.engineRunning && b.thrust < a.thrust, `${drop.toFixed(0)} rpm drop`); }
+  // windscreen mist: builds in moist air with the cabin heat off; CABIN HT clears it
+  { const { updateEngineSystems } = await import('../src/physics/flightModel.js');
+    const ac = mk('c172'); const wet = { carbIceRisk: 1 }, dry = { carbIceRisk: 0 };
+    for (let i = 0; i < 180 * 10; i++) updateEngineSystems(ac, 0.1, wet, 0.6);
+    const misted = ac.screenMist; ac.sys.cabinHeat = true;
+    for (let i = 0; i < 30 * 10; i++) updateEngineSystems(ac, 0.1, wet, 0.6);
+    const cleared = ac.screenMist; ac.sys.cabinHeat = false;
+    const b = mk('c172'); for (let i = 0; i < 600 * 10; i++) updateEngineSystems(b, 0.1, dry, 0.6);
+    check('windscreen mist: 3 min of moist air mists it, 30 s of cabin heat clears it, dry air never does',
+      misted > 0.8 && cleared < 0.05 && (b.screenMist || 0) === 0, `misted ${misted.toFixed(2)}, after heat ${cleared.toFixed(2)}, dry ${b.screenMist}`); }
   // electrical (jet without a start sequence): battery carries ~7 min, then the AP drops out
   { const ac = mk('heavy', 125); const c = cs({ throttle: 0.55 }); const ap = createAutopilot();
     const ctl = { state: c, axisActive: () => false }; step(ac, c, env, 1 / 120); ap.toggleMaster(ac, ctl); ap.toggleIas(ac, ctl); ap.sel.ias = 125;

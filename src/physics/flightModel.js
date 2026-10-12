@@ -137,7 +137,7 @@ export function resetSystems(ac) {
   ac.breakers = { avn: true, ap: true, flap: true, lts: true, com: true, xpdr: true, tc: true };
   // Ready-to-fly: master on, mags BOTH, mixture rich, engine turning, full battery.
   ac.sys = { battery: true, mags: 'BOTH', mixture: 1, fuel: 'BOTH', lights: { land: true, nav: true, strobe: true, beacon: true },
-    carbHeat: false, primes: 2, xpdr: 1200, altStatic: false };
+    carbHeat: false, primes: 2, xpdr: 1200, altStatic: false, cabinHeat: false };
   ac.fuelStarveT = 0; ac.carbIce = 0;
   ac.engineRunning = true; ac.batteryCharge = 1; ac.crankT = 0; ac.avionics = true;
 }
@@ -146,7 +146,7 @@ export function resetSystems(ac) {
 // player must run the start sequence. Battery is charged — it's just switched off.
 export function setColdStart(ac) {
   ac.sys = { battery: false, mags: 'OFF', mixture: 0, fuel: 'BOTH', lights: { land: false, nav: false, strobe: false, beacon: false },
-    carbHeat: false, primes: 0, xpdr: 1200, altStatic: false };   // a cold engine wants priming
+    carbHeat: false, primes: 0, xpdr: 1200, altStatic: false, cabinHeat: false };   // a cold engine wants priming
   ac.engineRunning = false; ac.spool = 0; ac.crankT = 0;
   ac.batteryCharge = 1; ac.avionics = false;
   ac.oilT = 59; ac.oilP = 0; ac.oilQty = 1; ac.oilLowT = 0;   // a cold engine: oil at ambient
@@ -251,6 +251,11 @@ export function updateEngineSystems(ac, dt, env = null, throttle = 0) {
   // venturi most at low power; ice chokes the engine until it quits. Carb heat
   // melts it at the price of ~10% power. Healthy dry air = risk 0 = untouched.
   const risk = env && env.carbIceRisk ? env.carbIceRisk : 0;
+  // Windscreen mist: moist air (the same weather risk) condenses on the cool
+  // glass over a few minutes; CABIN HT (the defrost) clears it in ~30 s, and
+  // dry air slowly does too. Cosmetic: weather.js draws it in the cockpit.
+  ac.screenMist = Math.max(0, Math.min(1, (ac.screenMist || 0) + dt * (
+    s.cabinHeat ? -1 / 25 : risk > 0 ? risk / 200 : -1 / 120)));
   if (ac.engineRunning && (risk > 0 || ac.carbIce > 0 || s.carbHeat)) {
     if (s.carbHeat) ac.carbIce = Math.max(0, ac.carbIce - 0.02 * dt);
     else ac.carbIce = Math.min(1, ac.carbIce + risk * 0.0045 * (1.15 - 0.75 * throttle) * dt);

@@ -270,11 +270,13 @@ function buildRain() {
 function buildScreenRain() {
   const mat = displayMatch(new THREE.ShaderMaterial({
     transparent: true, depthTest: false, depthWrite: false, fog: false,
-    uniforms: { time: { value: 0 }, wet: { value: 0 }, speed: { value: 0 }, aspect: { value: 1.6 }, tint: { value: new THREE.Color(0xc8d2dc) } },
+    uniforms: { time: { value: 0 }, wet: { value: 0 }, speed: { value: 0 }, aspect: { value: 1.6 }, tint: { value: new THREE.Color(0xc8d2dc) }, mist: { value: 0 } },
     vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
     fragmentShader: `
-      uniform float time, wet, speed, aspect; uniform vec3 tint; varying vec2 vUv;
+      uniform float time, wet, speed, aspect, mist; uniform vec3 tint; varying vec2 vUv;
       float h(vec2 p){ return fract(sin(dot(p, vec2(41.3, 289.1))) * 15731.743); }
+      float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+        return mix(mix(h(i), h(i + vec2(1, 0)), f.x), mix(h(i + vec2(0, 1)), h(i + vec2(1, 1)), f.x), f.y); }
       vec4 layer(vec2 uv, float cells, float t){
         vec2 g = vec2(uv.x * aspect, uv.y) * cells;
         // airflow drags beads up the glass; a slow drip pulls them down when parked
@@ -296,6 +298,14 @@ function buildScreenRain() {
         vec4 a = layer(vUv, 9.0, time);
         vec4 b = layer(vUv + 0.37, 16.0, time * 1.3);
         vec4 c = a.a > b.a ? a : b;
+        // condensation mist (cabin heat off in moist air): a soft uneven veil,
+        // thickest low on the glass where the defrost air reaches last
+        if (mist > 0.0) {
+          vec2 g = vec2(vUv.x * aspect, vUv.y);
+          float n = vn(g * 5.0) * 0.6 + vn(g * 13.0 + 3.1) * 0.4;      // smooth, uneven film
+          float m = mist * (0.5 + 0.35 * n) * (1.15 - 0.4 * vUv.y);
+          c = vec4(mix(tint * 0.92, c.rgb, c.a), max(c.a, min(0.78, m)));
+        }
         // keep the instrument panel area clear
         c.a *= smoothstep(0.34, 0.42, vUv.y);
         if (c.a < 0.01) discard;
@@ -551,7 +561,8 @@ export function createWeatherFX(scene, env, audio, windAt) {
       }
 
       // ---- windscreen beads in the cockpit
-      const wantScreen = camMode === 'COCKPIT' && rainK > 0.02;
+      const mist = ac?.screenMist || 0;
+      const wantScreen = camMode === 'COCKPIT' && (rainK > 0.02 || mist > 0.02);
       if (wantScreen && screenParent !== camera) { camera.add(screen); screenParent = camera; }
       screen.visible = wantScreen;
       if (wantScreen) {
@@ -560,7 +571,7 @@ export function createWeatherFX(scene, env, audio, windAt) {
         screen.scale.set(hgt * camera.aspect, hgt, 1);
         screen.position.set(0, 0, -dist);
         const u = screen.material.uniforms;
-        u.time.value = elapsed; u.wet.value = 0.25 + 0.4 * rainK;
+        u.time.value = elapsed; u.wet.value = rainK > 0.02 ? 0.25 + 0.4 * rainK : 0; u.mist.value = mist;
         u.speed.value = Math.min(1, (ac.airspeed || 0) / 45);
         u.aspect.value = camera.aspect;
         u.tint.value.setRGB(0.8, 0.84, 0.88).multiplyScalar(night ? 0.3 : 1);
