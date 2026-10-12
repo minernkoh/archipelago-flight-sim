@@ -415,7 +415,7 @@ controls.on('ap-ias', () => { if (flying()) autopilot.toggleIas(ac, controls); }
 controls.on('ap-nav', () => { if (flying()) autopilot.toggleNav(ac); });
 controls.on('ap-wing', () => { if (flying()) autopilot.toggleWing(ac); });
 
-window.__sim = { ac, controls, game, world, autopilot, env, windField, minimap, camRig, camera, weatherFx, physEnv, replay, get simTime() { return elapsed; }, get cockpit() { return cockpit; }, get plane() { return plane; },
+window.__sim = { ac, controls, game, world, autopilot, audio, env, windField, minimap, camRig, camera, weatherFx, physEnv, replay, get simTime() { return elapsed; }, get cockpit() { return cockpit; }, get plane() { return plane; },
   terrainCounts: () => terrain.counts(),
   get rings() { return gauntletRings || rings; }, get map() { return currentMap; },
   get camName() { return camRig.modeName; }, get trails() { return trails; }, get traffic() { return traffic; }, scene, renderer };

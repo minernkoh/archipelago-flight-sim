@@ -15,6 +15,9 @@ v10: the art direction moved from faceted low-poly to a realistic look — smoot
 procedural ground shader, PBR aircraft reflecting a sky environment map, soft billboard cumulus, smooth ocean.
 v11: 3D cockpit interiors with live canvas instruments, path-independent colour pipeline (display.js) with a
 scene-referred bloom threshold, Singapore facades + beach coastline, horizon-first terrain streaming.
+v12: planar water reflections, and engine sound synthesised from the engine's physical state in an AudioWorklet
+(cylinder firing through an exhaust waveguide + prop blade-pass; turbofan fan tone, buzzsaw, core whine, jet roar,
+afterburner), with cockpit/exterior voicing and fore/aft directivity.
 
 ## Run / test
 
@@ -22,6 +25,7 @@ scene-referred bloom threshold, Singapore facades + beach coastline, horizon-fir
 - `npm test` → headless physics suite (Node, no browser, ~1 min; must stay green)
 - `npm run e2e` → puppeteer E2E against :8123 (server must be running; writes test/shots/*.png)
 - `node test/bootcheck.mjs` → fast boot/menu/aircraft-swap smoke check
+- `npm run sounds` → renders engine scenarios (start-up, run-up, fly-bys, afterburner) to test/shots/engine-*.wav
 
 ## Architecture (who owns what)
 
@@ -40,6 +44,7 @@ scene-referred bloom threshold, Singapore facades + beach coastline, horizon-fir
 - `src/maps/runwayPaint.js` — `runwayDressing()` builds every map's runway in runway-local metres: asphalt slab shaded in its fragment shader (lanes, patches, grain, rubber, wet sheen via the shared `RUNWAY_WX` uniforms) plus ICAO markings as real quads and designator text planes. `src/runwayLights.js` — point-sprite lights from `map.runway` (x0..x1 along heading from the origin, so real-world maps report x0 = -halfLen): edge/centreline/threshold, approach lights + sequenced flashers off the x0 end, and a PAPI at spawn+300 m (the same aim point as training.js) whose units switch red/white from the camera's angle.
 - `src/maps/airfieldKit.js` — apron/taxiway with taxi markings, arched hangar, control tower, fuel truck (archipelago field). Visual only, no obstacles; parked aircraft reuse `clubPlaneGeometry()` from traffic.js (one merged draw call).
 - `src/weather.js` — the SKY half of the RAIN/STORM presets (the wind half is `WEATHER` in wind.js; `WET_WEATHER` drives `physEnv.wet`, which only scales brake friction). Overcast deck that follows the camera, rain streaks (one LineSegments, all motion in the vertex shader), cockpit windscreen beads, lightning + thunder. It drives `env.setSky({ overcast, vis, inCloud, flash })`; environment.js re-greys the whole palette from the time-of-day table, so never write palette uniforms anywhere else.
+- `src/engineSynth.js` — the engine sound, THREE-free and WebAudio-free so Node tests render it. `src/engineWorklet.js` hosts it as an AudioWorklet driven by k-rate AudioParams (no per-frame messages); `ENGINE_SOUNDS` holds each aircraft's voice (cylinders, blades, pipe length, fan blades, N1 rpm). The synth glides its own parameters per block, so audio.js just sets values. Frequencies are physics, and test/physics.test.js checks them in the spectrum: firing = rpm × cylinders / 120, blade-pass = rpm × blades / 60, fan tone = N1 × fan blades. Keep it allocation-free per sample and under ~8% of a core per voice. audio.js keeps the old oscillator engine only as the no-AudioWorklet fallback (`audio.engineVoice` says which one runs).
 - `src/replay.js` — instant replay. `createRecorder()` is THREE-free (Float32Array ring, 30 Hz of sim time, 150 s). Playback fills a ghost shaped like `ac`; main.js renders from `view = replaying ? ghost : ac` and NEVER writes the physics state. Game state `replay` (modes.js) returns to whatever it was opened from. Replay keys are taken in the capture phase so flight controls never see them; `C`/`X`/`Esc` route through modes.js.
 - `src/cockpit.js` + `src/instruments.js` — 3D cockpit interiors (v11) in the aircraft BODY frame around the eye point (`catalog camera.cockpit`; `glass: true` gives a canopy aircraft glass displays). Instruments are a CanvasTexture redrawn at 15 Hz (also the emissive map: backlit at night). In COCKPIT view main.js hides meshes tagged `userData.hull` (meshes.js `H()`), so wings/props/engines stay visible through the glass — tag any new fuselage/canopy mesh or it will block the view. The DOM six-pack (`I`) no longer auto-shows; it still carries the cold-and-dark switches.
 - `src/rings.js` — parameterized gates (race + training themes); `src/modes.js` — menu/state machine; `src/main.js` — swap lifecycle + frame loop.

@@ -19,7 +19,13 @@ A browser flight simulator built with **Three.js**
   sticks and throttles move with your inputs, and the panel is backlit at
   night. The wings, struts and engines stay visible through the glass.
 - **Airshow touches** — wingtip vortices when you pull G, smoke trail on `K`.
-- **Feel**: spring-damped chase camera with buffet shake, control expo, Shift for fine control, prop audio with Doppler.
+- **Feel**: spring-damped chase camera with buffet shake, control expo, Shift for fine control.
+- **Engine sound modelled from physics**, not loops: you hear each cylinder
+  fire through the exhaust and the propeller blades beat (a lumpy idle, a
+  starter cranking, pops when you chop the throttle in the Extra), or a
+  turbofan's fan tone and supersonic-tip buzzsaw ahead of the inlet and the
+  jet roar behind it, with afterburner rumble, Doppler on fly-bys and a
+  muffled cabin in the cockpit. `npm run sounds` renders samples to WAV.
 - **Eye candy**: bloom and lens flare, ocean swell with coastal foam and spray, nav lights and strobes, retracting gear.
 - **A living world**: villages, lighthouses, boats, circuit traffic and birds,
   and a Singapore skyline with curtain-wall glass and window-by-window lights at night.

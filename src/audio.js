@@ -1,5 +1,8 @@
-// WebAudio: engine (prop: noise through a bandpass chopped at blade-pass rate
-// plus a firing thump; jet: roar + whine), wind rush keyed to airspeed, stall
+// WebAudio: engine, synthesised from the engine's physical state in an
+// AudioWorklet (engineSynth.js: cylinder firing pulses through an exhaust
+// waveguide + propeller blade-pass, or turbofan fan/buzzsaw/core/jet roar),
+// with cockpit vs exterior voicing and fore/aft directivity. Browsers without
+// AudioWorklet keep the older oscillator/noise engine below. Wind rush keyed to airspeed, stall
 // horn + buffet rumble, flap/gear motors, tyre screech, ring chime. Created
 // lazily on first user gesture. Aircraft sounds pass through one "view" stage:
 // Doppler + distance gain + lowpass when the camera is outside the aircraft,
@@ -12,6 +15,8 @@
 // The music bus exists and is mixed, but nothing feeds it yet, the sim has no
 // music track. Its slider is therefore live but silent until one is added;
 // connectMusic() is the hook for that.
+
+import { engineSound } from './engineSynth.js';
 
 export function createAudio() {
   let ctx = null;
@@ -43,6 +48,8 @@ export function createAudio() {
   let dop = 1, lastFlaps = null, lastGear = null, flapUntil = 0, gearUntil = 0;
   let lastSink = 0, lastSide = 0;
   const SOUND_C = 340;
+  // physically modelled engine (AudioWorklet); null until the module loads
+  let synth = null, synthP = null, synthId = null;
 
   function init() {
     if (ctx) return;
@@ -167,7 +174,16 @@ export function createAudio() {
     rainSrc.connect(drumFilter).connect(drumGain).connect(sfx);
     rainSrc.start();
     applyRain();
+
+    if (ctx.audioWorklet && typeof AudioWorkletNode === 'function') {
+      ctx.audioWorklet.addModule(new URL('./engineWorklet.js', import.meta.url)).then(() => {
+        synth = new AudioWorkletNode(ctx, 'engine-synth', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1] });
+        synthP = synth.parameters;
+        synth.connect(viewFilter);
+      }).catch((e) => { console.warn('engine synth unavailable, using the basic engine sound', e); });
+    }
   }
+  const setP = (name, v, t, tc) => { const a = synthP.get(name); if (tc) a.setTargetAtTime(v, t, tc); else a.setValueAtTime(v, t); };
   function applyRain() {
     if (!ctx) return;
     const t = ctx.currentTime;
@@ -196,6 +212,8 @@ export function createAudio() {
     setMuted(on) { muted = !!on; applyMaster(); },
     get muted() { return muted; },
     get levels() { return { master: masterVol, sfx: sfxVol, music: musicVol, muted }; },
+    /** 'worklet' once the modelled engine runs, 'basic' on the fallback, 'off' before init. */
+    get engineVoice() { return !ctx ? 'off' : synth ? 'worklet' : 'basic'; },
     /**
      * Hook for a future music track: connect a source node to the music bus.
      * NOTE nothing calls this yet, the sim ships no music, so the MUSIC
@@ -310,7 +328,36 @@ export function createAudio() {
       engineOsc.frequency.setTargetAtTime(f, t, 0.08);
       engineOsc2.frequency.setTargetAtTime(f * 0.5 + 1.5, t, 0.08);
       engineFilter.frequency.setTargetAtTime(320 + 900 * controls.throttle, t, 0.1);
-      const propOn = alive && !isJet;
+      // physically modelled engine: once it is running the basic layers mute
+      if (synth) {
+        const cfg = engineSound(ac.p?.id, engineType);
+        if (synthId !== cfg) { synthId = cfg; synth.port.postMessage({ cfg }); }
+        const running = alive && ac.engineRunning !== false && !ac.engineFailed;
+        // fore/aft directivity: body +x in world dotted with aircraft -> camera
+        let front = 0;
+        if (external && dist > 1 && ac.q) {
+          const q = ac.q;
+          const fx = 1 - 2 * (q.y * q.y + q.z * q.z), fy = 2 * (q.x * q.y + q.w * q.z), fz = 2 * (q.x * q.z - q.w * q.y);
+          front = -(fx * (ac.pos.x - view.x) + fy * (ac.pos.y - view.y) + fz * (ac.pos.z - view.z)) / dist;
+        }
+        setP('alive', running ? 1 : 0, t);
+        setP('crank', !ac.crashed && (ac.crankT || 0) > 0 ? 1 : 0, t);
+        setP('dop', dop, t);
+        setP('cockpit', external ? 0 : 1, t);
+        setP('front', front, t);
+        if (isJet) {
+          const n1 = running ? 0.22 + 0.78 * spool : (alive ? Math.min(0.12, (ac.airspeed || 0) / 600) : 0);
+          setP('n1', n1, t);
+          setP('ab', running && ac.abOn ? 1 : 0, t);
+        } else {
+          setP('rpm', (ac.rpmNorm || 0) * cfg.rpmMax, t);
+          setP('load', running ? Math.max(0, Math.min(1, ac.spool ?? controls.throttle)) : 0, t);
+          setP('ab', 0, t);
+        }
+        setP('gain', alive ? 1 : 0, t, 0.05);
+      }
+      const legacy = !synth;
+      const propOn = legacy && alive && !isJet;
       engineGain.gain.setTargetAtTime(propOn ? 0.02 + 0.07 * controls.throttle : 0, t, 0.1);
       const rpm = 700 + 2000 * ac.rpmNorm;
       const blades = ac.p?.engine?.blades ?? 2;
@@ -322,7 +369,7 @@ export function createAudio() {
       thumpGain.gain.setTargetAtTime(propOn ? 0.05 + 0.10 * controls.throttle : 0, t, 0.1);
 
       // jet path: bandpass roar + turbine whine + afterburner; silent unless jet
-      const jetOn = alive && isJet;
+      const jetOn = legacy && alive && isJet;
       jetRoarFilter.frequency.setTargetAtTime((180 + 720 * spool) * dop, t, 0.1);
       jetRoarGain.gain.setTargetAtTime(jetOn ? 0.05 + 0.30 * spool : 0, t, 0.12);
       whineOsc.frequency.setTargetAtTime((900 + 1700 * spool) * dop, t, 0.08);

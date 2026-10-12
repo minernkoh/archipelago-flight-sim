@@ -1373,6 +1373,86 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
     typeof a.connectMusic === 'function');
 }
 
+// ---- v12: physically modelled engine sound (engineSynth.js) ----
+// The AudioWorklet runs this exact code; here it is rendered offline and the
+// physics it claims is checked in the spectrum, not by ear.
+{
+  const { EngineSynth, ENGINE_SOUNDS } = await import('../src/engineSynth.js');
+  const SR = 48000;
+  const render = (id, st, secs = 1.5, seed = 7) => {
+    const s = new EngineSynth(SR, ENGINE_SOUNDS[id], seed);
+    Object.assign(s.p, st); Object.assign(s.s, st);
+    const out = new Float32Array(Math.round(SR * secs / 128) * 128);
+    const t0 = process.hrtime.bigint();
+    for (let i = 0; i < out.length; i += 128) s.render(out, 128, i);
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    return { d: out.subarray(SR / 2), cpu: ms / (secs * 1000) };
+  };
+  const rms = d => Math.sqrt(d.reduce((a, v) => a + v * v, 0) / d.length);
+  const power = (d, f) => {               // Goertzel, normalised
+    const w = 2 * Math.PI * f / SR, cw = 2 * Math.cos(w); let a = 0, b = 0;
+    for (let i = 0; i < d.length; i++) { const c = d[i] + cw * a - b; b = a; a = c; }
+    return (a * a + b * b - cw * a * b) / d.length ** 2;
+  };
+  const centroid = d => { let n = 0, m = 0; for (let f = 25; f < 4000; f += 25) { const p = power(d, f); n += f * p; m += p; } return n / m; };
+  const A = { alive: 1, dop: 1, gain: 1 };
+
+  // four-stroke: each cylinder fires every other revolution -> rpm * cyl / 120
+  const c = render('c172', { ...A, rpm: 2400, load: 1 }).d;
+  const fire = 2400 * 4 / 120;            // 80 Hz
+  check('engine sound: C172 firing frequency is rpm x cylinders / 120',
+    power(c, fire) > 20 * power(c, fire * 0.5) && power(c, fire) > 20 * power(c, fire * 1.5),
+    `80 Hz ${power(c, fire).toExponential(1)} vs 40 Hz ${power(c, 40).toExponential(1)}, 120 Hz ${power(c, 120).toExponential(1)}`);
+  const x = render('extra300', { ...A, rpm: 2700, load: 1 }).d;
+  check('engine sound: six-cylinder Extra fires at 135 Hz at 2,700 rpm',
+    power(x, 135) > 20 * power(x, 67.5), `${power(x, 135).toExponential(1)} vs ${power(x, 67.5).toExponential(1)}`);
+  const idle = render('c172', { ...A, rpm: 700, load: 0 }).d;
+  check('engine sound: full power is louder than idle', rms(c) > 2.5 * rms(idle), `${rms(c).toFixed(3)} vs ${rms(idle).toFixed(3)}`);
+  const cab = render('c172', { ...A, rpm: 2400, load: 1, cockpit: 1 }).d;
+  check('engine sound: the cabin hears a duller engine than outside', centroid(cab) < 0.8 * centroid(c),
+    `centroid ${centroid(cab).toFixed(0)} Hz in vs ${centroid(c).toFixed(0)} Hz out`);
+  const crank = render('c172', { alive: 0, crank: 1, rpm: 180, dop: 1, gain: 1 }).d;
+  const dead = render('c172', { alive: 0, crank: 0, rpm: 0, dop: 1, gain: 1 }).d;
+  check('engine sound: starter cranks audibly, a stopped engine is silent', rms(crank) > 0.005 && rms(dead) < 1e-4,
+    `crank ${rms(crank).toFixed(4)}, stopped ${rms(dead).toExponential(1)}`);
+
+  // turbofan: fan blade-pass N1 * blades ahead, jet roar dominates behind
+  const hf = render('heavy', { ...A, n1: 1, front: 1 }).d, hb = render('heavy', { ...A, n1: 1, front: -1 }).d;
+  const bpf = 2550 / 60 * 22;             // 935 Hz
+  const tonal = d => power(d, bpf) / ((power(d, bpf * 0.93) + power(d, bpf * 1.07)) / 2);
+  check('engine sound: airliner fan tone at N1 x fan blades, stands out ahead of the inlet',
+    tonal(hf) > 10 && tonal(hf) > 3 * tonal(hb),
+    `tone/neighbours ${tonal(hf).toFixed(0)} ahead, ${tonal(hb).toFixed(0)} behind`);
+  check('engine sound: jet roar is louder behind than ahead', rms(render('hornet', { ...A, n1: 1, front: -1 }).d) > 1.4 * rms(render('hornet', { ...A, n1: 1, front: 1 }).d));
+  const shaft = 2550 / 60;
+  const buzzLow = render('heavy', { ...A, n1: 0.6, front: 1 }).d;
+  const orders = d => [5, 7, 9, 11].reduce((a, k) => a + power(d, shaft * k * (d === buzzLow ? 0.6 : 1)), 0);
+  check('engine sound: buzzsaw only once the fan tips go supersonic', orders(hf) > 30 * orders(buzzLow),
+    `${orders(hf).toExponential(1)} vs ${orders(buzzLow).toExponential(1)}`);
+  const low = d => { let e = 0; for (let f = 30; f <= 150; f += 6) e += power(d, f); return e; };
+  const abOn = render('hornet', { ...A, n1: 1, ab: 1, front: -1 }).d, abOff = render('hornet', { ...A, n1: 1, front: -1 }).d;
+  check('engine sound: afterburner adds low-frequency rumble', low(abOn) > 2 * low(abOff),
+    `30-150 Hz energy x${(low(abOn) / low(abOff)).toFixed(1)}`);
+
+  // Doppler: approaching raises every tone in proportion
+  const dn = render('c172', { ...A, rpm: 2400, load: 1, dop: 1.15 }).d;
+  check('engine sound: Doppler factor scales the firing frequency', power(dn, fire * 1.15) > 10 * power(dn, fire));
+
+  // safety: finite, bounded, deterministic, cheap enough for the audio thread
+  let finite = true, peak = 0, cpu = 0;
+  for (const id of Object.keys(ENGINE_SOUNDS)) {
+    for (const st of [{ ...A, rpm: 2700, n1: 1, load: 1, ab: 1 }, { ...A, rpm: 700, n1: 0.22 }, { ...A, rpm: 2700, n1: 1, cockpit: 1 }]) {
+      const r = render(id, st, 1);
+      for (const v of r.d) { if (!Number.isFinite(v)) finite = false; peak = Math.max(peak, Math.abs(v)); }
+      cpu = Math.max(cpu, r.cpu);
+    }
+  }
+  check('engine sound: every voice stays finite and under clipping', finite && peak < 1, `peak ${peak.toFixed(2)}`);
+  check('engine sound: one voice costs < 8% of real time on one core', cpu < 0.08, `${(cpu * 100).toFixed(1)}%`);
+  const r1 = render('extra300', { ...A, rpm: 1800, load: 0.5 }, 0.8, 3).d, r2 = render('extra300', { ...A, rpm: 1800, load: 0.5 }, 0.8, 3).d;
+  check('engine sound: deterministic for a given seed', r1.every((v, i) => v === r2[i]));
+}
+
 // ---- v11: autopilot ALT hold auto-trim ----
 // Before the integrators, P-only ALT hold settled 200-400 ft off target on the
 // Extra and Hornet (it needed a standing VS error to hold level-flight pitch).

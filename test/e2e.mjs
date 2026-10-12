@@ -222,6 +222,10 @@ const hudState = await page.evaluate(() => ({
   hudOn: document.querySelector('#hud').classList.contains('on'),
 }));
 check('HUD live', hudState.hudOn && Number(hudState.spd) > 30, `IAS ${hudState.spd} kt`);
+// v12: the engine is synthesised in an AudioWorklet (engineSynth.js); the
+// basic oscillator engine is only the fallback for browsers without one
+check('engine sound runs on the modelled AudioWorklet voice', (await sim('__sim.audio.engineVoice')) === 'worklet',
+  await sim('__sim.audio.engineVoice'));
 
 // --- U7 + v5-R4: M cycles off -> chart -> GPS -> off (DOM/state, not pixels) ---
 const mmExists = await sim('!!document.querySelector("#minimap")');

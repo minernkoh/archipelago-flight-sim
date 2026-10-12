@@ -12,6 +12,7 @@
     "boothang": "node test/boothang.mjs",
     "e2e": "node test/e2e.mjs",
     "school": "node test/schoolcheck.mjs",
+    "sounds": "node test/enginewav.mjs",
     "serve": "python3 -m http.server 8123",
     "verify": "npm test && npm run checks && npm run boothang && npm run e2e"
   },
