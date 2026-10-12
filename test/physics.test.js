@@ -1597,6 +1597,13 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   { const ac = mk('c172'); const c = cs({ throttle: 1, elevator: 0.15 }); fly(ac, c, 1);
     (await import('../src/physics/flightModel.js')).failSystem(ac, 'static'); const a0 = ac.altIndicated; fly(ac, c, 10);
     check('failure: blocked static port freezes the altimeter and zeroes the VSI', ac.altIndicated === a0 && ac.vsIndicated === 0 && Math.abs(ac.pos.y - a0) > 15, `alt ind ${a0.toFixed(0)} true ${ac.pos.y.toFixed(0)}`); }
+  // alternate static: brings the altimeter and VSI back, reading a little high
+  { const ac = mk('c172'); const c = cs({ throttle: 1, elevator: 0.15 }); fly(ac, c, 1);
+    (await import('../src/physics/flightModel.js')).failSystem(ac, 'static'); fly(ac, c, 4); const frozen = ac.altIndicated;
+    ac.sys.altStatic = true; fly(ac, c, 4);
+    check('alternate static: the altimeter and VSI come back, reading ~50 ft high',
+      Math.abs(ac.altIndicated - ac.pos.y - 15) < 0.01 && Math.abs(ac.vsIndicated - ac.vel.y) < 1e-9 && Math.abs(ac.altIndicated - frozen) > 10,
+      `frozen ${frozen.toFixed(0)} -> ${ac.altIndicated.toFixed(0)} (true ${ac.pos.y.toFixed(0)})`); }
   // power: half thrust, engine still turning
   { const a = mk('c172'), b = mk('c172'); const c = cs({ throttle: 1 }); fly(a, c, 3); fly(b, c, 1);
     (await import('../src/physics/flightModel.js')).failSystem(b, 'power'); fly(b, c, 2);

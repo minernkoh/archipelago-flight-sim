@@ -171,7 +171,7 @@ export function createCockpit(cfg, hud, p = null) {
     ...(glass ? [] : [
       { id: 'lt-land', label: 'LAND' }, { id: 'lt-nav', label: 'NAV' }, { id: 'lt-strb', label: 'STRB' }, { id: 'lt-bcn', label: 'BCN' },
       ...(p?.startup ? [{ id: 'fuel', label: 'FUEL' }, { id: 'carb', label: 'CARB' }, { id: 'prime', label: 'PRIME' }] : []),
-      { id: 'xpdr', label: 'XPDR' },
+      { id: 'xpdr', label: 'XPDR' }, { id: 'altstat', label: 'ALT STC' },
       { id: 'trim-dn', label: 'TRM ▼' }, { id: 'trim-up', label: 'TRM ▲' },
     ]),
     // glass cockpits tune NAV 1 here (the steam panels have it in the radio stack)

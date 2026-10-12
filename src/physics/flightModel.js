@@ -137,7 +137,7 @@ export function resetSystems(ac) {
   ac.breakers = { avn: true, ap: true, flap: true };
   // Ready-to-fly: master on, mags BOTH, mixture rich, engine turning, full battery.
   ac.sys = { battery: true, mags: 'BOTH', mixture: 1, fuel: 'BOTH', lights: { land: true, nav: true, strobe: true, beacon: true },
-    carbHeat: false, primes: 2, xpdr: 1200 };
+    carbHeat: false, primes: 2, xpdr: 1200, altStatic: false };
   ac.fuelStarveT = 0; ac.carbIce = 0;
   ac.engineRunning = true; ac.batteryCharge = 1; ac.crankT = 0; ac.avionics = true;
 }
@@ -146,7 +146,7 @@ export function resetSystems(ac) {
 // player must run the start sequence. Battery is charged — it's just switched off.
 export function setColdStart(ac) {
   ac.sys = { battery: false, mags: 'OFF', mixture: 0, fuel: 'BOTH', lights: { land: false, nav: false, strobe: false, beacon: false },
-    carbHeat: false, primes: 0, xpdr: 1200 };   // a cold engine wants priming
+    carbHeat: false, primes: 0, xpdr: 1200, altStatic: false };   // a cold engine wants priming
   ac.engineRunning = false; ac.spool = 0; ac.crankT = 0;
   ac.batteryCharge = 1; ac.avionics = false;
   ac.oilT = 59; ac.oilP = 0; ac.oilQty = 1; ac.oilLowT = 0;   // a cold engine: oil at ambient
@@ -634,7 +634,12 @@ export function step(ac, controls, env, dt) {
   if (ac.systems.pitot !== false) ac.iasIndicated = V * Math.sqrt(densityRatio);
   // Static port: a blocked one freezes the altimeter and zeroes the VSI.
   if (ac.systems.static !== false) { ac.altIndicated = ac.pos.y; ac.vsIndicated = ac.vel.y; }
-  else ac.vsIndicated = 0;
+  else if (ac.sys?.altStatic) {
+    // alternate static source: cabin pressure is a little below ambient (the
+    // slipstream sucks on the cabin), so the altimeter reads ~50 ft high, the
+    // VSI works again (POH: up to 50 ft, a few knots high with vents closed)
+    ac.altIndicated = ac.pos.y + 15; ac.vsIndicated = ac.vel.y;
+  } else ac.vsIndicated = 0;
   // Vacuum pump: the gyros spin down over a couple of minutes and the
   // attitude and heading indications wander off with growing drift.
   if (ac.gyro) {
