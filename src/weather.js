@@ -17,6 +17,7 @@
 // (groundContact reads env.wet, main.js sets it from WET_WEATHER).
 
 import * as THREE from 'three';
+import { cloudNoiseTexture } from './volclouds.js';
 import { RUNWAY_WX } from './maps/runwayPaint.js';
 import { displayMatch } from './display.js';
 
@@ -35,6 +36,8 @@ function deckMaterial(top) {
       base: { value: 500 }, col: { value: new THREE.Color() }, fogColor: { value: new THREE.Color() },
       fogNear: { value: 500 }, fogFar: { value: 3000 }, flash: { value: 0 }, time: { value: 0 },
       sunDir: { value: new THREE.Vector3(0, 1, 0) },
+      // v12 volumetric shading (full detail): the shared 3D cloud noise
+      noise3: { value: null }, vol: { value: 0 },
     },
     vertexShader: `
       uniform float base, time; varying vec3 vW; varying vec3 vN;
@@ -54,11 +57,29 @@ function deckMaterial(top) {
         gl_Position = projectionMatrix * viewMatrix * w;
       }`,
     fragmentShader: `
-      uniform vec3 col, fogColor, sunDir; uniform float fogNear, fogFar, flash;
+      precision highp sampler3D;
+      uniform vec3 col, fogColor, sunDir; uniform float fogNear, fogFar, flash, vol, time, base;
+      uniform sampler3D noise3;
       varying vec3 vW; varying vec3 vN;
+      float dn(vec3 p){ return texture(noise3, (p + vec3(time * 3.0, 0.0, time * 1.2)) / 1100.0).r * 0.7
+                              + texture(noise3, (p + vec3(time * 3.0, 0.0, time * 1.2)) / 240.0).r * 0.3; }
       void main(){
         vec3 n = normalize(vN);
         float l = ${top ? '0.82 + 0.25 * max(dot(n, sunDir), 0.0)' : '0.78 + 0.32 * (1.0 + n.y) + 0.12 * abs(n.x)'};
+        if (vol > 0.5) {
+          // volumetric shading: march into the deck to see how much cloud
+          // stands between this point and the light (sun above the top, the
+          // whole deck above the base), Beer-Lambert, plus billowed detail
+          float od = 0.0;
+          ${top
+            ? `for (int i = 1; i <= 4; i++) od += dn(vW + sunDir * 45.0 * float(i) - vec3(0.0, 30.0, 0.0));
+               float beer = exp(-od * 0.55);
+               float billow = dn(vW);
+               l = 0.62 + 0.5 * beer * max(sunDir.y + 0.25, 0.0) + 0.22 * billow;`
+            : `for (int i = 1; i <= 4; i++) od += dn(vW + vec3(0.0, 70.0 * float(i), 0.0));
+               float billow = dn(vW);
+               l = (1.02 - 0.42 * smoothstep(1.2, 3.2, od)) * (0.82 + 0.3 * billow) + 0.1 * abs(n.x);`}
+        }
         vec3 c = col * l + vec3(0.7, 0.75, 0.9) * flash;
         float d = distance(cameraPosition, vW);
         c = mix(c, fogColor, smoothstep(fogNear, fogFar, d));
@@ -258,6 +279,15 @@ export function createWeatherFX(scene, env, audio, windAt) {
 
   return {
     set,
+    /** Full detail: volumetric deck shading from the shared 3D cloud noise. */
+    setDetail(k) {
+      const on = k > 0.5;
+      for (const d of [deckBottom, deckTop]) {
+        if (on && !d.material.uniforms.noise3.value) d.material.uniforms.noise3.value = cloudNoiseTexture();
+        d.material.uniforms.vol.value = on ? 1 : 0;
+      }
+    },
+    get volumetricDeck() { return deckTop.material.uniforms.vol.value > 0.5; },
     get preset() { return presetId; },
     get deckBase() { return preset.overcast > 0 ? deckY : null; },
     get strikes() { return strikes; },

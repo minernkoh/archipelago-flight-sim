@@ -55,7 +55,7 @@ Those are marked as scope limits, not as defects.
 | Area | Rating | Evidence |
 |---|---|---|
 | Time of day, sky, stars, night lighting | Met | `environment.js` |
-| Clouds | Met (cumulus) | Raymarched volumetric cumulus with self-shadowing, forward scattering and fly-through (`volclouds.js`, e2e checks it on full detail). Cloud shadows fall on the terrain (`cloudshadow.js`). Overcast is still a deck, not a volume. |
+| Clouds | Met (cumulus) | Raymarched volumetric cumulus with self-shadowing, forward scattering and fly-through (`volclouds.js`, e2e checks it on full detail). Cloud shadows fall on the terrain (`cloudshadow.js`). The overcast deck is volumetrically SHADED (light marched through 3D noise: lit domes on top, thickness-darkened base) but its silhouette is still a displaced surface, not a raymarched volume. |
 | Weather: rain, storms, lightning, overcast, live real weather | Met | `weather.js`, `liveweather.js`, e2e live weather |
 | Water: reflections, swell, shallows, foam | Met | Planar reflection (e2e reflection check) |
 | Post FX: bloom, grade, flare; dynamic resolution | Met | `post.js`, `main.js adaptResolution` |

@@ -130,10 +130,12 @@ function adaptResolution(rawDt) {
   else slowDetail = 0;
 }
 let detailAuto = true, slowDetail = 0;
+const detailHooks = { weather: null };   // filled once weatherFx exists (it is created later)
 function setDetail(k) {
   GROUND_DETAIL.value = k;
   env.setDetail(k);
   terrain.setDetail(k);
+  detailHooks.weather?.setDetail(k);
 }
 
 window.addEventListener('resize', () => {
@@ -300,6 +302,8 @@ const audio = createAudio();
 // Precipitation sky: overcast deck, rain, lightning (weather.js). The wind
 // half of a preset goes to windField; the wet runway to physEnv.wet.
 const weatherFx = createWeatherFX(scene, env, audio, (p) => windField.at(p.x, p.y, p.z));
+detailHooks.weather = weatherFx;
+weatherFx.setDetail(GROUND_DETAIL.value);
 const skyId = (w) => (w === 'rain' || w === 'storm') ? w : 'clear';
 function setSkyWeather(id) {
   weatherFx.set(skyId(id), currentMap);

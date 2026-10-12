@@ -50,6 +50,20 @@ export function cloudNoise(n = N, seed = 1) {
   return data;
 }
 
+let sharedTex = null;
+/** The cloud noise volume as a texture, built once and shared (clouds, overcast deck). */
+export function cloudNoiseTexture() {
+  if (sharedTex) return sharedTex;
+  const tex = new THREE.Data3DTexture(cloudNoise(), N, N, N);
+  tex.format = THREE.RedFormat; tex.type = THREE.UnsignedByteType;
+  tex.minFilter = tex.magFilter = THREE.LinearFilter;
+  tex.wrapS = tex.wrapT = tex.wrapR = THREE.RepeatWrapping;
+  tex.unpackAlignment = 1;
+  tex.needsUpdate = true;
+  sharedTex = tex;
+  return tex;
+}
+
 /**
  * @param {object} o
  * @param {THREE.Scene} o.scene
@@ -65,12 +79,7 @@ export function createVolumetricClouds({ scene, uniforms, dims, max }) {
 
   function build() {
     built = true;
-    const tex = new THREE.Data3DTexture(cloudNoise(), N, N, N);
-    tex.format = THREE.RedFormat; tex.type = THREE.UnsignedByteType;
-    tex.minFilter = tex.magFilter = THREE.LinearFilter;
-    tex.wrapS = tex.wrapT = tex.wrapR = THREE.RepeatWrapping;
-    tex.unpackAlignment = 1;
-    tex.needsUpdate = true;
+    const tex = cloudNoiseTexture();
 
     const box = new THREE.BoxGeometry(2, 1, 2); box.translate(0, 0.5, 0);   // x,z in -1..1, y in 0..1
     const geo = new THREE.InstancedBufferGeometry();
