@@ -86,10 +86,12 @@ export function buildingMeshes(buildings, heightFn) {
       const R0 = [r0[0], y1, r0[1]], R1 = [r1[0], y1, r1[1]];
       const P = (i) => [ring[i % 4][0], eave, ring[i % 4][1]];
       // two slopes + two gable ends (gable ends in the wall colour)
-      roof.quad(P(s + 1), P(s + 2), R1, R0, roofCol);
-      roof.quad(P(s + 3), P(s + 4), R0, R1, roofCol);
-      walls.tri(P(s), P(s + 1), R0, wallCol);
-      walls.tri(P(s + 2), P(s + 3), R1, wallCol);
+      // (wound so the faces point up/out: the ring is CCW in x-z, which is
+      // clockwise seen from above, so the slopes run eave -> ridge backwards)
+      roof.quad(R0, R1, P(s + 2), P(s + 1), roofCol);
+      roof.quad(R1, R0, P(s + 4), P(s + 3), roofCol);
+      walls.tri(R0, P(s + 1), P(s), wallCol);
+      walls.tri(R1, P(s + 3), P(s + 2), wallCol);
     } else {
       const contour = ring.map(p => new THREE.Vector2(p[0], p[1]));
       let tris;

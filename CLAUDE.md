@@ -27,6 +27,7 @@ lakes, land cover driving ground colour and forests) from one Overpass query per
 - `npm test` → headless physics suite (Node, no browser, ~1 min; must stay green)
 - `npm run e2e` → puppeteer E2E against :8123 (server must be running; writes test/shots/*.png)
 - `node test/bootcheck.mjs` → fast boot/menu/aircraft-swap smoke check
+- `node test/osmstress.mjs [n]` → times the OSM pipeline on a SYNTHETIC dense city (40k buildings: ~1.4 s main thread, 481k triangles, 64 draw calls)
 - `npm run sounds` → renders engine scenarios (start-up, run-up, fly-bys, afterburner) to test/shots/engine-*.wav
 
 ## Architecture (who owns what)

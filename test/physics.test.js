@@ -1498,6 +1498,25 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   const bm = buildingMeshes(data.buildings, (x, z) => 7 + x * 0.001);
   let tris = 0; bm.traverse(m => { if (m.isMesh) tris += m.geometry.attributes.position.count / 3; });
   check('osm: buildings merge into a few draw calls per tile', bm.children.length <= 8 && tris > 200, `${bm.children.length} meshes, ${tris} triangles`);
+  // every face must point away from its own building (roofs up): a backwards
+  // winding is back-face culled, which once left every gabled house roofless
+  {
+    const cents = data.buildings.map(b => [b.ring.reduce((a, p) => a + p[0], 0) / b.ring.length, b.ring.reduce((a, p) => a + p[1], 0) / b.ring.length]);
+    let bad = 0, all = 0;
+    bm.traverse(m => {
+      if (!m.isMesh) return;
+      const p = m.geometry.attributes.position.array;
+      for (let i = 0; i < p.length; i += 9) {
+        const ux = p[i+3]-p[i], uy = p[i+4]-p[i+1], uz = p[i+5]-p[i+2], vx = p[i+6]-p[i], vy = p[i+7]-p[i+1], vz = p[i+8]-p[i+2];
+        const nx = uy*vz-uz*vy, ny = uz*vx-ux*vz, nz = ux*vy-uy*vx;
+        const cx = (p[i]+p[i+3]+p[i+6])/3, cz = (p[i+2]+p[i+5]+p[i+8])/3;
+        let c = cents[0], bd = Infinity;
+        for (const q of cents) { const d = (q[0]-cx)**2 + (q[1]-cz)**2; if (d < bd) { bd = d; c = q; } }
+        all++; if (nx * (cx - c[0]) + nz * (cz - c[1]) + ny * 1e3 <= 0) bad++;
+      }
+    });
+    check('osm: every wall and roof faces outward (none culled from outside)', bad === 0, `${bad}/${all} inward`);
+  }
   check('osm: building tops = ground + height (collision uses these)', Math.abs(office.top - (7 + rf(200, 1020)[0] * 0.001 + 62)) < 0.6, `top ${office.top.toFixed(1)}`);
   const gm = groundMeshes(data, {
     heightFn: () => 7, elev: 7, flat: true, lakeLevel: () => 12,
