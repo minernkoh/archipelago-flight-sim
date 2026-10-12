@@ -1,3 +1,5 @@
+import { clockOf } from './aitraffic.js';
+
 // v5-R5: ATC-lite — a scripted tower that talks you round the circuit.
 //
 // Deliberately NOT an AI: the calls are a small state machine over the same
@@ -44,7 +46,13 @@ export const PHRASES = {
   goAround:  (c) => `${c.callsign}, go around! Unstable — climb runway heading and rejoin downwind.`,
   landed:    (c) => `${c.callsign}, nice work. Exit when able, contact ground point seven.`,
   offField:  (c) => `${c.callsign}, we show you down off the field. Say your intentions.`,
+  // v12: traffic (aitraffic.js). c.traffic = aircraft type, c.clock, c.miles, c.rel.
+  holdShort: (c) => `${c.callsign}, hold position, traffic on short final.`,
+  sequence:  (c) => `${c.callsign}, number two, follow the ${c.traffic} on final.`,
+  trafficInfo: (c) => `${c.callsign}, traffic, ${c.clock} o'clock, ${c.miles} ${c.miles === 'one' ? 'mile' : 'miles'}, ${c.rel}, ${c.traffic} in the pattern.`,
+  goAroundTraffic: (c) => `${c.callsign}, go around, traffic on the runway. Climb runway heading.`,
 };
+const NUM = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
 
 // Is this descent steeper than twice a normal glideslope? Falls back to the
 // flat sink-rate floor when groundspeed is unknown or implausibly low.
@@ -82,6 +90,12 @@ export const LIMITS = {
   minGoAroundFpm: -600, // never call a go-around for a gentler sink than this
   unstableCross: 150,   // m off centerline that earns a go-around
   minGapSec: 3.5,       // radio discipline — never step on the last call
+  // traffic (v12)
+  shortFinal: 2500,     // m before the aim point: traffic this close holds you short
+  trafficRange: 3700,   // m (~2 NM): close enough for a traffic call
+  trafficDy: 300,       // m above/below: further apart vertically is not a factor
+  trafficEvery: 60,     // s between repeat traffic calls
+  goAroundBelow: 60,    // m AGL: runway still occupied this low = go around
 };
 
 /**
@@ -101,9 +115,10 @@ export function createAtc({ field, rwyName, callsign, say } = {}) {
   let phase = 'hold';
   let sinceCall = LIMITS.minGapSec;   // allow the very first call immediately
   let armed = true;
+  let sinceTraffic = 1e9, sequenced = false;
 
-  function emit(id) {
-    const text = buildPhrase(id, ctx);
+  function emit(id, extra) {
+    const text = buildPhrase(id, extra ? { ...ctx, ...extra } : ctx);
     sinceCall = 0;
     say?.(text, id);
     return id;
@@ -113,26 +128,38 @@ export function createAtc({ field, rwyName, callsign, say } = {}) {
     get phase() { return phase; },
     get context() { return { ...ctx }; },
     // Called on a fresh flight: back to holding short.
-    reset() { phase = 'hold'; sinceCall = LIMITS.minGapSec; armed = true; },
+    reset() { phase = 'hold'; sinceCall = LIMITS.minGapSec; armed = true; sinceTraffic = 1e9; sequenced = false; },
     // ATC off (settings) or a lesson in progress: go quiet without losing phase.
     setArmed(on) { armed = !!on; },
 
     update(snap, dt = 0) {
       sinceCall += dt;
+      sinceTraffic += dt;
       if (!armed || !snap) return null;
       if (sinceCall < LIMITS.minGapSec) return null;
 
       const { onGround, agl = 0, vsFpm = 0, cross = 0, touchdown = null, groundSpeedKt = 0 } = snap;
       const lined = Math.abs(cross) < LIMITS.inboundCross;
+      // v12 traffic: ai = aitraffic state (or null), toAim = our distance before the aim point
+      const ai = snap.ai || null;
+      const aiShort = !!ai && (ai.onRunway || (ai.phase === 'final' && ai.toAim < LIMITS.shortFinal));
+      const tx = ai ? { traffic: ai.type || 'Cessna' } : null;
 
       switch (phase) {
         case 'hold':
+          if (onGround && aiShort) { phase = 'holding'; return emit('holdShort'); }
           if (onGround) { phase = 'roll'; return emit('clearance'); }
           // Careful: on the first tick after a respawn the physics step has not
           // computed gear contact yet, so onGround is still false while the
           // aircraft sits on the runway. Only treat it as a genuine airborne
           // start once there is real height under it — otherwise keep holding.
           if (agl > LIMITS.airborneAgl) { phase = 'cruise'; return null; }
+          return null;
+
+        case 'holding':
+          // cleared once the traffic has landed and lifted off again
+          if (!aiShort) { phase = 'roll'; return emit('clearance'); }
+          if (!onGround && agl > LIMITS.airborneAgl) phase = 'climb';    // went anyway
           return null;
 
         case 'roll':
@@ -145,6 +172,14 @@ export function createAtc({ field, rwyName, callsign, say } = {}) {
 
         case 'cruise':
           if (touchdown) { phase = 'down'; return emit(touchdown.onRunway ? 'landed' : 'offField'); }
+          if (ai && !ai.onRunway && snap.pos && sinceTraffic > LIMITS.trafficEvery) {
+            const dx = ai.x - snap.pos.x, dz = ai.z - snap.pos.z, d = Math.hypot(dx, dz), dy = ai.y - snap.pos.y;
+            if (d < LIMITS.trafficRange && Math.abs(dy) < LIMITS.trafficDy) {
+              sinceTraffic = 0;
+              return emit('trafficInfo', { ...tx, clock: NUM[clockOf(snap.headingRad || 0, dx, dz)],
+                miles: NUM[Math.max(1, Math.round(d / 1852))], rel: Math.abs(dy) < 90 ? 'same altitude' : dy > 0 ? 'above you' : 'below you' });
+            }
+          }
           if (!onGround && agl < LIMITS.inboundAgl && vsFpm < -100 && lined) {
             phase = 'inbound';
             return emit('inbound');
@@ -155,7 +190,13 @@ export function createAtc({ field, rwyName, callsign, say } = {}) {
           if (touchdown) { phase = 'down'; return emit(touchdown.onRunway ? 'landed' : 'offField'); }
           const unstable = tooSteep(vsFpm, groundSpeedKt) || Math.abs(cross) > LIMITS.unstableCross;
           if (agl < LIMITS.finalAgl && unstable) { phase = 'cruise'; return emit('goAround'); }
-          if (agl < LIMITS.finalAgl && !unstable) { phase = 'final'; return emit('clearLand'); }
+          // traffic ahead of us on final, or on the runway: sequence, and
+          // only clear us to land once the runway is ours
+          const ahead = !!ai && (ai.onRunway || (ai.phase === 'final' && snap.toAim != null && ai.toAim < snap.toAim));
+          if (ahead && !sequenced) { sequenced = true; return emit('sequence', tx); }
+          if (ai && ai.onRunway && agl < LIMITS.goAroundBelow) { phase = 'cruise'; sequenced = false; return emit('goAroundTraffic'); }
+          if (agl < LIMITS.finalAgl && !unstable && !(ai && ai.onRunway)) { phase = 'final'; sequenced = false; return emit('clearLand'); }
+          if (agl < LIMITS.finalAgl) return null;                         // waiting on the runway
           // Climbed away or wandered off the centerline — stop expecting them.
           if (agl > LIMITS.inboundAgl || !lined) phase = 'cruise';
           return null;

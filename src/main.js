@@ -369,6 +369,8 @@ const world = {
   setAutoRes(on) { autoRes = on !== false; if (!autoRes) { resScale = 1; applyPixelRatio(); } },
   get resScale() { return resScale; },
   get detail() { return GROUND_DETAIL.value; },
+  /** The AI circuit aircraft (aitraffic.js) as the tower sees it, or null. */
+  aiTraffic() { return traffic?.aiState?.() ?? null; },
   // Tests/tools: force the full or lite shading path (overrides the auto drop).
   forceDetail(k) { detailAuto = false; setDetail(k); },
   // v6 quality knob: HIGH = coarse terrain tier out to 9 km + real shadows.

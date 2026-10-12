@@ -46,7 +46,9 @@ check('the ATC element exists in the HUD', await sim('!!document.querySelector("
 await page.evaluate(() => window.__sim.game.select({ mode: 'free', map: 'archipelago', aircraft: 'c172', time: 'day' }));
 await page.evaluate(() => document.querySelector('#btn-start').click());
 await settle(1200);
-const spawn = await atcState();
+// v12: AI traffic on short final makes the tower hold you first; wait it out
+let spawn = await atcState();
+for (let i = 0; i < 60 && !/cleared for takeoff/i.test(spawn.text || ''); i++) { await settle(1000); spawn = await atcState(); }
 check('tower clears you for takeoff on spawn',
   spawn.shown && /cleared for takeoff/i.test(spawn.text), JSON.stringify(spawn));
 check('clearance reads the runway phonetically (09 -> zero niner)',
@@ -62,7 +64,8 @@ await page.evaluate(() => document.querySelector('#btn-start').click());
 // after a fixed 1.5 s raced it and saw the PREVIOUS field's clearance.
 await page.waitForFunction('window.__sim.map.id === "singapore" && window.__sim.game.state === "flying"', { timeout: 120000, polling: 250 });
 await settle(1500);
-const sg = await atcState();
+let sg = await atcState();
+for (let i = 0; i < 60 && !/cleared for takeoff/i.test(sg.text || ''); i++) { await settle(1000); sg = await atcState(); }   // v12: traffic hold
 check('clearance is per-field (Changi 02L)',
   /zero two left/i.test(sg.text), sg.text);
 

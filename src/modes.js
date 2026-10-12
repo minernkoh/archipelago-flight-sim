@@ -708,13 +708,19 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
       // (the debrief block updates it further down), and a stale one would
       // re-trigger the landing call after every touch-and-go.
       if (atc) {
+        const fr = runwayFrame(map.runway), q = ac.q;
         atc.update({
           onGround: ac.onGround,
           agl: ac.agl,
           vsFpm: ac.vel.y * FT * 60,          // positive up
-          cross: runwayFrame(map.runway).cross(ac.pos),
+          cross: fr.cross(ac.pos),
           groundSpeedKt: ac.groundSpeed * KT,
           touchdown: ac.touchdown && ac.touchdown !== lastTouchdown ? ac.touchdown : null,
+          // v12 traffic: where we are, which way we point, how far to the aim point
+          pos: ac.pos,
+          headingRad: Math.atan2(-2 * (q.x * q.z - q.w * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)),
+          toAim: 300 - fr.along(ac.pos),
+          ai: world.aiTraffic?.() || null,
         }, dt);
       }
 

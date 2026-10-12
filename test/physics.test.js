@@ -1631,6 +1631,69 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
     check('failure: respawn restores every system', Object.values(ac.systems).every(v => v === true) && ac.gyro === null && ac._flapJam == null); }
 }
 
+// ---- v12: AI circuit traffic + the tower working it (aitraffic.js, atc.js) ----
+{
+  const { createCircuitTraffic, clockOf } = await import('../src/aitraffic.js');
+  const { createAtc: mkTower } = await import('../src/atc.js');
+  const rwy = { spawn: { x: -1500, z: 0 }, headingRad: 0, y: 5, x0: -1600, x1: 600 };
+  const ai = createCircuitTraffic(rwy);
+  const period = ai.total / ai.speed, seen = new Set();
+  let groundOk = true, minAir = 1e9, tdU = null;
+  for (let t = 0; t < period; t += 0.25) {
+    const p = ai.at(t); seen.add(p.phase);
+    if (p.phase === 'runway' && Math.abs(p.y - 5) > 0.01) groundOk = false;
+    if (p.phase === 'downwind') minAir = Math.min(minAir, p.y - 5);
+    if (p.phase === 'runway' && tdU === null) tdU = p.u;
+  }
+  check('AI traffic: flies every leg of a circuit and a touch-and-go on the runway',
+    ['runway', 'upwind', 'crosswind', 'downwind', 'base', 'final'].every(ph => seen.has(ph)) && groundOk && minAir > 280,
+    `${[...seen].join(',')} downwind >= ${minAir.toFixed(0)} m`);
+  check('AI traffic: touches down at the PAPI aim point (spawn + 300 m)', Math.abs(tdU - (-1200)) < 15, `u ${tdU?.toFixed(0)}`);
+  check('AI traffic: a left-hand circuit (downwind on the left)', (() => { for (let t = 0; t < period; t += 1) { const p = ai.at(t); if (p.phase === 'downwind') return p.v < -900; } return false; })());
+  check('clock positions', clockOf(0, 100, 0) === 12 && clockOf(0, 0, 100) === 3 && clockOf(0, -100, 0) === 6 && clockOf(0, 0, -100) === 9);
+
+  const said = [];
+  const tower = () => { said.length = 0; return mkTower({ field: 'ARCHIPELAGO', rwyName: '09', callsign: 'Skyhawk five delta alpha', say: (t, id) => said.push({ t, id }) }); };
+  const aiAt = (o) => ({ type: 'Cessna', x: 0, y: 300, z: 0, phase: 'downwind', onRunway: false, toAim: 3000, ...o });
+  // traffic on short final: hold, then cleared once it is gone
+  const a = tower();
+  a.update({ onGround: true, agl: 0, cross: 0, ai: aiAt({ phase: 'final', toAim: 1200, y: 70 }) }, 0);
+  a.update({ onGround: true, agl: 0, cross: 0, ai: aiAt({ phase: 'runway', onRunway: true, toAim: -100, y: 5 }) }, 5);
+  const heldThenRunway = said.map(x => x.id).join(',');
+  a.update({ onGround: true, agl: 0, cross: 0, ai: aiAt({ phase: 'upwind', toAim: -900, y: 60 }) }, 5);
+  check('ATC: holds you short for traffic on final, clears you once it is gone',
+    heldThenRunway === 'holdShort' && said[1]?.id === 'clearance' && /hold position/.test(said[0].t), said.map(x => x.id).join(','));
+  // inbound behind traffic: number two, no landing clearance while it is on the runway, then cleared
+  const b = tower();
+  b.update({ onGround: false, agl: 800, cross: 0 }, 0);                    // airborne start: cruise
+  b.update({ onGround: false, agl: 300, vsFpm: -400, cross: 10, toAim: 5000, ai: aiAt({ phase: 'final', toAim: 1500, y: 80 }) }, 5);   // inbound
+  b.update({ onGround: false, agl: 280, vsFpm: -400, cross: 10, toAim: 4800, ai: aiAt({ phase: 'final', toAim: 1200, y: 60 }) }, 5);
+  b.update({ onGround: false, agl: 150, vsFpm: -400, cross: 10, toAim: 2500, ai: aiAt({ phase: 'runway', onRunway: true, toAim: -200, y: 5 }) }, 5);
+  const beforeClear = said.map(x => x.id);
+  b.update({ onGround: false, agl: 120, vsFpm: -400, cross: 10, toAim: 2200, ai: aiAt({ phase: 'upwind', toAim: -900, y: 60 }) }, 5);
+  check('ATC: sequences you number two and withholds landing clearance until the runway is clear',
+    beforeClear.join(',') === 'inbound,sequence' && said.at(-1).id === 'clearLand' && /number two, follow the Cessna/.test(said[1].t),
+    said.map(x => x.id).join(','));
+  // still on the runway when we are low: go around
+  const c = tower();
+  c.update({ onGround: false, agl: 800, cross: 0 }, 0);
+  c.update({ onGround: false, agl: 300, vsFpm: -400, cross: 10, toAim: 3000 }, 5);
+  c.update({ onGround: false, agl: 50, vsFpm: -400, cross: 10, toAim: 600, ai: aiAt({ phase: 'runway', onRunway: true, toAim: -100, y: 5 }) }, 5);
+  c.update({ onGround: false, agl: 45, vsFpm: -400, cross: 10, toAim: 550, ai: aiAt({ phase: 'runway', onRunway: true, toAim: -150, y: 5 }) }, 5);
+  check('ATC: go around when the runway is still occupied below 60 m', said.some(x => x.id === 'goAroundTraffic'), said.map(x => x.id).join(','));
+  // traffic call: two o'clock, one mile, same altitude
+  const d = tower();
+  d.update({ onGround: false, agl: 800, cross: 0 }, 0);
+  const ang = -60 * Math.PI / 180;                                         // 60 deg right of a heading of 0
+  d.update({ onGround: false, agl: 300, vsFpm: 0, cross: 2000, pos: { x: 0, y: 300, z: 0 }, headingRad: 0,
+    ai: aiAt({ x: Math.cos(ang) * 1852, z: -Math.sin(ang) * 1852, y: 320 }) }, 5);
+  check('ATC: traffic call with clock position, distance and relative altitude',
+    said[0]?.id === 'trafficInfo' && /two o'clock, one mile, same altitude/.test(said[0].t), said[0]?.t);
+  d.update({ onGround: false, agl: 300, vsFpm: 0, cross: 2000, pos: { x: 0, y: 300, z: 0 }, headingRad: 0,
+    ai: aiAt({ x: 1000, z: 0, y: 320 }) }, 10);
+  check('ATC: traffic calls are rate-limited', said.length === 1);
+}
+
 // ---- v12: volumetric cloud noise (volclouds.js) ----
 {
   const { cloudNoise } = await import('../src/volclouds.js');

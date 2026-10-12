@@ -11,6 +11,7 @@
 // allocation and no Math.random.
 
 import * as THREE from 'three';
+import { createCircuitTraffic } from './aitraffic.js';
 import { loft, surface, mergeGeos, PROFILE } from './aircraft/modelkit.js';
 
 const CELL = 2000;
@@ -278,6 +279,10 @@ export function createTraffic(scene, map, opts = {}) {
     return pose;
   }
 
+  // the second pattern aircraft flies real touch-and-goes (aitraffic.js) so
+  // the tower has traffic to sequence you with; the first keeps orbiting
+  const ai = hasRunway ? createCircuitTraffic(rwy) : null;
+  let aiT = 0;
   const planeGeo = hasRunway ? clubPlaneGeometry() : null;
   const planeMat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.45, metalness: 0.05, envMapIntensity: 0.4 });
   const planeMeshes = [];
@@ -413,6 +418,14 @@ export function createTraffic(scene, map, opts = {}) {
         const near = Math.hypot(camPos.x - pat.cx, camPos.z - pat.cz) < 9000;
         mesh.visible = near;
         if (!near) continue;
+        if (i === 1 && ai) {
+          aiT = t;
+          const a = ai.at(t);
+          mesh.position.set(a.x, a.y + 1.1, a.z);
+          bank1 += (a.bank - bank1) * Math.min(1, dt * 1.5);
+          mesh.rotation.set(bank1, a.yaw, a.pitch);
+          continue;
+        }
         const p = patternPose(pat.speed * t + i * pat.total * 0.5);
         mesh.position.set(p.x, p.y, p.z);
         // smooth the bank so it rolls in and out of turns instead of snapping
@@ -427,6 +440,8 @@ export function createTraffic(scene, map, opts = {}) {
     update,
     get enabled() { return enabled; },
     get counts() { return { boats: nBoats, flocks: nFlocks, planes: planeMeshes.length }; },
+    /** The AI lander's state for the tower (null when traffic is off or there is no runway). */
+    aiState(t = aiT) { return enabled && ai ? ai.at(t) : null; },
     setEnabled(on) { enabled = !!on; group.visible = enabled; },
     dispose() {
       scene.remove(group);

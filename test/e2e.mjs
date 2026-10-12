@@ -831,10 +831,18 @@ check('ATC switches back on from settings',
 await page.evaluate(() => window.__sim.game.select({ mode: 'free', map: 'archipelago', aircraft: 'c172', time: 'day' }));
 await page.evaluate(() => document.querySelector('#btn-start').click());
 await settle(1200);
-const atcSpawn = await atcState();
+// v12: with AI traffic on short final the tower first holds you, then clears
+// you once it has landed and gone; wait for the clearance either way
+let atcSpawn = await atcState(), atcHeld = /hold position/i.test(atcSpawn.text || '');
+for (let i = 0; i < 60 && !/cleared for takeoff/i.test(atcSpawn.text || ''); i++) {
+  await settle(1000); atcSpawn = await atcState(); if (/hold position/i.test(atcSpawn.text || '')) atcHeld = true;
+}
+atcSpawn.heldForTraffic = atcHeld;
 check('tower clears you for takeoff on spawn',
   atcSpawn.shown && /cleared for takeoff/i.test(atcSpawn.text) && /runway zero niner/i.test(atcSpawn.text),
   JSON.stringify(atcSpawn));
+const aiNow = await sim('(() => { const a = __sim.world.aiTraffic(); return a && { phase: a.phase, y: Math.round(a.y) }; })()');
+check('AI circuit traffic is flying the pattern', !!aiNow && typeof aiNow.phase === 'string', JSON.stringify(aiNow));
 
 // A lesson must leave the frequency to the instructor.
 await page.evaluate(() => window.__sim.game.toMenu());
