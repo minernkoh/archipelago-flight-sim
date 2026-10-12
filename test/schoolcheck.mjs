@@ -28,7 +28,14 @@ await page.evaluate(() => document.querySelector('#settings [data-act="menu"]').
 
 await page.evaluate(() => {
   window.__fd = { on: false, t: {} };
-  setInterval(() => {
+  // The scripted pilot runs right after controls.poll(), every frame. It used
+  // to write controls.state from a 30 ms setInterval, but poll() recentres
+  // untouched axes each frame — completely, on a slow headless frame — so the
+  // rudder/aileron it "held" never reached the physics, and the crosswind
+  // landing rolled into a wing strike with nobody flying it.
+  const c = window.__sim.controls, poll = c.poll.bind(c);
+  c.poll = (dt) => { const st = poll(dt); window.__fdTick?.(); return st; };
+  const tick = () => {
     const s = window.__sim; if (!s || !window.__fd.on) return;
     const ac = s.ac, cs = s.controls.state, t = window.__fd.t;
     if (t.throttle !== undefined) cs.throttle = t.throttle;
@@ -50,10 +57,21 @@ await page.evaluate(() => {
       const cd = r => (90 - r*180/Math.PI + 360) % 360;
       const off = ((cd(Math.atan2(-fz, fx)) - cd(t.rudderHold) + 540) % 360) - 180;
       cs.rudder = Math.max(-1, Math.min(1, -off * 0.06));
+      // ...and "drop the upwind wingtip a touch": with the nose straight the
+      // relative wind arrives from the side (~11 deg of sideslip in this
+      // lesson's 12 kt crosswind) and dihedral rolls the downwind wing into
+      // the runway. Aileron into the wind holds the wings level. Without it
+      // the scripted landing struck a wingtip on every run.
+      const rx = 2*(q.x*q.z + q.w*q.y), ry = 2*(q.y*q.z - q.w*q.x), rz = 1 - 2*(q.x*q.x + q.y*q.y);
+      const ux = 2*(q.x*q.y - q.w*q.z), uy = 1 - 2*(q.x*q.x + q.z*q.z), uz = 2*(q.y*q.z + q.w*q.x);
+      const roll = -Math.atan2(ry, uy);          // + = right wing down (attitude())
+      cs.aileron = Math.max(-1, Math.min(1, -roll * 5 - (s.ac.omega?.x || 0) * 0.6));
     }
     if (t.alt !== undefined) ac.pos.y = t.alt;
     if (t.at) { ac.pos.x = t.at.x; ac.pos.z = t.at.z; }
-  }, 30);
+  };
+  window.__fdTick = tick;
+  setInterval(tick, 30);     // keeps teleport-style holds (alt/at/kt) fresh between frames too
 });
 const fd = t => page.evaluate(t => { window.__fd.t = t; window.__fd.on = true; }, t);
 const fdOff = () => page.evaluate(() => { window.__fd.on = false; window.__fd.t = {}; });
@@ -139,9 +157,15 @@ async function crosswindLanding(crabRad) {
   }, [gy + 1.33, rwy.x + fwdx * 150, rwy.z + fwdz * 150, rwy.hdg, 66 / 1.94384, 0.118, crabRad]);
   if (crabRad === 0) await fd({ rudderHold: rwy.hdg });   // fly the taught technique
   await ev('keydown', 'b');
-  const t0 = Date.now();
+  // 25 s of SIM time for the rollout to a full stop. Wall time undercounts
+  // it badly in headless runs (frames clamp at 0.25 s), which is what made
+  // this check fail with the aircraft still rolling at 30 m/s.
+  const t0 = Date.now(), s0 = await sim('__sim.simTime');
   let passed = false;
-  while (Date.now() - t0 < 25000) { if (/crosswind/.test(await prog())) { passed = true; break; } await wait(400); }
+  while ((await sim('__sim.simTime')) - s0 < 25 && Date.now() - t0 < 180000) {
+    if (/crosswind/.test(await prog())) { passed = true; break; }
+    await wait(400);
+  }
   await ev('keyup', 'b');
   await fdOff();
   const td = await sim(`(() => {

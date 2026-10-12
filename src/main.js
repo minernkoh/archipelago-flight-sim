@@ -407,12 +407,12 @@ refreshPlan();
 const flying = () => game.state === 'flying';
 controls.on('ap', () => { if (flying()) autopilot.toggleMaster(ac, controls); });
 controls.on('ap-hdg', () => { if (flying()) autopilot.toggleHdg(ac); });
-controls.on('ap-alt', () => { if (flying()) autopilot.toggleAlt(ac); });
+controls.on('ap-alt', () => { if (flying()) autopilot.toggleAlt(ac, controls); });
 controls.on('ap-ias', () => { if (flying()) autopilot.toggleIas(ac, controls); });
 controls.on('ap-nav', () => { if (flying()) autopilot.toggleNav(ac); });
 controls.on('ap-wing', () => { if (flying()) autopilot.toggleWing(ac); });
 
-window.__sim = { ac, controls, game, world, autopilot, env, windField, minimap, camRig, camera, weatherFx, physEnv, replay, get cockpit() { return cockpit; }, get plane() { return plane; },
+window.__sim = { ac, controls, game, world, autopilot, env, windField, minimap, camRig, camera, weatherFx, physEnv, replay, get simTime() { return elapsed; }, get cockpit() { return cockpit; }, get plane() { return plane; },
   terrainCounts: () => terrain.counts(),
   get rings() { return gauntletRings || rings; }, get map() { return currentMap; },
   get camName() { return camRig.modeName; }, get trails() { return trails; }, get traffic() { return traffic; }, scene, renderer };
@@ -483,9 +483,13 @@ function frame(now) {
     // Autopilot runs AFTER poll() and only writes axes the human isn't holding,
     // so keyboard input always wins and poll's keyboard path is untouched when
     // the AP is off. Once per frame (like the keyboard), before the phys steps.
-    autopilot.update(ac, controls, dt);
+    // v11: the autopilot runs INSIDE the fixed 120 Hz loop. Once per rendered
+    // frame it was a ~3 Hz sampled controller on a slow machine, and its
+    // rate-damping terms went unstable (full-deflection elevator bang-bang,
+    // +/-10 deg bank wander). Per physics step it behaves the same at any fps.
     acc += dt;
     while (acc >= PHYS_DT) {
+      autopilot.update(ac, controls, PHYS_DT);
       step(ac, c, physEnv, PHYS_DT);
       acc -= PHYS_DT;
     }

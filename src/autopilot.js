@@ -37,6 +37,13 @@ const G = {
   altToVs: 0.06, maxVs: 6,       // m/s commanded climb per m altitude error
   vsToPitch: 1.2, maxPitch: 12,  // deg commanded pitch per (m/s) VS error
   pitchP: 0.035, pitchD: 0.02,   // elevator per deg pitch error / per (deg/s) pitch rate
+  // Auto-trim (v11). Without integrators the loop could only hold the ~2 deg
+  // of pitch level flight needs by keeping a standing climb-rate error, i.e.
+  // ~20 m of altitude error, and then sagged as speed bled. Real autopilots
+  // trim; these two integrators are that trim.
+  pitchBiasI: 0.6,               // deg/s of pitch bias per (m/s) VS error
+  elevTrimI: 0.012,              // elevator/s per deg of pitch error
+  maxPitchBias: 10, maxElevTrim: 0.6,
   iasGain: 0.22,                 // throttle/s per (m/s) IAS error (integrator)
   stallMargin: 0.035,            // rad below alphaStall where nose-up authority hits zero
   taperBand: 0.05,               // rad band over which nose-up authority tapers
@@ -50,6 +57,11 @@ export function createAutopilot() {
   const m = { hdg: false, alt: false, ias: false, wing: false, nav: false };
   const sel = { hdg: 0, alt: 0, ias: 0 }; // hdg deg, alt metres MSL, ias m/s (TAS-ish)
   let thrInt = 0;                          // throttle integrator (IAS hold)
+  let pitchBias = 0, elevTrim = 0;         // ALT-hold auto-trim integrators
+  const armAlt = (ac, controls) => {       // bumpless engage: start from the current state
+    pitchBias = attitude(ac).pitch * RAD2DEG;
+    elevTrim = controls?.state?.elevator ?? 0;
+  };
   let disconnectT = 0;                     // seconds left on the AP DISCONNECT annunciation
 
   // Flight plan: ordered world-space fixes [x, z, y?]; origin anchors the first leg.
@@ -60,15 +72,24 @@ export function createAutopilot() {
 
   function disconnectAll(annunciate) {
     m.hdg = m.alt = m.ias = m.wing = m.nav = false;
+    resetCmd();
     if (annunciate) disconnectT = 4;
   }
 
   // Blend an axis toward a commanded value, honouring human override.
+  // The blend runs on the AP's OWN memory of what it last commanded, not on
+  // controls.state: controls.poll() recentres untouched keyboard axes once per
+  // frame, and on a slow frame that recentring is complete — the AP used to
+  // restart its blend from neutral every frame, a once-per-frame pulse into
+  // elevator and aileron (full-scale bang-bang at a few fps).
+  const cmd = {};
   function drive(controls, axis, val, dt) {
-    if (controls.axisActive(axis)) return; // human is flying this axis
-    const cur = controls.state[axis];
-    controls.state[axis] = cur + (val - cur) * Math.min(1, dt * 6);
+    if (controls.axisActive(axis)) { cmd[axis] = controls.state[axis]; return; } // human is flying this axis
+    if (cmd[axis] === undefined) cmd[axis] = controls.state[axis];
+    cmd[axis] += (val - cmd[axis]) * Math.min(1, dt * 6);
+    controls.state[axis] = cmd[axis];
   }
+  const resetCmd = () => { for (const k of Object.keys(cmd)) delete cmd[k]; };
 
   function navGuidance(ac) {
     if (!plan || !plan.points.length) return null;
@@ -108,15 +129,15 @@ export function createAutopilot() {
     get on() { return anyOn(); },
 
     // --- engage/disengage (snap selected refs to the current state) ---
-    toggleHdg(ac) { m.hdg = !m.hdg; if (m.hdg) { m.wing = false; sel.hdg = compassHdg(attitude(ac).heading); } },
-    toggleAlt(ac) { m.alt = !m.alt; if (m.alt) sel.alt = ac.pos.y; },
-    toggleIas(ac, controls) { m.ias = !m.ias; if (m.ias) { sel.ias = ac.iasIndicated || ac.airspeed; thrInt = controls.state.throttle; } },
-    toggleWing(ac) { m.wing = !m.wing; if (m.wing) m.hdg = m.nav = false; },
-    toggleNav(ac) { m.nav = !m.nav; if (m.nav) { m.wing = false; navIdx = 0; } },
+    toggleHdg(ac) { delete cmd.aileron; m.hdg = !m.hdg; if (m.hdg) { m.wing = false; sel.hdg = compassHdg(attitude(ac).heading); } },
+    toggleAlt(ac, controls) { delete cmd.elevator; m.alt = !m.alt; if (m.alt) { sel.alt = ac.pos.y; armAlt(ac, controls); } },
+    toggleIas(ac, controls) { delete cmd.throttle; m.ias = !m.ias; if (m.ias) { sel.ias = ac.iasIndicated || ac.airspeed; thrInt = controls.state.throttle; } },
+    toggleWing(ac) { delete cmd.aileron; m.wing = !m.wing; if (m.wing) m.hdg = m.nav = false; },
+    toggleNav(ac) { delete cmd.aileron; m.nav = !m.nav; if (m.nav) { m.wing = false; navIdx = 0; } },
     // Master: engage HDG+ALT at current state, or disengage everything.
     toggleMaster(ac, controls) {
       if (anyOn()) { disconnectAll(false); }
-      else { m.hdg = true; m.alt = true; sel.hdg = compassHdg(attitude(ac).heading); sel.alt = ac.pos.y; }
+      else { resetCmd(); m.hdg = true; m.alt = true; sel.hdg = compassHdg(attitude(ac).heading); sel.alt = ac.pos.y; armAlt(ac, controls); }
     },
 
     setPlan(points, origin) { plan = { points: (points || []).map(p => [p[0], p[1], p[2]]), origin: origin || null }; navIdx = 0; },
@@ -174,8 +195,11 @@ export function createAutopilot() {
           const altErr = sel.alt - ac.pos.y;
           const desiredVs = clamp(altErr * G.altToVs, -G.maxVs, G.maxVs);
           const vsErr = desiredVs - ac.vel.y;
-          const desiredPitch = clamp(vsErr * G.vsToPitch, -G.maxPitch, G.maxPitch);
-          let elev = clamp(G.pitchP * (desiredPitch - pitchDeg) - G.pitchD * pitchRate, -1, 1);
+          pitchBias = clamp(pitchBias + vsErr * G.pitchBiasI * dt, -G.maxPitchBias, G.maxPitchBias);
+          const desiredPitch = clamp(pitchBias + vsErr * G.vsToPitch, -G.maxPitch, G.maxPitch);
+          const pitchErr = desiredPitch - pitchDeg;
+          elevTrim = clamp(elevTrim + pitchErr * G.elevTrimI * dt, -G.maxElevTrim, G.maxElevTrim);
+          let elev = clamp(elevTrim + G.pitchP * pitchErr - G.pitchD * pitchRate, -1, 1);
           // Taper nose-up authority as alpha approaches the limit.
           if (elev > 0 && ac.alpha > alphaMax - G.taperBand) {
             elev *= clamp((alphaMax - ac.alpha) / G.taperBand, 0, 1);

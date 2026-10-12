@@ -1373,5 +1373,22 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
     typeof a.connectMusic === 'function');
 }
 
+// ---- v11: autopilot ALT hold auto-trim ----
+// Before the integrators, P-only ALT hold settled 200-400 ft off target on the
+// Extra and Hornet (it needed a standing VS error to hold level-flight pitch).
+{
+  const { flyAltHold } = await import('./aptune.mjs');
+  for (const id of ['c172', 'extra300', 'hornet', 'heavy', 'spirit']) {
+    const lim = id === 'heavy' ? 150 : 40;
+    const r = flyAltHold(id, { turb: true });
+    check(`autopilot ALT hold: ${id} within ${lim} ft in breezy air`, !r.crashed && r.on && r.maxErrFt < lim, JSON.stringify(r));
+  }
+  // A slow machine (3 fps): poll() recentres untouched axes every frame. The
+  // AP must hold from its own command memory, not restart from neutral.
+  const slow = flyAltHold('c172', { turb: true, recentre: 0.3 });
+  check('autopilot holds altitude and wings through 3 fps axis recentring',
+    !slow.crashed && slow.on && slow.maxErrFt < 40 && slow.maxBankDeg < 5, JSON.stringify(slow));
+}
+
 console.log(failures === 0 ? '\nAll physics checks passed.' : `\n${failures} check(s) FAILED.`);
 process.exit(failures === 0 ? 0 : 1);

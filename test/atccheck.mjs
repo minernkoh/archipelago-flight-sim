@@ -58,6 +58,9 @@ await page.evaluate(() => window.__sim.game.toMenu());
 await settle(300);
 await page.evaluate(() => window.__sim.game.select({ mode: 'free', map: 'singapore', aircraft: 'c172' }));
 await page.evaluate(() => document.querySelector('#btn-start').click());
+// A map swap pre-builds terrain for several seconds; reading the transcript
+// after a fixed 1.5 s raced it and saw the PREVIOUS field's clearance.
+await page.waitForFunction('window.__sim.map.id === "singapore" && window.__sim.game.state === "flying"', { timeout: 120000, polling: 250 });
 await settle(1500);
 const sg = await atcState();
 check('clearance is per-field (Changi 02L)',
