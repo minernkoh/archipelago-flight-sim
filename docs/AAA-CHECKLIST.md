@@ -27,7 +27,7 @@ Those are marked as scope limits, not as defects.
 | Wind, gusts, turbulence; aerodynamics use air-relative velocity | Met | `src/physics/wind.js`, physics suite |
 | Ground handling: gear, brakes, wet runway, crosswind landing | Met | `groundContact.js`, school lesson 7 (`npm run school`) |
 | Airframe limits: Vne, flap speeds, g limits, damage | Met | `envelope.js`, physics suite |
-| Engine start (cold and dark), battery, mags, mixture | Partial | Simplified next to study-level aircraft. e2e "start sequence" |
+| Engine start (cold and dark), battery, mags, mixture | Partial | Battery, mags (OFF/R/L/BOTH/START), mixture, primer (unprimed cranks 3.5 s, two strokes 1.6 s, over-primed floods for 6 s), fuel selector (OFF starves the engine after 12 s), carb heat against modelled carb icing. Physics suite + e2e "start sequence" and "two PRIME strokes". Still simplified next to study-level aircraft: no oil pressure or temperature warm-up, no EGT and mixture leaning, no fuel pump. |
 | Autopilot: HDG, ALT, IAS, LNAV flight plans, coupled ILS approach (LOC + GS to minimums) | Met | Every type hands over at 200 ft within 12 m of the centreline and 6 m of the glidepath, calm and 15 kt crosswind (physics suite `autopilot APR`). No VNAV or autoland. |
 | Failures: engine, partial power, alternator, vacuum, pitot, static, flaps, hydraulics; random mode; annunciators | Met | `physics/failures.js`, physics suite `failure:` checks, e2e. Gear failure not modelled (gear is not simulated as retractable). |
 
@@ -55,7 +55,7 @@ Those are marked as scope limits, not as defects.
 | Area | Rating | Evidence |
 |---|---|---|
 | Time of day, sky, stars, night lighting | Met | `environment.js` |
-| Clouds | Met (cumulus) | Raymarched volumetric cumulus with self-shadowing, forward scattering and fly-through (`volclouds.js`, e2e checks it on full detail). Cloud shadows fall on the terrain (`cloudshadow.js`). The overcast deck is volumetrically SHADED (light marched through 3D noise: lit domes on top, thickness-darkened base) but its silhouette is still a displaced surface, not a raymarched volume. |
+| Clouds | Met | Raymarched volumetric cumulus with self-shadowing, forward scattering and fly-through (`volclouds.js`, e2e checks it on full detail). Cloud shadows fall on the terrain (`cloudshadow.js`). The RAIN/STORM overcast is a raymarched volume too on full detail (`weather.js` deck volume): a slab whose base and top are noise heightfields (ragged scud below, turrets above), Beer-Lambert light with the rest of the column above added analytically so the base stays dark, refine-on-hit marching so turret tops are not sliced into stripes, and a closed-layer rule so the deck stays solid to the horizon. You can fly up through it and out on top. The lite path keeps the shaded surfaces. Not done: the deck is one layer at a fixed base, with no multi-layer stratus, virga, or cloud that moves with the wind field. |
 | Weather: rain, storms, lightning, overcast, live real weather | Met | `weather.js`, `liveweather.js`, e2e live weather |
 | Water: reflections, swell, shallows, foam | Met | Planar reflection (e2e reflection check) |
 | Post FX: bloom, grade, flare; dynamic resolution | Met | `post.js`, `main.js adaptResolution` |
@@ -84,5 +84,5 @@ Those are marked as scope limits, not as defects.
 2. **Sound:** listen to the engine (in the sim, or the WAVs from
    `npm run sounds`) and say whether it is good enough.
 3. **Priorities:** choose which "Partial" rows matter for "AAA". The obvious
-   remaining candidates are fully clickable study-level cockpits, ATC-controlled
-   AI traffic, and volumetric overcast.
+   remaining candidates are fully clickable study-level cockpits and autonomous
+   AI traffic (more than one airliner, more than one active runway).

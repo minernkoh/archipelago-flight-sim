@@ -77,7 +77,7 @@ export function createAircraft(opts = {}) {
     // engine power available; flaps = flap drive; vacuum = the steam gyros'
     // vacuum pump; static = the static port (altimeter + VSI).
     systems: { engine: true, electrical: true, hydraulics: true, gear: true, pitot: true,
-      power: true, flaps: true, vacuum: true, static: true },
+      power: true, flaps: true, vacuum: true, static: true, oil: true },
     altIndicated: opts.pos ? opts.pos.y : 1000, vsIndicated: 0,   // static-port instruments
     gyro: null,            // drifting gyro attitude after a vacuum failure, else null
     // circuit breakers the pilot can pull (cockpit.js): avionics bus, autopilot, flap motor
@@ -130,7 +130,9 @@ export function resetSystems(ac) {
   ac.systems.gear = true;        // no-op consequence until a later phase
   ac.systems.pitot = true;
   ac.systems.power = true; ac.systems.flaps = true; ac.systems.vacuum = true; ac.systems.static = true;
+  ac.systems.oil = true;
   ac._flapJam = null; ac.gyro = null;
+  ac.oilQty = 1; ac.oilT = null; ac.oilLowT = 0;      // oil warms up again from the next update
   ac.breakers = { avn: true, ap: true, flap: true };
   // Ready-to-fly: master on, mags BOTH, mixture rich, engine turning, full battery.
   ac.sys = { battery: true, mags: 'BOTH', mixture: 1, fuel: 'BOTH', lights: { land: true, nav: true, strobe: true, beacon: true },
@@ -146,6 +148,30 @@ export function setColdStart(ac) {
     carbHeat: false, primes: 0, xpdr: 1200 };   // a cold engine wants priming
   ac.engineRunning = false; ac.spool = 0; ac.crankT = 0;
   ac.batteryCharge = 1; ac.avionics = false;
+  ac.oilT = 59; ac.oilP = 0; ac.oilQty = 1; ac.oilLowT = 0;   // a cold engine: oil at ambient
+}
+
+// Oil system (piston engines, v12): pressure follows rpm, reads high on cold
+// oil and needs oil in the sump; temperature warms toward a power-dependent
+// value and is cooled by airspeed. An oil leak (systems.oil false) pumps the
+// sump overboard in ~4 min; starved below 10 psi for 40 s, the engine seizes.
+// Gauges only, so healthy flight and the cruise state hash are untouched.
+function updateOil(ac, dt, throttle) {
+  if (ac.p.engine?.type === 'jet') return;
+  if (ac.oilT == null) ac.oilT = ac.engineRunning ? 180 : 59;      // spawned running: already warm
+  if (ac.oilP == null) ac.oilP = ac.engineRunning ? 60 : 0;
+  if (ac.oilQty == null) ac.oilQty = 1;
+  if (ac.oilLowT == null) ac.oilLowT = 0;
+  if (ac.systems.oil === false && ac.engineRunning) ac.oilQty = Math.max(0, ac.oilQty - dt / 240);
+  const supply = Math.min(1, ac.oilQty / 0.35);
+  const cold = Math.max(0, Math.min(1, (180 - ac.oilT) / 120));
+  const target = ac.engineRunning ? (25 + 55 * Math.min(1, (ac.rpmNorm || 0) * 1.15) + 18 * cold) * supply : 0;
+  ac.oilP += (target - ac.oilP) * Math.min(1, dt / (ac.engineRunning ? 0.8 : 1.5));
+  const kt = vLen(ac.vel) * 1.9438;
+  const eqT = ac.engineRunning ? 150 + 85 * throttle - 0.3 * Math.max(0, kt - 60) + 90 * (1 - supply) : 59;
+  ac.oilT += (eqT - ac.oilT) * Math.min(1, dt / (ac.engineRunning ? 200 : 900));
+  ac.oilLowT = ac.engineRunning && ac.oilP < 10 ? ac.oilLowT + dt : 0;
+  if (ac.oilLowT > 40) ac.systems.engine = false;              // seized
 }
 
 // Piston start/electrical state machine. Only meaningful for p.startup aircraft;
@@ -160,6 +186,7 @@ export function updateEngineSystems(ac, dt, env = null, throttle = 0) {
       ac.avionics = ac.batteryCharge > 0.1;
     } else ac.avionics = true;
     if (ac.breakers && ac.breakers.avn === false) ac.avionics = false;   // breaker pulled
+    updateOil(ac, dt, throttle);
     return;
   }
   const s = ac.sys;
@@ -196,6 +223,7 @@ export function updateEngineSystems(ac, dt, env = null, throttle = 0) {
   // Instruments have power from the battery (while charged) or the running alternator.
   ac.avionics = s.battery && (ac.batteryCharge > 0.1 || (ac.engineRunning && ac.systems.electrical !== false));
   if (ac.breakers && ac.breakers.avn === false) ac.avionics = false;   // breaker pulled
+  updateOil(ac, dt, throttle);
 }
 
 // controls: { elevator -1..1 (+=nose up), aileron -1..1 (+=roll right),

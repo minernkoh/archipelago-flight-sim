@@ -1609,6 +1609,29 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   { const ac = mk('c172'); const c = cs(); (await import('../src/physics/flightModel.js')).failSystem(ac, 'vacuum');
     fly(ac, c, 180, () => { ac.q = { x: 0, y: 0, z: 0, w: 1 }; ac.omega = { x: 0, y: 0, z: 0 }; ac.vel = { x: 55, y: 0, z: 0 }; ac.pos.y = 1000; });
     check('failure: vacuum pump failure lets the attitude gyro drift (>20 deg in 3 min)', Math.abs(ac.gyro.roll) * 57.3 > 20 && Math.abs(attitude(ac).roll) < 0.01, `gyro roll ${(ac.gyro.roll * 57.3).toFixed(0)} deg`); }
+  // oil: warm-up and cruise readings; a leak drains the sump and seizes the engine
+  { const { failSystem } = await import('../src/physics/flightModel.js');
+    const ac = mk('c172'); const c = cs({ throttle: 0.65 });
+    const pin = () => { ac.q = { x: 0, y: 0, z: 0, w: 1 }; ac.omega = { x: 0, y: 0, z: 0 }; ac.vel = { x: 55, y: 0, z: 0 }; ac.pos.y = 1000; };
+    ac.oilT = 59; ac.oilP = 0;                                   // just started from cold
+    fly(ac, c, 3, pin); const cold = { p: ac.oilP, t: ac.oilT };
+    fly(ac, c, 900, pin); const warm = { p: ac.oilP, t: ac.oilT };
+    check('oil: cold oil reads high pressure; warm cruise 60-90 psi at 150-245 F, no OIL light',
+      cold.p > warm.p + 5 && warm.p > 60 && warm.p < 90 && warm.t > 150 && warm.t < 245 && !annunciators(ac).includes('OIL'),
+      `cold ${cold.p.toFixed(0)} psi ${cold.t.toFixed(0)} F -> warm ${warm.p.toFixed(0)} psi ${warm.t.toFixed(0)} F`);
+    failSystem(ac, 'oil');
+    let lightAt = null, seizedAt = null, hottest = 0;
+    for (let t = 1; t <= 480 && seizedAt === null; t++) {
+      fly(ac, c, 1, pin); hottest = Math.max(hottest, ac.oilT);
+      if (lightAt === null && annunciators(ac).includes('OIL')) lightAt = t;
+      if (!ac.engineRunning) seizedAt = t;
+    }
+    check('oil: a leak is silent at first; OIL lights as the pressure goes, the oil heats and the engine seizes (~4-5 min)',
+      lightAt !== null && lightAt > 120 && seizedAt !== null && seizedAt > lightAt && seizedAt > 180 && seizedAt < 360 && hottest > warm.t + 15,
+      `OIL light at ${lightAt} s, seized at ${seizedAt} s, oil peaked ${hottest.toFixed(0)} F`); }
+  { const ac = mk('c172'); const { setColdStart } = await import('../src/physics/flightModel.js'); setColdStart(ac);
+    check('oil: cold and dark: no pressure, oil at ambient', ac.oilP === 0 && ac.oilT === 59);
+    check('failure pool: an oil leak only on piston aircraft', failurePool(AIRCRAFT.c172).includes('oil') && !failurePool(AIRCRAFT.heavy).includes('oil')); }
   // electrical (jet without a start sequence): battery carries ~7 min, then the AP drops out
   { const ac = mk('heavy', 125); const c = cs({ throttle: 0.55 }); const ap = createAutopilot();
     const ctl = { state: c, axisActive: () => false }; step(ac, c, env, 1 / 120); ap.toggleMaster(ac, ctl); ap.toggleIas(ac, ctl); ap.sel.ias = 125;

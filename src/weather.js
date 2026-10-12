@@ -88,6 +88,137 @@ function deckMaterial(top) {
   }));
 }
 
+// ------------------------------------------------------- volumetric deck --
+// Full detail (v12): the overcast as a real volume. A camera-following box
+// stands in for an infinite slab (deck base - 140 m .. top + 160 m); the
+// shader intersects the ray with the slab analytically and marches the shared
+// 3D cloud noise through it. The density is a vertical envelope plus noise,
+// so the core of the layer is solid while its base hangs down in ragged scud
+// and its top boils up in turrets. Light: Beer-Lambert toward the sun with
+// forward scattering on top, ambient from grey underside to white top, and
+// the lightning flash. Front faces from outside, back faces when the camera
+// is inside the layer (same scheme as volclouds.js).
+const SLAB_LO = 140, SLAB_HI = 160;
+function deckVolumeMaterial(noise3) {
+  return displayMatch(new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, depthTest: true, fog: false, side: THREE.FrontSide,
+    uniforms: {
+      noise3: { value: noise3 }, base: { value: 500 }, cover: { value: 1 }, time: { value: 0 },
+      lo: { value: new THREE.Color() }, hi: { value: new THREE.Color() }, sunDir: { value: new THREE.Vector3(0, 1, 0) },
+      fogColor: { value: new THREE.Color() }, fogNear: { value: 500 }, fogFar: { value: 3000 }, flash: { value: 0 }, sun: { value: 1 },
+    },
+    vertexShader: `
+      varying vec3 vW;
+      void main(){ vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+    fragmentShader: `
+      precision highp sampler3D;
+      uniform sampler3D noise3; uniform float base, cover, time, fogNear, fogFar, flash, sun;
+      uniform vec3 lo, hi, sunDir, fogColor;
+      varying vec3 vW;
+      const float THICK = ${DECK_THICK}.0, Y0OFF = ${SLAB_LO}.0, Y1OFF = ${SLAB_HI}.0;
+      float hash(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+      // base and top are noise heightfields over the layer (ragged scud below,
+      // turrets above); the detail noise erodes the edges
+      float farK = 1.0;                     // 1 near .. 0 far: calms detail with distance
+      vec2 layer(vec3 q){
+        float a = texture(noise3, vec3(q.x, 37.0, q.z) / 2100.0).r, b = texture(noise3, vec3(q.x, 811.0, q.z) / 700.0).r;
+        float hb = 0.12 + 0.2 * (a * 0.6 + b * 0.4);                     // base (fraction of the slab)
+        float ht = 0.52 + 0.44 * smoothstep(0.2, 0.95, a * 0.62 + b * 0.38 * farK) * (0.55 + 0.45 * cover);
+        return vec2(hb, ht);
+      }
+      float dens(vec3 p, bool detail){
+        float y0 = base - Y0OFF, y1 = base + THICK + Y1OFF;
+        float hf = (p.y - y0) / (y1 - y0);
+        if (hf < 0.0 || hf > 1.0) return 0.0;
+        vec3 q = p + vec3(time * 3.0, 0.0, time * 1.2);
+        vec2 L = layer(q);
+        float n = texture(noise3, q / 380.0).r;
+        float d = smoothstep(L.x - 0.08, L.x + 0.06, hf) * (1.0 - smoothstep(L.y - 0.12, L.y, hf));
+        d = d * (0.7 + 0.5 * cover) - (1.0 - n) * 0.45;
+        if (detail && d > -0.1 && d < 0.45) d -= (1.0 - texture(noise3, q / 120.0).r) * 0.2 * farK;
+        return clamp(d * 2.6, 0.0, 1.0);
+      }
+      void main(){
+        vec3 ro = cameraPosition, rd = normalize(vW - ro);
+        float y0 = base - Y0OFF, y1 = base + THICK + Y1OFF;
+        float t0, t1;
+        if (abs(rd.y) < 1e-4) {
+          if (ro.y < y0 || ro.y > y1) discard;
+          t0 = 0.0; t1 = 14000.0;
+        } else {
+          float ta = (y0 - ro.y) / rd.y, tb = (y1 - ro.y) / rd.y;
+          t0 = max(min(ta, tb), 0.0); t1 = min(max(ta, tb), 14000.0);
+        }
+        if (t1 <= t0) discard;
+        const int STEPS = 48;
+        float dt = clamp((t1 - t0) / 24.0, 8.0, 260.0);
+        bool fine = false;
+        float t = t0 + dt * hash(gl_FragCoord.xy);
+        farK = 1.0 - smoothstep(2500.0, 8000.0, t0);
+        float T = 1.0, tHit = -1.0; vec3 acc = vec3(0.0), lastL = vec3(0.0);
+        float mu = dot(rd, sunDir);
+        float g = 0.5, hg = (1.0 - g * g) / pow(1.0 + g * g - 2.0 * g * mu, 1.5) / 12.566;
+        float phase = 0.55 + 6.0 * hg;
+        float sigma = 0.02;
+        for (int i = 0; i < STEPS; i++) {
+          if (t > t1) break;
+          vec3 p = ro + rd * t;
+          float d = dens(p, true);
+          if (d > 0.004 && !fine && dt > 12.0) {
+            // first contact on a coarse step: back up and march the surface
+            // finely, so long steps never slice it into stripes
+            fine = true; t -= dt; dt = clamp(dt * 0.22, 6.0, 18.0); t += dt; farK = 1.0 - smoothstep(2500.0, 8000.0, t); continue;
+          }
+          if (d > 0.004) {
+            if (tHit < 0.0) tHit = t;
+            float ld = 0.0;
+            for (int j = 1; j <= 3; j++) ld += dens(p + sunDir * 45.0 * float(j), false);
+            // the march sees the turrets; the rest of the layer above (to its
+            // mean top) is added analytically, so the base is never sunlit
+            vec2 Lh = layer(p + vec3(time * 3.0, 0.0, time * 1.2));
+            float topY = y0 + (y1 - y0) * Lh.y;
+            float column = max(0.0, topY - p.y - 135.0) / max(sunDir.y, 0.12);
+            float beer = exp(-ld * 45.0 * sigma * 0.9 - column * sigma * 0.55) * smoothstep(-0.05, 0.25, sunDir.y);
+            float hf = clamp((p.y - y0) / (y1 - y0), 0.0, 1.0);
+            // ambient: grey underside, brighter toward the tops, darker in the folds
+            float occl = smoothstep(Lh.x, Lh.y, hf);
+            vec3 amb = mix(lo, hi * 0.78, occl * occl);
+            vec3 L = amb * (0.85 + 0.2 * (1.0 - exp(-d * 3.0))) + hi * beer * phase * 0.62 * sun + vec3(0.7, 0.75, 0.9) * flash;
+            float a = 1.0 - exp(-d * sigma * dt);
+            acc += T * L * a;
+            T *= 1.0 - a;
+            lastL = L;
+            if (T < 0.02) break;
+          }
+          t += dt;
+        }
+        // out of steps while still inside the layer and in cloud: the rest of
+        // this (grazing) path is cloud too, so close it rather than let the
+        // sky show through between the turrets
+        if (tHit > 0.0 && T >= 0.02 && t < t1 - 1.0) { acc += T * lastL; T = 0.0; }
+        // fog by the first hit up close, by the (smooth) layer entry far away,
+        // where the hit distance jumps from turret to turret pixel by pixel
+        float fogT = tHit < 0.0 ? t0 : min(tHit, t0 + 1200.0);
+        float f = smoothstep(fogNear, fogFar, fogT);
+        // far away the layer is a solid grey ceiling (and the step jitter would
+        // otherwise show as grain where the steps are long)
+        // and beyond ~4 km it reads as a closed layer from either side
+        float solid = max(smoothstep(0.35, 0.9, f), smoothstep(4000.0, 9000.0, t0)) * step(0.5, cover);
+        // a closed layer has a solid core: any ray from above going down (or
+        // from below going up) that slipped between the turrets within the
+        // march would still meet it further on
+        if (cover >= 0.5 && ((ro.y > y1 && rd.y < 0.0) || (ro.y < y0 && rd.y > 0.0))) solid = 1.0;
+        vec3 far = ro.y > y1 ? hi * 0.9 : lo;
+        float hitA = 1.0 - T;
+        float alpha = max(hitA, solid);
+        if (alpha < 0.004) discard;
+        vec3 c = hitA > 0.004 ? mix(far, acc / hitA, hitA / alpha) : far;
+        c = mix(c, fogColor, f);
+        gl_FragColor = vec4(c, alpha);
+      }`,
+  }));
+}
+
 // ------------------------------------------------------------------ rain --
 const RAIN_N = 5000, RAIN_BOX = 46;
 function buildRain() {
@@ -241,6 +372,17 @@ export function createWeatherFX(scene, env, audio, windAt) {
     d.visible = false;
     scene.add(d);
   }
+  // full-detail volume (built on first use; the surfaces above stay the lite path)
+  let deckVol = null, volOn = false;
+  function ensureVol() {
+    if (deckVol) return deckVol;
+    deckVol = new THREE.Mesh(new THREE.BoxGeometry(40000, 1, 40000), deckVolumeMaterial(cloudNoiseTexture()));   // wide: grazing rays enter the layer far out
+    deckVol.frustumCulled = false;
+    deckVol.renderOrder = 1;
+    deckVol.visible = false;
+    scene.add(deckVol);
+    return deckVol;
+  }
   const rain = buildRain();
   rain.visible = false;
   scene.add(rain);
@@ -267,7 +409,8 @@ export function createWeatherFX(scene, env, audio, windAt) {
     groundRef = map ? map.runway.y : 0;
     deckY = groundRef + preset.deck;
     const on = preset.overcast > 0;
-    deckBottom.visible = deckTop.visible = on;
+    deckBottom.visible = deckTop.visible = on && !volOn;
+    if (deckVol) deckVol.visible = on && volOn;
     deckBottom.material.uniforms.base.value = deckTop.material.uniforms.base.value = deckY;
     rain.visible = preset.rain > 0;
     rain.material.uniforms.amount.value = preset.rain;
@@ -286,8 +429,16 @@ export function createWeatherFX(scene, env, audio, windAt) {
         if (on && !d.material.uniforms.noise3.value) d.material.uniforms.noise3.value = cloudNoiseTexture();
         d.material.uniforms.vol.value = on ? 1 : 0;
       }
+      // full detail: the raymarched volume replaces the two surfaces
+      volOn = on;
+      if (on) ensureVol();
+      const deckShown = preset.overcast > 0;
+      deckBottom.visible = deckTop.visible = deckShown && !volOn;
+      if (deckVol) deckVol.visible = deckShown && volOn;
     },
     get volumetricDeck() { return deckTop.material.uniforms.vol.value > 0.5; },
+    /** True when the overcast is drawn as the raymarched volume (full detail). */
+    get deckVolume() { return !!(deckVol && deckVol.visible); },
     get preset() { return presetId; },
     get deckBase() { return preset.overcast > 0 ? deckY : null; },
     get strikes() { return strikes; },
@@ -367,6 +518,21 @@ export function createWeatherFX(scene, env, audio, windAt) {
       deckBottom.material.uniforms.col.value.copy(deckCol);
       deckTop.material.uniforms.col.value.copy(topCol);
       deckTop.material.uniforms.sunDir.value.copy(env.sunDirection());
+      if (deckVol && deckVol.visible) {
+        const y0 = deckY - SLAB_LO, y1 = deckY + DECK_THICK + SLAB_HI;
+        deckVol.position.set(sx, (y0 + y1) / 2, sz);
+        deckVol.scale.set(1, y1 - y0, 1);
+        // inside the layer the box's front faces are behind us: draw the back ones
+        const inside = cam.y > y0 && cam.y < y1;
+        deckVol.material.side = inside ? THREE.BackSide : THREE.FrontSide;
+        const u = deckVol.material.uniforms;
+        u.base.value = deckY; u.cover.value = preset.overcast; u.time.value = elapsed; u.flash.value = flash;
+        u.lo.value.copy(deckCol); u.hi.value.copy(topCol); u.sunDir.value.copy(env.sunDirection());
+        u.sun.value = night ? 0.15 : 1;
+        u.fogColor.value.copy(env.screenFog);
+        u.fogNear.value = scene.fog.near;
+        u.fogFar.value = inCloud > 0.3 ? scene.fog.far : Math.max(scene.fog.far, 600) * 2;
+      }
 
       // ---- rain (below and inside the deck only)
       const rainK = preset.rain * (1 - above);

@@ -253,8 +253,13 @@ export function drawSteamPanel(x, W, H, ac, hud, ui = null) {
   // engine cluster
   const ex = gx + dx * 3 + r * 0.4;
   smallGauge(x, ex, gy, r * 0.62, v.rpm, `${Math.round(700 + 2000 * v.rpm)}`, 0.95);
-  smallGauge(x, ex, gy + dy * 0.55, r * 0.5, 0.7, 'OIL', 0.9);
-  smallGauge(x, ex, gy + dy, r * 0.5, 0.62, 'FUEL', 0.98);
+  // live engine gauges: oil pressure (psi, red line 100) with the temperature
+  // under it, and fuel quantity
+  const oilP = num(ac.oilP, 0), oilT = num(ac.oilT, 59);
+  smallGauge(x, ex, gy + dy * 0.55, r * 0.5, oilP / 115, `OIL ${Math.round(oilP)}`, 100 / 115);
+  label(x, ex, gy + dy * 0.55 + r * 0.32, `${Math.round(oilT)}\u00b0F`, r * 0.16);
+  const cap = num(ac.p?.fuel?.capacityKg, 1) || 1;
+  smallGauge(x, ex, gy + dy, r * 0.5, num(ac.fuelKg, 0) / cap * 0.97, 'FUEL', 0.98);
   // radio stack: COM + NAV, then the autopilot (KAP 140 style) when clickable
   const rx = ex + r * 1.0, rw = W - rx - W * 0.03;
   const radios = ui ? 2 : 3;
@@ -415,7 +420,7 @@ function eicas(x, X, Y, S, v) {
     x.fillText('N1', cx, cy - r * 1.25);
   }
   x.fillStyle = '#34ff6a'; x.font = `${S * 0.035}px "B612 Mono", monospace`; x.textAlign = 'left';
-  ['FUEL  42.6', `G  ${v.g.toFixed(1)}`, 'OIL  OK', 'HYD  3000'].forEach((t, i) => x.fillText(t, X + S * 0.12, Y + S * (0.62 + i * 0.08)));
+  [`FUEL  ${(num(ac.fuelKg, 0) * 2.2046 / 1000).toFixed(1)}`, `G  ${v.g.toFixed(1)}`, 'OIL  OK', `HYD  ${ac.systems?.hydraulics === false ? '0' : '3000'}`].forEach((t, i) => x.fillText(t, X + S * 0.12, Y + S * (0.62 + i * 0.08)));
   x.restore();
 }
 

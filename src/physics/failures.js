@@ -23,6 +23,7 @@ export const FAILURES = {
   flaps:      { label: 'FLAP DRIVE FAILURE', ann: null, kind: 'silent' },
   pitot:      { label: 'PITOT BLOCKED', ann: null, kind: 'silent' },
   static:     { label: 'STATIC PORT BLOCKED', ann: null, kind: 'silent' },
+  oil:        { label: 'OIL LEAK', ann: null, kind: 'silent', pistonOnly: true },   // OIL lights only when the pressure actually drops (annunciators)
 };
 
 /** Failures that make sense for this aircraft. */
@@ -32,6 +33,7 @@ export function failurePool(p) {
     const f = FAILURES[id];
     if (f.steamOnly && jet) return false;
     if (f.jetOnly && !jet) return false;
+    if (f.pistonOnly && p.engine?.type !== 'prop') return false;
     if (id === 'flaps' && !(p.flapCL > 0)) return false;
     return true;
   });
@@ -91,5 +93,8 @@ export function annunciators(ac) {
     if (f.ann && ac.systems?.[id] === false && !out.includes(f.ann)) out.push(f.ann);
   }
   if (ac.systems?.electrical === false && ac.avionics === false && !out.includes('VOLTS')) out.push('VOLTS');
+  // low oil pressure lights with the engine running, whatever the cause (it
+  // also glows for a moment after every start, as in the aeroplane)
+  if (ac.engineRunning && ac.oilP != null && ac.oilP < 20 && !out.includes('OIL')) out.push('OIL');
   return out;
 }

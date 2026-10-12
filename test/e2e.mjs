@@ -1018,11 +1018,15 @@ await page.evaluate(() => {
 await settle(4000);
 check('full detail: the water reflection pass runs', await sim('__sim.env.reflecting'));
 check('full detail: clouds are raymarched volumes', await sim('__sim.env.volumetricClouds'));
-check('full detail: the overcast deck gets volumetric shading', await sim('__sim.weatherFx.volumetricDeck'));
+// the sky half of STORM on its own (no map reload): the deck must be the volume
+const deckVol = await sim(`(() => { const w = __sim.weatherFx, was = w.preset; w.set('storm');
+  const r = { base: w.deckBase, vol: w.deckVolume, shaded: w.volumetricDeck }; w.set(was); r.back = w.deckVolume; return r; })()`);
+check('full detail: the overcast deck is a raymarched volume',
+  deckVol.base != null && deckVol.vol === true && deckVol.shaded === true && deckVol.back === false, JSON.stringify(deckVol));
 await shot('13-reflection');
 await page.evaluate(() => window.__sim.world.forceDetail(0));
 check('lite detail: clouds fall back to billboards', (await sim('__sim.env.volumetricClouds')) === false);
-check('lite detail: plain overcast deck', (await sim('__sim.weatherFx.volumetricDeck')) === false);
+check('lite detail: plain overcast deck', (await sim('__sim.weatherFx.volumetricDeck')) === false && (await sim('__sim.weatherFx.deckVolume')) === false);
 await page.evaluate(() => window.__sim.game.toMenu());
 await settle(300);
 
