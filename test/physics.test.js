@@ -1835,6 +1835,22 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
       `${offLine} samples off the 02C centreline, phases ${[...seen].join(',')}`);
     check('Singapore offers 02C to the AI traffic', sg.singaporeMap.extraRunways?.()[0]?.runway === r2);
   }
+  { // the tower sequencing the club traffic around the player (createSequencer)
+    const { createSequencer } = await import('../src/aitraffic.js');
+    const sq = createSequencer(ai, period / 2);
+    let prev = [], jump = 0, landedBusy = 0, minSep = 1e9; const ev = [];
+    for (let t = 0; t < 2000; t += 0.1) {
+      const busy = t > 100 && t < 500 ? 'runway' : false;
+      ev.push(...sq.step(0.1, t, busy));
+      const ps = [0, 1].map(i => sq.pose(i, t));
+      ps.forEach((p, i) => { if (busy && p.onRunway) landedBusy++; if (prev[i] && Math.hypot(p.x - prev[i].x, p.y - prev[i].y, p.z - prev[i].z) > 6) jump++; prev[i] = p; });
+      if (t > 600) minSep = Math.min(minSep, Math.hypot(ps[0].x - ps[1].x, ps[0].y - ps[1].y, ps[0].z - ps[1].z));
+    }
+    check('sequencing: while you hold the runway, club traffic orbits on downwind or goes around, never lands',
+      landedBusy === 0 && ev.some(e => e.kind === 'orbit') && ev.every(e => e.who && e.why), `${landedBusy} landings while busy, ${ev.length} instructions`);
+    check('sequencing: orbits are flown continuously (no jumps), and the two keep their spacing afterwards',
+      jump === 0 && Math.abs(sq.delays[0] - sq.delays[1]) < sq.T * 0.6 && minSep > 500, `${jump} jumps, delays ${sq.delays.map(d => d.toFixed(0))}, min separation ${minSep.toFixed(0)} m`);
+  }
   check('clock positions', clockOf(0, 100, 0) === 12 && clockOf(0, 0, 100) === 3 && clockOf(0, -100, 0) === 6 && clockOf(0, 0, -100) === 9);
 
   const said = [];
@@ -1885,6 +1901,9 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   const pr = tower();
   pr.update({ onGround: true, agl: 0, cross: 0, ai: aiAt({ phase: 'runway', onRunway: true, toAim: -100, y: 5, otherRunway: true, type: 'Heavy jet', heavy: true }) }, 0);
   check('ATC: an airliner on the parallel runway never holds you short', said[0]?.id === 'clearance', said.map(x => x.id).join(','));
+  const ac2 = tower();
+  ac2.update({ onGround: true, agl: 0, cross: 0, aiCalls: [{ kind: 'orbit', who: 'Cessna two', why: 'runway occupied' }] }, 0);
+  check('ATC: the tower is heard working the AI traffic ("make left three-sixty")', said.some(x => x.id === 'aiOrbit' && /Cessna two, make left three-sixty, runway occupied/.test(x.t)), said.map(x => x.t).join(' | '));
   const em = tower();
   em.update({ onGround: false, agl: 800, cross: 0 }, 0);
   em.update({ onGround: false, agl: 600, vsFpm: 0, cross: 3000, squawk: 7700 }, 5);

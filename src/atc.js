@@ -51,6 +51,9 @@ export const PHRASES = {
   sequence:  (c) => `${c.callsign}, number two, follow the ${c.traffic} on final${c.wake ? ', caution wake turbulence' : ''}.`,
   trafficInfo: (c) => `${c.callsign}, traffic, ${c.clock} o'clock, ${c.miles} ${c.miles === 'one' ? 'mile' : 'miles'}, ${c.rel}, ${c.traffic}${c.wake ? ' on final' : ' in the pattern'}.`,
   goAroundTraffic: (c) => `${c.callsign}, go around, traffic on the runway. Climb runway heading.`,
+  // the tower working the circuit traffic around you (heard on frequency)
+  aiOrbit: (c) => `${c.who}, make left three-sixty, ${c.why}.`,
+  aiGoAround: (c) => `${c.who}, go around, ${c.why}.`,
   emergency: (c) => `${c.callsign}, ${c.field} tower, roger your emergency squawk. All runways available, wind calm, runway ${c.rwy}, cleared to land.`,
 };
 const NUM = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
@@ -117,6 +120,7 @@ export function createAtc({ field, rwyName, callsign, say } = {}) {
   let sinceCall = LIMITS.minGapSec;   // allow the very first call immediately
   let armed = true;
   let sinceTraffic = 1e9, sequenced = false, emergencyAck = false;
+  const aiQueue = [];
 
   function emit(id, extra) {
     const text = buildPhrase(id, extra ? { ...ctx, ...extra } : ctx);
@@ -129,7 +133,7 @@ export function createAtc({ field, rwyName, callsign, say } = {}) {
     get phase() { return phase; },
     get context() { return { ...ctx }; },
     // Called on a fresh flight: back to holding short.
-    reset() { phase = 'hold'; sinceCall = LIMITS.minGapSec; armed = true; sinceTraffic = 1e9; sequenced = false; emergencyAck = false; },
+    reset() { phase = 'hold'; sinceCall = LIMITS.minGapSec; armed = true; sinceTraffic = 1e9; sequenced = false; emergencyAck = false; aiQueue.length = 0; },
     // ATC off (settings) or a lesson in progress: go quiet without losing phase.
     setArmed(on) { armed = !!on; },
 
@@ -137,7 +141,13 @@ export function createAtc({ field, rwyName, callsign, say } = {}) {
       sinceCall += dt;
       sinceTraffic += dt;
       if (!armed || !snap) return null;
+      if (snap.aiCalls && snap.aiCalls.length) { aiQueue.push(...snap.aiCalls); if (aiQueue.length > 3) aiQueue.splice(0, aiQueue.length - 3); }
       if (sinceCall < LIMITS.minGapSec) return null;
+      // instructions to the AI traffic go out between our own calls
+      if (aiQueue.length && snap.squawk !== 7700) {
+        const e = aiQueue.shift();
+        return emit(e.kind === 'orbit' ? 'aiOrbit' : 'aiGoAround', { who: e.who, why: e.why });
+      }
 
       const { onGround, agl = 0, vsFpm = 0, cross = 0, touchdown = null, groundSpeedKt = 0 } = snap;
       // squawk 7700: the tower clears the way at once (once per squawk)

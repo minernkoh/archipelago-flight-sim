@@ -409,6 +409,8 @@ const world = {
   get resScale() { return resScale; },
   get detail() { return GROUND_DETAIL.value; },
   /** The AI circuit aircraft (aitraffic.js) as the tower sees it, or null. */
+  /** The tower's instructions to the AI traffic since the last call (modes.js passes them to atc.js). */
+  aiEvents() { return traffic?.drainEvents?.() ?? []; },
   aiTraffic(pos = ac.pos) {
     // the aircraft that matters to the tower: one on the runway or short final
     // first, otherwise the nearest
@@ -749,7 +751,8 @@ function frame(now) {
   env.update(view, dt, elapsed, camera.position, camera);
   // the circuit traffic steps away from you; the intruder of a TCAS RA flies the complementary sense
   traffic.update(dt, camera.position, elapsed, isFlying ? ac.pos : null,
-    tcasState?.level === 'RA' ? { id: tcasState.targets.find(x => x.level === 'RA')?.id, sense: tcasState.sense } : null);
+    tcasState?.level === 'RA' ? { id: tcasState.targets.find(x => x.level === 'RA')?.id, sense: tcasState.sense } : null,
+    isFlying ? { vel: ac.vel, onGround: ac.onGround } : null);
   updateTcas(isFlying && !replaying);
   camRig.setInput(isFlying);
   if (game.state === 'menu') camRig.updateMenu(ac, dt);

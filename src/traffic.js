@@ -11,7 +11,7 @@
 // allocation and no Math.random.
 
 import * as THREE from 'three';
-import { createCircuitTraffic, slotStraightIn } from './aitraffic.js';
+import { createCircuitTraffic, slotStraightIn, createSequencer } from './aitraffic.js';
 import { planGround } from './taxinet.js';
 import { MESH_BUILDERS } from './aircraft/meshes.js';
 import { loft, surface, mergeGeos, PROFILE } from './aircraft/modelkit.js';
@@ -324,6 +324,21 @@ export function createTraffic(scene, map, opts = {}) {
   }
   // the club aircraft go around if the airliner is still on the runway
   const ai = jet ? createCircuitTraffic(rwy, { occupied: (tt) => jet.occupies(tt) }) : aiNominal;
+  // the tower sequences the club traffic around YOU: 360s on downwind while
+  // you hold the runway or short final, go-arounds if it is already on base
+  const seq = ai ? createSequencer(ai, AI_SPACING) : null;
+  const towerEvents = [];
+  const rh = rwy ? rwy.headingRad : 0, rfx = Math.cos(rh), rfz = -Math.sin(rh), rrx = Math.sin(rh), rrz = Math.cos(rh);
+  const rAim = rwy ? (rwy.spawn.x * rfx + rwy.spawn.z * rfz) + 300 : 0;
+  function playerBusy(p) {
+    if (!p || !p.pos || !rwy) return false;
+    const u = p.pos.x * rfx + p.pos.z * rfz, v = p.pos.x * rrx + p.pos.z * rrz, h = p.pos.y - (rwy.y || 0);
+    const x0 = Number.isFinite(rwy.x0) ? rwy.x0 : rAim - 400, x1 = Number.isFinite(rwy.x1) ? rwy.x1 : rAim + 2500;
+    if (h < 15 && Math.abs(v) < (rwy.halfWidth || 20) + 15 && u > x0 - 30 && u < x1 + 30) return 'runway';
+    const along = p.vel ? p.vel.x * rfx + p.vel.z * rfz : 0;
+    if (!p.onGround && Math.abs(v) < 150 && rAim - u > -50 && rAim - u < 3500 && h < 350 && along > 10 && (p.vel?.y ?? 0) < 2) return 'final';
+    return false;
+  }
   const planeGeo = hasRunway ? clubPlaneGeometry() : null;
   const planeMat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.45, metalness: 0.05, envMapIntensity: 0.4 });
   const planeMeshes = [];
@@ -448,8 +463,13 @@ export function createTraffic(scene, map, opts = {}) {
   // descends), as two TCAS-equipped aircraft coordinate over their datalink
   let coordRa = null;
   const raY = (id) => !coordRa || coordRa.id !== id ? null : coordRa.sense === 'CLIMB' ? -150 : 150;
-  function update(dt, camPos, t, playerPos = null, ra = null) {
+  function update(dt, camPos, t, playerPos = null, ra = null, player = null) {
     coordRa = ra;
+    if (seq && enabled) {
+      const ev = seq.step(dt, t, playerBusy(player && playerPos ? { pos: playerPos, vel: player.vel, onGround: player.onGround } : null));
+      if (ev.length) towerEvents.push(...ev);
+      if (towerEvents.length > 3) towerEvents.splice(0, towerEvents.length - 3);   // never queue stale calls
+    }
     if (!enabled) return;
     const ix = Math.floor(camPos.x / CELL), iz = Math.floor(camPos.z / CELL);
     refreshT += dt;
@@ -490,7 +510,7 @@ export function createTraffic(scene, map, opts = {}) {
         if (ai) {
           // both club aircraft fly the touch-and-go circuit, half a lap apart
           aiT = t;
-          const a = ai.at(t + i * AI_SPACING, -i * AI_SPACING);
+          const a = seq.pose(i, t);
           // collision avoidance: step up or down away from the player, or
           // the airliner, when close (within 600 m and 150 m vertically),
           // then rejoin
@@ -525,11 +545,14 @@ export function createTraffic(scene, map, opts = {}) {
     get enabled() { return enabled; },
     get counts() { return { boats: nBoats, flocks: nFlocks, planes: planeMeshes.length }; },
     /** The AI lander's state for the tower (null when traffic is off or there is no runway). */
-    aiState(t = aiT) { return enabled && ai ? ai.at(t) : null; },
+    aiState(t = aiT) { return enabled && seq ? seq.pose(0, t) : null; },
+    /** Tower instructions to the club traffic since the last call ([{ who, kind, why }]). */
+    drainEvents() { return towerEvents.splice(0); },
+    get sequencer() { return seq; },
     /** Both circuit aircraft (copies), for the tower to pick the one that matters. */
     aiStates(t = aiT) {
       if (!enabled || !ai) return [];
-      const list = [0, 1].map(i => { const o = Object.assign(aiOut[i], ai.at(t + i * AI_SPACING, -i * AI_SPACING), { id: i }); o.y += avoidY[i]; o.avoidDy = avoidY[i]; o.avoiding = Math.abs(avoidY[i]) > 1; return o; });
+      const list = [0, 1].map(i => { const o = Object.assign(aiOut[i], seq.pose(i, t), { id: i }); o.y += avoidY[i]; o.avoidDy = avoidY[i]; o.avoiding = Math.abs(avoidY[i]) > 1; return o; });
       airliners.forEach((A, k) => {
         const j = A.traf.at(t);
         if (!j.visible) return;

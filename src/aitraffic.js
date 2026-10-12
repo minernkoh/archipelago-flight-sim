@@ -336,3 +336,89 @@ export function slotStraightIn(rwy, circuit, spacing, { ground = null, from = 0 
   }
   return Object.assign(createStraightInTraffic(rwy, { period: P2, ground: g }), { slotted: false });   // no gap: still fly it
 }
+
+/**
+ * Tower sequencing for the circuit traffic (v12): makes the club aircraft
+ * respond to the PLAYER. When you occupy the runway or short final as a club
+ * aircraft flies downwind, the tower gives it a left 360 for spacing: it
+ * orbits (radius `R`, entered and left tangentially, at downwind height) and
+ * rejoins where it left the circuit, its clock held back by the orbit's
+ * duration. Each club aircraft has its own delay, and `at(t, shift)` of the
+ * circuit gets the matching shift, so the go-around logic keeps working.
+ * Stateful (the orbit depends on what you did), but THREE-free and stepped
+ * explicitly, so the tests drive it directly.
+ *
+ * step(dt, t, playerBusy) -> events ([{ id, kind: 'orbit', who, why }])
+ * pose(i, t)               -> circuit pose of aircraft i (copy)
+ */
+export function createSequencer(circuit, spacing, { R = 500, names = ['Cessna one', 'Cessna two'] } = {}) {
+  const speed = circuit.speed, T = 2 * Math.PI * R / speed;     // seconds for one orbit
+  const S = [0, 1].map(() => ({ delay: 0, orbit: null, ga: null }));
+  // which way the circuit banks in its (left) turns, for the orbit's bank
+  let bankSign = 1;
+  for (let t = 0, best = 0; t < circuit.total / speed; t += 2) {
+    const a = circuit.at(t); if (a.phase === 'crosswind' && Math.abs(a.bank) > Math.abs(best)) { best = a.bank; bankSign = Math.sign(a.bank) || 1; }
+  }
+  const bank = bankSign * Math.atan(speed * speed / (9.81 * R));
+  const clock = (i, t) => t + i * spacing - S[i].delay;
+  const shift = (i) => -i * spacing + S[i].delay;
+  const copy = (a) => ({ ...a });
+  function pose(i, t) {
+    const s = S[i];
+    if (!s.orbit) {
+      const a = copy(circuit.at(clock(i, t), shift(i)));
+      if (s.ga) {
+        // tower go-around: climb from where it was, never below the path,
+        // up to circuit height (which the path itself reaches on downwind)
+        const d = Math.max(0, (clock(i, t) - s.ga.c0) * speed);
+        a.y = Math.max(a.y, Math.min(s.ga.top, s.ga.y0 + 0.09 * d));
+        a.phase = 'goAround'; a.onRunway = false; a.goAround = true;
+      }
+      return a;
+    }
+    const o = s.orbit, phi = Math.min(1, (t - o.t0) / T) * 2 * Math.PI;
+    const h = o.h + phi;                                      // turning left: heading grows
+    return { ...o.base, x: o.cx + R * Math.sin(h), z: o.cz + R * Math.cos(h), y: o.y, yaw: h, pitch: 0, bank,
+      phase: 'orbit', onRunway: false, goAround: false };
+  }
+  return {
+    T, get delays() { return S.map(s => s.delay); }, get orbiting() { return S.map(s => !!s.orbit); },
+    pose, shift, clock,
+    step(dt, t, playerBusy) {
+      const ev = [];
+      for (let i = 0; i < 2; i++) {
+        const s = S[i];
+        if (s.orbit) {
+          s.delay += dt;
+          if (t - s.orbit.t0 >= T) {
+            // leave exactly where it entered: hold the delay at the orbit's length
+            s.delay = s.orbit.delay0 + T; s.orbit = null;
+          }
+          continue;
+        }
+        const tc = clock(i, t), a = circuit.at(tc, shift(i));
+        if (s.ga && a.phase === 'downwind') s.ga = null;              // back in the circuit
+        if (s.ga) continue;
+        // the two club aircraft must keep their half-lap spacing: one that
+        // has orbited less than the other makes its own 360 on downwind
+        const catchUp = S[1 - i].delay - s.delay > T * 0.5 && !S[1 - i].orbit;
+        if (!playerBusy && !catchUp) continue;
+        const why = playerBusy === 'runway' ? 'runway occupied' : playerBusy ? 'traffic on final' : 'spacing on the traffic ahead';
+        if (!playerBusy && a.phase !== 'downwind') continue;
+        if (a.phase === 'base' || (a.phase === 'final' && !a.onRunway)) {
+          // too late for a 360: send it around
+          const y0 = a.y, rwyY = circuit.at(0).y;                 // at(0) is the touchdown point
+          s.ga = { c0: tc, y0, top: Math.max(y0, rwyY + 300) };    // back up to circuit height
+          ev.push({ id: i, kind: 'goAround', who: names[i], why });
+          continue;
+        }
+        if (a.phase !== 'downwind') continue;
+        // centre of a LEFT orbit: to the left of the current heading
+        const h = a.yaw, lx = -Math.sin(h), lz = -Math.cos(h);
+        s.orbit = { t0: t, delay0: s.delay, h, y: a.y, cx: a.x + R * lx, cz: a.z + R * lz, base: copy(a) };
+        ev.push({ id: i, kind: 'orbit', who: names[i], why });
+      }
+      return ev;
+    },
+  };
+}
