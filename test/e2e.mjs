@@ -890,6 +890,23 @@ if (avoid0) {
   const avoid1 = await sim(`(() => { const a = __sim.traffic.aiStates().find(x => x.id === ${avoid0.id}); return { avoiding: a.avoiding, y: Math.round(a.y) }; })()`);
   check('AI circuit traffic steps away from you vertically when you get close', avoid1.avoiding === true, JSON.stringify({ avoid0, avoid1 }));
 } else check('AI circuit traffic steps away from you vertically when you get close', false, 'no airborne club aircraft to test with');
+// v12 TCAS: an intruder 800 m dead ahead at our level is a traffic advisory
+// (the C172 carries a TAS: TA only); the HUD box shows and clears with it
+await page.evaluate(() => {
+  const s = window.__sim, ac = s.ac;
+  ac.pos = { x: ac.pos.x, y: s.map.runway.y + 900, z: ac.pos.z }; ac.vel = { x: 50, y: 0, z: 0 }; ac.onGround = false;
+  ac.q = { x: 0, y: 0, z: 0, w: 1 }; ac.omega = { x: 0, y: 0, z: 0 };
+  s.tcasInject([{ id: 99, x: ac.pos.x + 800, y: ac.pos.y, z: ac.pos.z }]);
+});
+await simSettle(1500);
+const tcasOn = await sim('({ level: __sim.tcas?.level, sense: __sim.tcas?.sense, hud: document.querySelector("#tcas").textContent, shown: document.querySelector("#tcas").classList.contains("show"), nd: (__sim.tcas?.targets || []).map(t => t.level) })');
+await page.evaluate(() => window.__sim.tcasInject([]));
+await simSettle(800);
+const tcasOff = await sim('({ level: __sim.tcas?.level ?? null, shown: document.querySelector("#tcas").classList.contains("show") })');
+await page.evaluate(() => window.__sim.tcasInject(null));
+check('TCAS: close traffic gives a TA on the HUD (no RA in a light aircraft), and it clears',
+  tcasOn.level === 'TA' && tcasOn.sense === null && tcasOn.hud === 'TRAFFIC' && tcasOn.shown && tcasOff.level === null && !tcasOff.shown,
+  JSON.stringify({ tcasOn, tcasOff }));
 
 // A lesson must leave the frequency to the instructor.
 await page.evaluate(() => window.__sim.game.toMenu());

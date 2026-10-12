@@ -162,6 +162,12 @@
   #split.behind { color: var(--amber); }
 
   /* autopilot annunciator + CDI (Phase H) */
+  /* TCAS: amber TRAFFIC box for a TA, red CLIMB / DESCEND for an RA */
+  #tcas { display: none; position: absolute; left: 50%; top: 24%; transform: translateX(-50%);
+    font: 700 clamp(14px, 1.6vw, 22px)/1 "B612", sans-serif; letter-spacing: .14em; padding: .35em .8em;
+    border: 2px solid var(--amber); color: var(--amber); background: rgba(10, 12, 14, .55); }
+  #tcas.show { display: block; }
+  #tcas.ra { border-color: var(--warn); background: var(--warn); color: #fff; }
   #ap-status { position: absolute; left: max(2vw, 1rem); top: max(1.5vh, .6rem);
           display: flex; align-items: center; gap: .4rem; font-family: "B612 Mono", monospace;
           font-size: .72rem; letter-spacing: .12em; background: var(--panel);
@@ -480,6 +486,7 @@
       </div>
     </div>
   </div>
+  <div id="tcas" aria-live="assertive"></div>
   <div id="ap-status">
     <span class="ap-hdr">AP</span>
     <span class="ap-mode" id="apm-hdg">HDG</span>

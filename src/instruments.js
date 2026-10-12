@@ -383,6 +383,35 @@ function nd(x, X, Y, S, v, radio = null) {
     if (!(d % 30)) { x.save(); x.rotate(d * D2R); x.fillText(String(d / 10), 0, -R * 0.84); x.restore(); }
   }
   x.restore();
+  // TCAS targets (tcas.js), 10 nm to the compass ring: hollow diamond = other
+  // traffic, filled = proximate, amber circle = TA, red square = RA, with the
+  // relative altitude in hundreds of feet (above or below) and a trend arrow
+  const tg = radio?.tcas;
+  if (tg && tg.length) {
+    x.save(); x.beginPath(); x.rect(X, Y, S, S); x.clip();
+    x.font = `bold ${S * 0.032}px "B612 Mono", monospace`; x.textAlign = 'center';
+    const z = S * 0.018;
+    for (const t of tg) {
+      const d = Math.min(1.15, t.range / 18520) * R;
+      const px = cx + Math.sin(t.rel) * d, py = cy - Math.cos(t.rel) * d;
+      const col = t.level === 'RA' ? '#ff3b30' : t.level === 'TA' ? '#ffb300' : '#e8edf2';
+      x.fillStyle = col; x.strokeStyle = col; x.lineWidth = 2;
+      x.beginPath();
+      if (t.level === 'RA') x.rect(px - z, py - z, 2 * z, 2 * z);
+      else if (t.level === 'TA') x.arc(px, py, z, 0, Math.PI * 2);
+      else { x.moveTo(px, py - z * 1.2); x.lineTo(px + z, py); x.lineTo(px, py + z * 1.2); x.lineTo(px - z, py); x.closePath(); }
+      if (t.level === 'OT') x.stroke(); else x.fill();
+      const h = Math.round(t.relAltFt / 100), above = h >= 0;
+      x.textBaseline = above ? 'bottom' : 'top';
+      x.fillText(`${above ? '+' : '-'}${String(Math.abs(h)).padStart(2, '0')}`, px, above ? py - z * 1.4 : py + z * 1.4);
+      if (t.trend) {
+        const ax = px + z * 1.9;
+        x.beginPath(); x.moveTo(ax, py - z); x.lineTo(ax, py + z); x.stroke();
+        x.beginPath(); x.moveTo(ax - z * 0.5, py - t.trend * z * 0.4); x.lineTo(ax, py - t.trend * z); x.lineTo(ax + z * 0.5, py - t.trend * z * 0.4); x.stroke();
+      }
+    }
+    x.restore();
+  }
   x.fillStyle = '#ffd400';
   x.beginPath(); x.moveTo(cx, cy - S * 0.03); x.lineTo(cx - S * 0.025, cy + S * 0.04); x.lineTo(cx + S * 0.025, cy + S * 0.04); x.fill();
   x.fillStyle = '#ff5fd2'; x.font = `${S * 0.035}px "B612 Mono", monospace`; x.textAlign = 'left';

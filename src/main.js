@@ -34,6 +34,8 @@ import { createPost } from './post.js';
 import { createMinimap } from './minimap.js';
 import { createPanel } from './panel.js';
 import { createAutopilot } from './autopilot.js';
+import { createTcas, tcasCallout } from './tcas.js';
+import { createVoice } from './atc.js';
 import { buildGauntletCourse, GAUNTLET } from './activities.js';
 
 const PHYS_DT = 1 / 120;
@@ -405,10 +407,9 @@ const world = {
     const busy = list.find(a => a.onRunway) || list.find(a => a.phase === 'final' && a.toAim < 2500);
     if (busy) return busy;
     // aircraft parked, taxiing or holding off the runway are not traffic
-    const GROUND = new Set(['parked', 'pushback', 'taxi', 'holding', 'lineup', 'gone']);
     let best = null, bd = Infinity;
     for (const a of list) {
-      if (GROUND.has(a.phase)) continue;
+      if (AI_GROUND_PHASES.has(a.phase)) continue;
       const d = Math.hypot(a.x - pos.x, a.y - pos.y, a.z - pos.z); if (d < bd) { bd = d; best = a; }
     }
     return best;
@@ -529,7 +530,41 @@ controls.on('ap-apr', () => {
   autopilot.toggleApr(ac, controls);
 });
 
-window.__sim = { ac, controls, game, world, autopilot, audio, failures, radios, env, windField, minimap, camRig, camera, weatherFx, physEnv, replay, get simTime() { return elapsed; }, get cockpit() { return cockpit; }, cockpitAction: (id) => cockpitAction(id), get plane() { return plane; },
+// ---- TCAS (tcas.js) against the airborne AI traffic: HUD box, ND symbols, aural.
+// Transport jets get resolution advisories (above 1000 ft AGL, as the real
+// system inhibits them low down); everything else carries a TAS: TA only.
+// Standby on the ground, so taxiing past the circuit traffic stays quiet.
+const AI_GROUND_PHASES = new Set(['parked', 'pushback', 'taxi', 'holding', 'lineup', 'gone']);
+const tcas = createTcas();
+const tcasVoice = createVoice();
+const tcasEl = document.getElementById('tcas');
+let tcasState = null, tcasInject = null, tcasShown = '';
+function updateTcas(active) {
+  if (!active || ac.onGround || ac.crashed) {
+    if (tcasState) { tcas.reset(); tcasState = null; }
+  } else {
+    const agl = ac.pos.y - currentMap.height(ac.pos.x, ac.pos.z);
+    tcas.setRa(ac.p.engine?.type === 'jet' && !ac.p.engine?.afterburner && agl > 305);
+    const q = ac.q;
+    const own = { pos: ac.pos, vel: ac.vel, headingRad: Math.atan2(-2 * (q.x * q.z - q.w * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)) };
+    const list = tcasInject ?? traffic.aiStates().filter(a => !AI_GROUND_PHASES.has(a.phase) && a.visible !== false);
+    tcasState = tcas.update(own, list, elapsed);
+    const say = tcasCallout(tcasState);
+    if (say) {
+      tcasVoice.speak(say);
+      if (tcasState.event !== 'CLEAR') audio.caution?.(tcasState.event === 'RA');
+    }
+  }
+  const lv = tcasState?.level || '';
+  const key = lv + (tcasState?.sense || '');
+  if (tcasEl && key !== tcasShown) {
+    tcasShown = key;
+    tcasEl.className = lv ? 'show ' + lv.toLowerCase() : '';
+    tcasEl.textContent = lv === 'RA' ? (tcasState.sense === 'CLIMB' ? '\u25b2 CLIMB' : '\u25bc DESCEND') : lv === 'TA' ? 'TRAFFIC' : '';
+  }
+}
+
+window.__sim = { get tcas() { return tcasState; }, tcasInject: (list) => { tcasInject = list; }, ac, controls, game, world, autopilot, audio, failures, radios, env, windField, minimap, camRig, camera, weatherFx, physEnv, replay, get simTime() { return elapsed; }, get cockpit() { return cockpit; }, cockpitAction: (id) => cockpitAction(id), get plane() { return plane; },
   terrainCounts: () => terrain.counts(),
   get rings() { return gauntletRings || rings; }, get map() { return currentMap; },
   get camName() { return camRig.modeName; }, get trails() { return trails; }, get traffic() { return traffic; }, scene, renderer };
@@ -657,6 +692,7 @@ function frame(now) {
     }, ac.avionics === false ? null : {
       com: { act: fmtFreq(radios.com.act), sby: fmtFreq(radios.com.sby) },
       nav: { act: fmtFreq(radios.nav.act), sby: fmtFreq(radios.nav.sby), ils: radios.ilsTuned },
+      tcas: tcasState?.targets ?? null,
     });
     cockpit.update(ac, c, dt);
   }
@@ -696,6 +732,7 @@ function frame(now) {
   if (!mapLoading && currentMap.prefetch) currentMap.prefetch(view.pos.x, view.pos.z, COARSE_TILE_RADIUS);
   env.update(view, dt, elapsed, camera.position, camera);
   traffic.update(dt, camera.position, elapsed, isFlying ? ac.pos : null);   // the circuit traffic steps away from you
+  updateTcas(isFlying && !replaying);
   camRig.setInput(isFlying);
   if (game.state === 'menu') camRig.updateMenu(ac, dt);
   else if (!replaying) camRig.update(ac, dt);

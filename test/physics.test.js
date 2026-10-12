@@ -1827,6 +1827,41 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   check('ATC: squawk 7700 gets an emergency landing clearance, once, and is never sent around', said.map(x => x.id).join(',') === 'emergency' && /all runways available/i.test(said.find(x => x.id === 'emergency')?.t || ''), said.map(x => x.id).join(','));
 }
 
+// ---- v12: TCAS (tcas.js) ----
+{
+  const { createTcas, tcasCallout } = await import('../src/tcas.js');
+  // own ship heading +x at 55 m/s; one intruder flying `ivx` from x0 at height dy
+  const run = (o) => {
+    const t = createTcas({ ra: o.ra }); const own = { pos: { x: 0, y: 1000, z: 0 }, vel: { x: 55, y: 0, z: 0 }, headingRad: 0 };
+    const ev = []; let maxLevel = null;
+    for (let s = 0; s <= 200; s += 0.25) {
+      own.pos.x = 55 * s;
+      const ix = o.x0 + o.ivx * s, iz = o.z ?? 0, iy = 1000 + o.dy + (o.ivy ?? 0) * s;
+      const st = t.update(own, [{ id: 7, x: ix, y: iy, z: iz }], s);
+      const cpa = (o.x0 - 0) / (55 - o.ivx);                 // time the two meet in x
+      if (st.event) ev.push({ e: st.event, before: +(cpa - s).toFixed(1), sense: st.sense, say: tcasCallout(st) });
+      if (st.level === 'RA' || (st.level === 'TA' && maxLevel !== 'RA')) maxLevel = st.level;
+    }
+    return { ev, maxLevel };
+  };
+  const head = run({ ra: true, x0: 9000, ivx: -70, dy: 60 });
+  const ta = head.ev.find(e => e.e === 'TA'), ra = head.ev.find(e => e.e === 'RA'), clr = head.ev.find(e => e.e === 'CLEAR');
+  check('tcas: head-on gives a TA ~40 s out, then an RA ~25 s out, then clear of conflict',
+    ta && ra && clr && head.ev.filter(e => e.e === 'CLEAR').length === 1 && ta.before > 34 && ta.before < 50 && ra.before > 19 && ra.before < 32 && clr.before < 0,
+    JSON.stringify(head.ev));
+  check('tcas: intruder slightly above -> DESCEND, with the real aurals', ra?.sense === 'DESCEND' && ra?.say === 'Descend, descend' && ta?.say === 'Traffic, traffic' && clr?.say === 'Clear of conflict');
+  const below = run({ ra: true, x0: 9000, ivx: -70, dy: -60 });
+  check('tcas: intruder slightly below -> CLIMB', below.ev.find(e => e.e === 'RA')?.sense === 'CLIMB', JSON.stringify(below.ev));
+  const tas = run({ ra: false, x0: 9000, ivx: -70, dy: 60 });
+  check('tcas: light aircraft (TAS) get the TA but never an RA (and no clear-of-conflict)', tas.ev.some(e => e.e === 'TA') && !tas.ev.some(e => e.e === 'RA' || e.e === 'CLEAR'), JSON.stringify(tas.ev));
+  const high = run({ ra: true, x0: 9000, ivx: -70, dy: 2000 * 0.3048 });
+  check('tcas: 2000 ft of separation is no threat', high.ev.length === 0, JSON.stringify(high.ev));
+  const abeam = run({ ra: true, x0: 0, ivx: 55, dy: 0, z: 2500 });
+  check('tcas: parallel traffic 2.5 km abeam is no threat', abeam.ev.length === 0, JSON.stringify(abeam.ev));
+  const climbInto = run({ ra: true, x0: 9000, ivx: -70, dy: -400, ivy: 8 });
+  check('tcas: an intruder climbing into our level from 1300 ft below still alerts', climbInto.ev.some(e => e.e === 'TA'), JSON.stringify(climbInto.ev));
+}
+
 // ---- v12: every cockpit panel draws without throwing (stub 2D context) ----
 // The panels are canvas code that only runs in a browser; a stub context that
 // accepts any call lets Node execute every line of them, so a reference to an
@@ -1837,7 +1872,8 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   const { AIRCRAFT } = await import('../src/aircraft/params.js');
   const stub = () => new Proxy({}, { get: (o, k) => (k in o ? o[k] : (k === 'measureText' ? () => ({ width: 10 }) : k.startsWith('create') ? () => ({ addColorStop() {} }) : () => {})), set: (o, k, v) => { o[k] = v; return true; } });
   const env = { groundHeight: () => 0, terrainHeight: () => 0, isRunway: () => false };
-  const ui = { sys: [], ap: [], states: {}, radio: { nav: { act: '110.15', sby: '108.00', ils: true }, com: { act: '118.30', sby: '121.50' } } };
+  const ui = { sys: [], ap: [], states: {}, radio: { nav: { act: '110.15', sby: '108.00', ils: true }, com: { act: '118.30', sby: '121.50' },
+    tcas: ['OT', 'PT', 'TA', 'RA'].map((level, i) => ({ id: i, rel: i - 1.5, range: 3000 * (i + 1), relAltFt: (i - 2) * 300, trend: i % 3 - 1, level })) } };
   const errs = [];
   for (const id of Object.keys(AIRCRAFT)) {
     const ac = createAircraft({ pos: { x: 0, y: 1000, z: 0 }, vel: { x: 60, y: 0, z: 0 } }); ac.p = { ...AIRCRAFT[id] };
