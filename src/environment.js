@@ -871,7 +871,12 @@ export function createEnvironment(scene, renderer) {
       if (tod.night && ac.sys?.lights?.land !== false && ac.breakers?.lts !== false) {   // the cockpit LAND switch
         tmpQ.set(ac.q.x, ac.q.y, ac.q.z, ac.q.w);
         fwdV.set(1, 0, 0).applyQuaternion(tmpQ);
-        landing.position.set(ac.pos.x, ac.pos.y, ac.pos.z);
+        // from AHEAD of the nose (and so of the instrument panel): at the CG the
+        // cone lit the cockpit panel into a white hot spot at night
+        let noseX = 1;
+        for (const g of ac.p?.gear || []) noseX = Math.max(noseX, g.r?.x ?? 0);
+        const ahead = Math.max(noseX + 3, noseX * 1.25 + 3);
+        landing.position.set(ac.pos.x + fwdV.x * ahead, ac.pos.y + fwdV.y * ahead, ac.pos.z + fwdV.z * ahead);
         landing.target.position.set(
           ac.pos.x + fwdV.x * 200, ac.pos.y + fwdV.y * 200 - 12, ac.pos.z + fwdV.z * 200);
         landing.intensity = 8;
