@@ -55,7 +55,7 @@ Those are marked as scope limits, not as defects.
 | Area | Rating | Evidence |
 |---|---|---|
 | Time of day, sky, stars, night lighting | Met | `environment.js` |
-| Clouds | Partial | Lit billboard cumulus. The reference sims use volumetric clouds. |
+| Clouds | Met (cumulus) | Raymarched volumetric cumulus with self-shadowing, forward scattering and fly-through (`volclouds.js`, e2e checks it on full detail). Overcast is still a deck, not a volume; no cloud shadows on the ground. |
 | Weather: rain, storms, lightning, overcast, live real weather | Met | `weather.js`, `liveweather.js`, e2e live weather |
 | Water: reflections, swell, shallows, foam | Met | Planar reflection (e2e reflection check) |
 | Post FX: bloom, grade, flare; dynamic resolution | Met | `post.js`, `main.js adaptResolution` |
@@ -84,5 +84,5 @@ Those are marked as scope limits, not as defects.
 2. **Sound:** listen to the engine (in the sim, or the WAVs from
    `npm run sounds`) and say whether it is good enough.
 3. **Priorities:** choose which "Partial" rows matter for "AAA". The obvious
-   remaining candidates are volumetric clouds, fully clickable study-level
-   cockpits, and ATC-controlled AI traffic.
+   remaining candidates are fully clickable study-level cockpits, ATC-controlled
+   AI traffic, volumetric overcast and cloud shadows.

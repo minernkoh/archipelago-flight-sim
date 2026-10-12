@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import { getTerrainHeight as archipelagoHeight } from './maps/archipelago.js';
 import { createRunwayLights } from './runwayLights.js';
 import { DISPLAY, displayMatch, displayOf } from './display.js';
+import { createVolumetricClouds } from './volclouds.js';
 
 const D2R = Math.PI / 180;
 // Sun/moon direction from azimuth (deg, 0 = +x, increasing toward -z) and
@@ -109,9 +110,10 @@ function buildClouds(scene, tod) {
   let seed = 99;
   const rng = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
   const offs = [], sizes = [], shades = [], clusterIdx = [], rots = [];
-  const centers = [];
+  const centers = [], dims = [];
   for (let i = 0; i < MAX_CLUSTERS; i++) {
     const W = 260 + rng() * 460, H = W * (0.38 + rng() * 0.2);
+    dims.push({ w: W * 1.15, h: H * 1.05 });          // the volumetric renderer's box (volclouds.js)
     centers.push(new THREE.Vector3((rng() - 0.5) * CLOUD_WRAP * 2, 520 + rng() * 650, (rng() - 0.5) * CLOUD_WRAP * 2));
     const n = 18 + Math.floor(rng() * 10);
     for (let b = 0; b < n; b++) {
@@ -206,7 +208,7 @@ function buildClouds(scene, tod) {
   function setCover(f) {
     mat.uniforms.cover.value = Math.round(MAX_CLUSTERS * Math.max(0, Math.min(1, f)));
   }
-  return { clouds: group, cloudMat: mat, updateClouds, setCover };
+  return { clouds: group, cloudMat: mat, updateClouds, setCover, dims };
 }
 
 export function createEnvironment(scene, renderer) {
@@ -592,7 +594,15 @@ export function createEnvironment(scene, renderer) {
   }
 
   // --- Clouds: low-poly cumulus (see buildClouds) ---
-  const { clouds, cloudMat, updateClouds, setCover } = buildClouds(scene, tod);
+  const { clouds, cloudMat, updateClouds, setCover, dims: cloudDims } = buildClouds(scene, tod);
+  // Volumetric cumulus over the same clusters (volclouds.js): full detail only.
+  const vol = createVolumetricClouds({ scene, uniforms: cloudMat.uniforms, dims: cloudDims, max: MAX_CLUSTERS });
+  let volWanted = true, volDetail = true, cloudsShown = true;
+  const applyCloudMode = () => {
+    const v = volWanted && volDetail;
+    clouds.visible = cloudsShown && !v;
+    vol.setOn(cloudsShown && v);
+  };
 
   // --- Blob shadow under the aircraft (no shadow maps needed) ---
   const shadow = new THREE.Mesh(
@@ -713,7 +723,8 @@ export function createEnvironment(scene, renderer) {
     setCover(wxSky.overcast > 0.3 ? 0 : wx.cloudF);
     cloudMat.uniforms.fogNear.value = near;
     cloudMat.uniforms.fogFar.value = far;
-    clouds.visible = wx.cloudF > 0.06 && wxSky.overcast <= 0.3;
+    cloudsShown = wx.cloudF > 0.06 && wxSky.overcast <= 0.3;
+    applyCloudMode();
     // Custom shaders fade toward the fog as it is DISPLAYED on built-in
     // materials (display.js), so sky, sea and clouds meet the terrain haze.
     displayOf(scene.fog.color, screenFog);
@@ -783,7 +794,13 @@ export function createEnvironment(scene, renderer) {
       envUsers.set(key, set);
     },
     /** Detail level for the ocean (1 full, 0 lite: no ripple layers, no reflection). */
-    setDetail(k) { oceanMat.uniforms.detail.value = k; refl.on = k > 0.5 && reflWanted; if (!refl.on) oceanMat.uniforms.reflOn.value = 0; },
+    setDetail(k) {
+      oceanMat.uniforms.detail.value = k; refl.on = k > 0.5 && reflWanted; if (!refl.on) oceanMat.uniforms.reflOn.value = 0;
+      volDetail = k > 0.5; applyCloudMode();
+    },
+    /** Raymarched cumulus on/off (still needs full detail); off = billboard clouds. */
+    setVolumetricClouds(on) { volWanted = !!on; applyCloudMode(); },
+    get volumetricClouds() { return vol.on; },
     /** Planar water reflection on/off (still needs full detail). */
     setReflections(on) { reflWanted = !!on; refl.on = reflWanted && oceanMat.uniforms.detail.value > 0.5; if (!refl.on) oceanMat.uniforms.reflOn.value = 0; },
     get reflecting() { return oceanMat.uniforms.reflOn.value > 0.5; },
@@ -815,6 +832,7 @@ export function createEnvironment(scene, renderer) {
       sky.position.set(ac.pos.x, 0, ac.pos.z);
 
       updateClouds(ac, dt, camPos);
+      if (camPos) vol.update(camPos, elapsed);
 
       // Landing-light cone: nose-mounted spotlight pointing along body +x. Only
       // lit at night; a single no-shadow light, so it stays cheap.

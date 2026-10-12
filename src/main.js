@@ -382,6 +382,7 @@ const world = {
     renderer.shadowMap.enabled = qualityHigh;
     setDetail(qualityHigh && detailAuto ? 1 : 0);
     env.setReflections(qualityHigh);
+    env.setVolumetricClouds(qualityHigh);
   },
   // POST FX setting: bloom + grade + sun flare. Still gated on HIGH quality and
   // on the session auto-disable in post.js.

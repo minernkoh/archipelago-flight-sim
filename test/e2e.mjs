@@ -962,8 +962,10 @@ await page.evaluate(() => {
 });
 await settle(4000);
 check('full detail: the water reflection pass runs', await sim('__sim.env.reflecting'));
+check('full detail: clouds are raymarched volumes', await sim('__sim.env.volumetricClouds'));
 await shot('13-reflection');
 await page.evaluate(() => window.__sim.world.forceDetail(0));
+check('lite detail: clouds fall back to billboards', (await sim('__sim.env.volumetricClouds')) === false);
 await page.evaluate(() => window.__sim.game.toMenu());
 await settle(300);
 

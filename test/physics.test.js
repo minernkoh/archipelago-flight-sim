@@ -1631,6 +1631,22 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
     check('failure: respawn restores every system', Object.values(ac.systems).every(v => v === true) && ac.gyro === null && ac._flapJam == null); }
 }
 
+// ---- v12: volumetric cloud noise (volclouds.js) ----
+{
+  const { cloudNoise } = await import('../src/volclouds.js');
+  const n = 32, d = cloudNoise(n, 3);
+  let lo = 255, hi = 0, sum = 0, seam = 0, inner = 0;
+  for (let i = 0; i < d.length; i++) { lo = Math.min(lo, d[i]); hi = Math.max(hi, d[i]); sum += d[i]; }
+  // tileable: the wrap-around step (x = n-1 -> 0) is no bigger than an ordinary one
+  for (let z = 0; z < n; z++) for (let y = 0; y < n; y++) {
+    const row = y * n + z * n * n;
+    seam += Math.abs(d[row + n - 1] - d[row]); inner += Math.abs(d[row + n / 2] - d[row + n / 2 - 1]);
+  }
+  check('cloud noise: full range, mid mean, tiles without a seam',
+    hi - lo > 120 && sum / d.length > 60 && sum / d.length < 200 && seam < inner * 1.5,
+    `range ${lo}-${hi}, mean ${(sum / d.length).toFixed(0)}, seam ${seam} vs ${inner}`);
+}
+
 // ---- v11: autopilot ALT hold auto-trim ----
 // Before the integrators, P-only ALT hold settled 200-400 ft off target on the
 // Extra and Hornet (it needed a standing VS error to hold level-flight pitch).
