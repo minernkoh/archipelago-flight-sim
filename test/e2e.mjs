@@ -277,13 +277,11 @@ const pit = await sim(`(() => {
 })()`);
 check('cockpit view shows the 3D interior and hides the exterior hull',
   pit.cam === 'COCKPIT' && pit.interior && pit.hull > 0 && pit.hullShown === 0, JSON.stringify(pit));
-// v12 clickable cockpit: look down at the switch rows (a drag = free-look),
-// then a real click on the HDG button engages heading hold
+// v12 clickable cockpit: the switches live on the instrument panel (always in
+// view); a real click on the HDG button engages heading hold
 const ckClick = await page.evaluate(async () => {
   const s = window.__sim, cv = document.querySelector('canvas');
   const fire = (t, x, y, el = window) => el.dispatchEvent(new MouseEvent(t, { clientX: x, clientY: y, button: 0, bubbles: true }));
-  fire('mousedown', 640, 200, cv); fire('mousemove', 640, 420); fire('mouseup', 640, 420);
-  await new Promise(r => setTimeout(r, 700));
   s.camera.updateMatrixWorld();
   const p = s.cockpit.buttonWorld('ap-hdg');
   if (!p) return { err: 'no button' };

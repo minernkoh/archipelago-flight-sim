@@ -58,10 +58,17 @@ function panelFace(parent, { w, h, x, y, tilt = 0.2, cw, ch, draw }) {
   m.rotation.z = -tilt;                      // top leans away
   parent.add(m);
   const ctx = canvas ? canvas.getContext('2d') : null;
-  return {
-    mesh: m, mat,
-    redraw(ac) { if (!ctx) return; draw(ctx, cw, ch, ac); tex.needsUpdate = true; },
+  const face = {
+    mesh: m, mat, cw, ch, hits: [],
+    redraw(ac) { if (!ctx) return; face.hits = draw(ctx, cw, ch, ac) || []; tex.needsUpdate = true; },
+    /** Button under a texture coordinate (canvas y runs down, uv.y up). */
+    pick(uv) {
+      const px = uv.x * cw, py = (1 - uv.y) * ch;
+      const h = face.hits.find(r => px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h);
+      return h ? h.id : null;
+    },
   };
+  return face;
 }
 
 // A row of labelled push-buttons / switches on one canvas-textured plane (one
@@ -157,12 +164,15 @@ export function createCockpit(cfg, hud, p = null) {
     { id: 'flap-up', label: 'FLAP ▲' }, { id: 'flap-dn', label: 'FLAP ▼' },
   ];
   const strips = [];
+  // switch rows drawn INTO the instrument panel canvas (instruments.js), so
+  // they are always in view: cockpit free-look springs back on release
+  const ui = { sys: sysButtons, ap: AP_BUTTONS, states: {} };
 
   if (style === 'cabin') {
     const head = std(0xbdb6a8, 0.95), wall = std(0x6e6a62, 0.9);
     panel = panelFace(eye, {
       w: 1.1, h: 0.36, x: 0.74, y: -0.34, tilt: 0.15, cw: 1152, ch: 378,
-      draw: (x, W, H, ac) => drawSteamPanel(x, W, H, ac, hud),
+      draw: (x, W, H, ac) => drawSteamPanel(x, W, H, ac, hud, ui),
     });
     box(eye, darker, 0.32, 0.42, 1.22, 0.93, -0.34, 0);                       // panel housing
     box(eye, dark, 0.26, 0.035, 1.24, 0.84, -0.125, 0, 0, 0, 0.06);          // glareshield
@@ -185,8 +195,6 @@ export function createCockpit(cfg, hud, p = null) {
     compass.add(card);
     eye.add(compass);
     yokes = [yoke(eye, yokeM, grip, -0.32, 0.46, -0.5), yoke(eye, yokeM, grip, 0.32, 0.46, -0.5)];
-    strips.push(buttonStrip(eye, { buttons: sysButtons, w: 0.085 * sysButtons.length, h: 0.064, x: 0.566, y: -0.575, z: -0.3 }));
-    strips.push(buttonStrip(eye, { buttons: AP_BUTTONS, w: 0.48, h: 0.064, x: 0.566, y: -0.575, z: 0.3 }));
     // throttle plunger, mixture next to it
     for (const [z, col] of [[0.0, 0x151515], [0.08, 0xb8372e]]) {
       const t = new THREE.Group();
@@ -200,8 +208,8 @@ export function createCockpit(cfg, hud, p = null) {
     }
   } else if (style === 'canopy') {
     panel = panelFace(eye, glass
-      ? { w: 0.72, h: 0.24, x: 0.56, y: -0.25, tilt: 0.25, cw: 1152, ch: 384, draw: (x, W, H, ac) => drawGlassPanel(x, W, H, ac, 'fighter') }
-      : { w: 0.66, h: 0.24, x: 0.54, y: -0.25, tilt: 0.25, cw: 1152, ch: 420, draw: (x, W, H, ac) => drawSteamPanel(x, W, H, ac, hud) });
+      ? { w: 0.72, h: 0.24, x: 0.56, y: -0.25, tilt: 0.25, cw: 1152, ch: 384, draw: (x, W, H, ac) => drawGlassPanel(x, W, H, ac, 'fighter', ui) }
+      : { w: 0.66, h: 0.24, x: 0.54, y: -0.25, tilt: 0.25, cw: 1152, ch: 420, draw: (x, W, H, ac) => drawSteamPanel(x, W, H, ac, hud, ui) });
     box(eye, darker, 0.26, 0.3, 0.8, 0.7, -0.26, 0);                          // panel housing
     box(eye, dark, 0.18, 0.025, 0.8, 0.66, -0.115, 0, 0, 0, 0.1);           // glareshield
     rodBetween(eye, darker, [0.57, -0.127, -0.4], [0.57, -0.127, 0.4], 0.016);
@@ -228,9 +236,6 @@ export function createCockpit(cfg, hud, p = null) {
     t.add(lever);
     eye.add(t);
     throttles.push({ t, x0: -0.06, travel: 0.14 });
-    // side-console tops: flaps (and start switches) left, autopilot right
-    strips.push(buttonStrip(eye, { buttons: sysButtons, w: 0.2, h: 0.04 * sysButtons.length, x: 0.12, y: -0.262, z: -0.37, orient: 'up' }));
-    strips.push(buttonStrip(eye, { buttons: AP_BUTTONS, w: 0.2, h: 0.4, x: 0.12, y: -0.262, z: 0.37, orient: 'up' }));
   } else {
     // airliner
     const over = std(0x3c4148, 0.85);
@@ -242,7 +247,7 @@ export function createCockpit(cfg, hud, p = null) {
     box(eye, dark, 0.42, 0.05, 2.1, 0.92, -0.14, 0, 0, 0, 0.1);              // glareshield
     box(eye, std(0x1f2226, 0.6), 0.04, 0.06, 1.0, 0.72, -0.12, 0);          // MCP face
     // MCP: the autopilot buttons along the glareshield
-    strips.push(buttonStrip(eye, { buttons: AP_BUTTONS, w: 0.84, h: 0.05, x: 0.697, y: -0.12, z: 0 }));
+    strips.push(buttonStrip(eye, { buttons: [...AP_BUTTONS, ...sysButtons], w: 0.112 * (AP_BUTTONS.length + sysButtons.length), h: 0.05, x: 0.697, y: -0.12, z: 0 }));
     box(eye, over, 1.4, 0.06, 1.9, 0.0, 0.5, 0);                              // overhead
     rodBetween(eye, trim, [1.08, -0.17, 0], [0.82, 0.47, 0], 0.022);         // centre post
     for (const s of [-1, 1]) {
@@ -263,14 +268,13 @@ export function createCockpit(cfg, hud, p = null) {
       throttles.push({ t, x0: 0.24, travel: 0.16 });
     }
     yokes = [yoke(eye, yokeM, grip, -0.5, 0.6, -0.45), yoke(eye, yokeM, grip, 0.5, 0.6, -0.45)];
-    strips.push(buttonStrip(eye, { buttons: sysButtons, w: 0.12 * sysButtons.length, h: 0.09, x: 0.52, y: -0.578, z: 0, orient: 'up' }));
   }
 
   group.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
   group.visible = false;
 
   let redrawT = 0, night = false;
-  const pickables = strips.map(st => st.mesh);
+  const pickables = [...strips.map(st => st.mesh), ...(panel && style !== 'airliner' ? [panel.mesh] : [])];
   return {
     group,
     style,
@@ -281,7 +285,7 @@ export function createCockpit(cfg, hud, p = null) {
       for (const st of strips) st.mat.emissiveIntensity = night ? 0.7 : 0.25;
     },
     /** Lit/label state for the switch rows (main.js: AP status + switch positions). */
-    setUi(states) { for (const st of strips) st.draw(states); },
+    setUi(states) { ui.states = states; for (const st of strips) st.draw(states); },
     /**
      * Which cockpit control a ray hits, or null. Only the button rows are
      * clickable; the ray is tested against the live (visible) cockpit.
@@ -291,11 +295,22 @@ export function createCockpit(cfg, hud, p = null) {
       group.updateMatrixWorld(true);
       const hit = raycaster.intersectObjects(pickables, false)[0];
       if (!hit || !hit.uv) return null;
+      if (panel && hit.object === panel.mesh) { const id = panel.pick(hit.uv); return id ? { id, point: hit.point } : null; }
       const st = strips.find(s2 => s2.mesh === hit.object);
       return st ? { id: st.pick(hit.uv), point: hit.point } : null;
     },
     /** World position of a button's centre (tests and tooltips). */
     buttonWorld(id, out = new THREE.Vector3()) {
+      const ph = panel?.hits.find(r => r.id === id);
+      if (ph) {
+        panel.mesh.geometry.computeBoundingBox();
+        const bb = panel.mesh.geometry.boundingBox;
+        const u = (ph.x + ph.w / 2) / panel.cw, v = 1 - (ph.y + ph.h / 2) / panel.ch;
+        // panel plane: uv.x along +z, uv.y along +y (before the mesh's tilt)
+        out.set((bb.min.x + bb.max.x) / 2, bb.min.y + (bb.max.y - bb.min.y) * v, bb.min.z + (bb.max.z - bb.min.z) * u);
+        group.updateMatrixWorld(true);
+        return panel.mesh.localToWorld(out);
+      }
       for (const st of strips) {
         const i = st.buttons.findIndex(b => b.id === id);
         if (i < 0) continue;

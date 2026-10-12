@@ -20,6 +20,27 @@ const num = (v, d = 0) => (Number.isFinite(v) ? v : d);
 export const NAV = { ils: null };
 const MAG = '#ff4fd8';
 
+/**
+ * Clickable panel buttons (v12). Panels draw them into the same canvas as the
+ * gauges and return their rectangles (canvas px) so cockpit.js can hit-test a
+ * click by the texture coordinate. states: { [id]: false | true | 'label' }.
+ */
+function drawButtons(x, list, states, rect, cols) {
+  const rows = Math.ceil(list.length / cols), bw = rect.w / cols, bh = rect.h / rows, hits = [];
+  list.forEach((b, i) => {
+    const X = rect.x + (i % cols) * bw, Y = rect.y + Math.floor(i / cols) * bh;
+    const st = states[b.id], lit = !!st, pad = Math.min(bw, bh) * 0.08;
+    x.fillStyle = '#2b2f35'; x.fillRect(X + pad, Y + pad, bw - 2 * pad, bh - 2 * pad);
+    x.fillStyle = '#3a3f46'; x.fillRect(X + pad, Y + pad, bw - 2 * pad, Math.max(2, bh * 0.06));
+    x.fillStyle = lit ? '#38e070' : '#0d2a16'; x.fillRect(X + bw * 0.25, Y + bh * 0.2, bw * 0.5, Math.max(3, bh * 0.1));
+    x.fillStyle = '#e8e8e2'; x.font = `bold ${Math.min(bh * 0.32, bw * 0.24)}px "B612", Arial, sans-serif`;
+    x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.fillText(typeof st === 'string' ? st : b.label, X + bw / 2, Y + bh * 0.62);
+    hits.push({ id: b.id, x: X, y: Y, w: bw, h: bh });
+  });
+  return hits;
+}
+
 /** Values every display needs, in pilot units. */
 export function readout(ac) {
   let pitch = 0, roll = 0, hdg = 0;
@@ -216,7 +237,7 @@ function smallGauge(x, cx, cy, r, frac, txt, red = 0.92) {
 }
 
 /** Light-aircraft panel: six-pack, engine gauges, radio stack. */
-export function drawSteamPanel(x, W, H, ac, hud) {
+export function drawSteamPanel(x, W, H, ac, hud, ui = null) {
   const v = readout(ac);
   x.fillStyle = '#26292d'; x.fillRect(0, 0, W, H);
   // panel texture: faint vertical brushing
@@ -234,15 +255,25 @@ export function drawSteamPanel(x, W, H, ac, hud) {
   smallGauge(x, ex, gy, r * 0.62, v.rpm, `${Math.round(700 + 2000 * v.rpm)}`, 0.95);
   smallGauge(x, ex, gy + dy * 0.55, r * 0.5, 0.7, 'OIL', 0.9);
   smallGauge(x, ex, gy + dy, r * 0.5, 0.62, 'FUEL', 0.98);
-  // radio stack
+  // radio stack: COM + NAV, then the autopilot (KAP 140 style) when clickable
   const rx = ex + r * 1.0, rw = W - rx - W * 0.03;
-  for (let i = 0; i < 3; i++) {
+  const radios = ui ? 2 : 3;
+  for (let i = 0; i < radios; i++) {
     const y = H * 0.1 + i * H * 0.27;
     x.fillStyle = '#121416'; x.fillRect(rx, y, rw, H * 0.2);
     x.fillStyle = '#3e4248'; x.fillRect(rx + 4, y + 4, rw - 8, 6);
     x.fillStyle = '#34ff6a'; x.font = `bold ${Math.min(H * 0.06, rw * 0.11)}px "B612 Mono", monospace`; x.textAlign = 'left'; x.textBaseline = 'middle';
     x.fillText(['COM 118.30', 'NAV 110.50', 'XPDR 1200'][i], rx + rw * 0.08, y + H * 0.11);
   }
+  if (!ui) return [];
+  const hits = [];
+  const apY = H * 0.1 + 2 * H * 0.27 - H * 0.02;
+  x.fillStyle = '#121416'; x.fillRect(rx, apY, rw, H * 0.3);
+  hits.push(...drawButtons(x, ui.ap, ui.states, { x: rx, y: apY, w: rw, h: H * 0.3 }, 3));
+  // master / mags / starter / mixture / flaps: a switch column at the left edge
+  const sx = W * 0.012, sw = gx - r * 1.2 - sx;
+  if (sw > 40 && ui.sys.length) hits.push(...drawButtons(x, ui.sys, ui.states, { x: sx, y: H * 0.05, w: sw, h: H * 0.9 }, 1));
+  return hits;
 }
 
 // ------------------------------------------------------------- glass --
@@ -365,11 +396,13 @@ function eicas(x, X, Y, S, v) {
 }
 
 /** Glass panel: PFD | ND | engines | PFD (airliner) or PFD | ND | engines (fighter). */
-export function drawGlassPanel(x, W, H, ac, layout = 'airliner') {
+export function drawGlassPanel(x, W, H, ac, layout = 'airliner', ui = null) {
   const v = readout(ac);
   x.fillStyle = '#1e2125'; x.fillRect(0, 0, W, H);
-  const S = H * 0.84, gap = (W - S * (layout === 'airliner' ? 4 : 3)) / (layout === 'airliner' ? 5 : 4);
-  const Y = (H - S) / 2;
+  // a fighter's clickable switch band sits under its displays
+  const band = ui && layout !== 'airliner' ? H * 0.2 : 0;
+  const S = (H - band) * 0.84, gap = (W - S * (layout === 'airliner' ? 4 : 3)) / (layout === 'airliner' ? 5 : 4);
+  const Y = (H - band - S) / 2;
   const slots = layout === 'airliner' ? ['pfd', 'nd', 'eicas', 'pfd'] : ['nd', 'pfd', 'eicas'];
   slots.forEach((k, i) => {
     const X = gap + i * (S + gap);
@@ -379,4 +412,7 @@ export function drawGlassPanel(x, W, H, ac, layout = 'airliner') {
     else if (k === 'nd') nd(x, X, Y, S, v);
     else eicas(x, X, Y, S, v);
   });
+  if (!band) return [];
+  const list = [...ui.sys, ...ui.ap];
+  return drawButtons(x, list, ui.states, { x: W * 0.04, y: H - band, w: W * 0.92, h: band * 0.92 }, list.length);
 }
