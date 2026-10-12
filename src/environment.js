@@ -9,6 +9,7 @@ import { getTerrainHeight as archipelagoHeight } from './maps/archipelago.js';
 import { createRunwayLights } from './runwayLights.js';
 import { DISPLAY, displayMatch, displayOf } from './display.js';
 import { createVolumetricClouds } from './volclouds.js';
+import { CLOUD_SHADOW } from './cloudshadow.js';
 
 const D2R = Math.PI / 180;
 // Sun/moon direction from azimuth (deg, 0 = +x, increasing toward -z) and
@@ -598,10 +599,16 @@ export function createEnvironment(scene, renderer) {
   // Volumetric cumulus over the same clusters (volclouds.js): full detail only.
   const vol = createVolumetricClouds({ scene, uniforms: cloudMat.uniforms, dims: cloudDims, max: MAX_CLUSTERS });
   let volWanted = true, volDetail = true, cloudsShown = true;
+  // cloud shadows on the ground follow the same clusters (cloudshadow.js)
+  CLOUD_SHADOW.csCenters.value = cloudMat.uniforms.centers.value;
+  CLOUD_SHADOW.csCover = cloudMat.uniforms.cover;
+  cloudDims.forEach((d, i) => CLOUD_SHADOW.csDims.value[i].set(d.w * 0.5, d.h, d.w * 0.42));
+  CLOUD_SHADOW.csSun = cloudMat.uniforms.sunDir;
   const applyCloudMode = () => {
     const v = volWanted && volDetail;
     clouds.visible = cloudsShown && !v;
     vol.setOn(cloudsShown && v);
+    CLOUD_SHADOW.csOn.value = cloudsShown && v ? 1 : 0;
   };
 
   // --- Blob shadow under the aircraft (no shadow maps needed) ---

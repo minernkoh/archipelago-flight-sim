@@ -4,6 +4,7 @@
 // map.color and knows nothing else about the world.
 
 import * as THREE from 'three';
+import { CLOUD_SHADOW, CLOUD_SHADOW_GLSL } from './cloudshadow.js';
 import { archipelagoMap } from './maps/archipelago.js';
 
 // ---------- Chunked mesh streaming ----------
@@ -164,6 +165,7 @@ function terrainMaterial(far) {
   const m = new THREE.MeshLambertMaterial({ vertexColors: true });
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uDetail = GROUND_DETAIL;
+    Object.assign(sh.uniforms, CLOUD_SHADOW);
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vTW; varying vec3 vTN; varying float vMacro;' + GROUND_NOISE)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
@@ -173,7 +175,9 @@ function terrainMaterial(far) {
         vTN = normalize(mat3(modelMatrix) * objectNormal);
         vMacro = gfbm(vTW.xz * 0.0042);                 // ~250 m: vertices sample it fine`);
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vTW; varying vec3 vTN; varying float vMacro;' + GROUND_NOISE)
+      .replace('#include <common>', '#include <common>\nvarying vec3 vTW; varying vec3 vTN; varying float vMacro;' + GROUND_NOISE + CLOUD_SHADOW_GLSL)
+      .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+        if (uDetail > 0.5) reflectedLight.directDiffuse *= cloudShadow(vTW);`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         if (uDetail < 0.5) {
           diffuseColor.rgb *= 1.0 + (vMacro - 0.5) * 0.42;
