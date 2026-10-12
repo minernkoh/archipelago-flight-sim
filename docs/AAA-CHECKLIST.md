@@ -1,0 +1,88 @@
+# What "AAA flight simulator" means here
+
+The goal for this project was "make the simulator like a AAA simulator". That
+phrase has no fixed definition, so this file pins one down. It lists the
+feature areas that Microsoft Flight Simulator (2020/2024) and X-Plane 12 are
+judged on, and rates ARCHIPELAGO against each one. Every rating points at
+the evidence: a test, a script or a file.
+
+Ratings:
+- **Met**: comparable in kind to the reference sims and verified by a test or a render.
+- **Partial**: present, but clearly below the reference in scope or fidelity.
+- **Not met**: absent.
+- **Unverified**: built, but not yet checked against real-world input.
+
+Some gaps can't be closed by a browser app with no backend or licensed data:
+- planet-wide photogrammetry and satellite imagery
+- licensed recorded audio
+- multiplayer servers
+
+Those are marked as scope limits, not as defects.
+
+## Flight and systems
+
+| Area | Rating | Evidence |
+|---|---|---|
+| 6-DOF flight model: stall, spin, post-stall, ground effect, propwash, slipstream swirl | Met | `src/physics/`, `npm test` (envelope, stall and roll invariants) |
+| Wind, gusts, turbulence; aerodynamics use air-relative velocity | Met | `src/physics/wind.js`, physics suite |
+| Ground handling: gear, brakes, wet runway, crosswind landing | Met | `groundContact.js`, school lesson 7 (`npm run school`) |
+| Airframe limits: Vne, flap speeds, g limits, damage | Met | `envelope.js`, physics suite |
+| Engine start (cold and dark), battery, mags, mixture | Partial | Simplified next to study-level aircraft. e2e "start sequence" |
+| Autopilot: HDG, ALT and VS, auto-trim, flight plans | Partial | No VNAV, approach or LNAV coupling. `test/aptune.mjs`, `npm run checks` |
+| Failures | Partial | Engine failure only (school lesson) |
+
+## Aircraft
+
+| Area | Rating | Evidence |
+|---|---|---|
+| Exterior models: PBR paint, animated controls, gear, lights | Met | `src/aircraft/meshes.js`, `test/showroom.mjs` |
+| 3D cockpits with live instruments | Partial | `src/cockpit.js`. Instruments are live but not clickable, unlike MSFS/X-Plane. |
+| Five distinct aircraft (trainer, aerobatic, fighter, airliner, flying wing) | Met | `src/aircraft/params.js` |
+
+## World
+
+| Area | Rating | Evidence |
+|---|---|---|
+| Real elevation at real airfields (5) | Met | `src/maps/realworld.js`, e2e real-world block |
+| Buildings, roads, pavement and land cover from OpenStreetMap | Unverified | `src/maps/osm.js`. Tested only with a hand-written fixture and a synthetic 40k-building city: this environment's network policy blocks Overpass. |
+| Planet-wide coverage, satellite imagery, photogrammetry | Not met (scope) | Needs licensed imagery and streaming servers |
+| Detailed fictional maps (archipelago, Singapore, alpine) | Met | `src/maps/` |
+| Airports: ICAO markings, approach lights, PAPI, aprons, hangars | Met | `runwayPaint.js`, `runwayLights.js`, `airfieldKit.js` |
+| AI traffic | Partial | Visual-only boats, circuit planes and birds (`traffic.js`). No ATC-controlled AI. |
+
+## Atmosphere and rendering
+
+| Area | Rating | Evidence |
+|---|---|---|
+| Time of day, sky, stars, night lighting | Met | `environment.js` |
+| Clouds | Partial | Lit billboard cumulus. The reference sims use volumetric clouds. |
+| Weather: rain, storms, lightning, overcast, live real weather | Met | `weather.js`, `liveweather.js`, e2e live weather |
+| Water: reflections, swell, shallows, foam | Met | Planar reflection (e2e reflection check) |
+| Post FX: bloom, grade, flare; dynamic resolution | Met | `post.js`, `main.js adaptResolution` |
+
+## Sound
+
+| Area | Rating | Evidence |
+|---|---|---|
+| Engine sound driven by engine state (rpm, load, N1), Doppler, cockpit vs exterior | Unverified | `engineSynth.js`. The physics suite checks firing frequency, fan tone, buzzsaw, directivity and Doppler. Not yet judged by a listener (`npm run sounds` renders WAVs). |
+| Recorded sample sets | Not met (scope) | Licensing |
+| ATC voice | Met | `atc.js`, `npm run checks` |
+
+## Experience
+
+| Area | Rating | Evidence |
+|---|---|---|
+| Flight school (7 lessons) with instructor and grading | Met | `npm run school` |
+| Instant replay with cinematic cameras | Met | `replay.js`, e2e |
+| Gamepad and joystick input | Met | `controls.js` (Gamepad API) |
+| Multiplayer, VR | Not met (scope) | Needs servers / WebXR work |
+
+## Open items a person has to close
+
+1. **OSM:** fly a real-world airfield (San Francisco, Changi) in a normal
+   browser and check the scenery and frame rate.
+2. **Sound:** listen to the engine (in the sim, or the WAVs from
+   `npm run sounds`) and say whether it is good enough.
+3. **Priorities:** choose which "Partial" rows matter for "AAA". The obvious
+   next candidates are volumetric clouds, clickable cockpits, deeper failures
+   and systems, and ATC-controlled AI traffic.
