@@ -32,10 +32,17 @@ export function defaultTaxiLayout(rwy, { side = -1, offset = 78, width = 23 } = 
   const conn = [uDep, uEnd];
   if (uEnd - uDep > 1100) conn.splice(1, 0, (uDep + uEnd) / 2);
   const uStand = uDep + Math.min(170, (conn[1] - uDep) * 0.45);
-  // the parallel carries a vertex at every connector and at the stand
-  const us = [...new Set([uDep - 60, ...conn, uStand])].sort((a, b) => a - b);
+  // a second stand on a short spur off the parallel, between the first stand
+  // and the next connector, so a second airliner can taxi in to it without
+  // passing an aircraft parked on the first (traffic.js / slotStraightIn)
+  const uStand2 = uStand + Math.min(120, (conn[1] - uStand) * 0.5);
+  const spur = uStand2 - uStand >= 85 && conn[1] - uStand2 >= 60;
+  const V2 = V + side * 75;
+  // the parallel carries a vertex at every connector and at the stands
+  const us = [...new Set([uDep - 60, ...conn, uStand, ...(spur ? [uStand2] : [])])].sort((a, b) => a - b);
   const lines = [us.map(u => W(u, V))];
   for (const u of conn) lines.push([W(u, 0), W(u, V * 0.5), W(u, V)]);
+  if (spur) lines.push([W(uStand2, V), W(uStand2, V2)]);
   // hold short bar: well clear of the runway edge, yet far enough from the
   // parallel that a heavy can stop with its nose behind it
   const holdV = side * Math.min(hw + 25, offset - width / 2 - 4);
@@ -44,6 +51,9 @@ export function defaultTaxiLayout(rwy, { side = -1, offset = 78, width = 23 } = 
     // parked facing back toward the departure connector, so the taxi-out
     // simply carries on along the parallel: no pushback needed
     stand: { x: W(uStand, V)[0], z: W(uStand, V)[1], yaw: h + Math.PI },
+    // all stands (the first is `stand`); the spur stand is parked nose out
+    stands: [{ x: W(uStand, V)[0], z: W(uStand, V)[1], yaw: h + Math.PI },
+      ...(spur ? [{ x: W(uStand2, V2)[0], z: W(uStand2, V2)[1], yaw: h - side * Math.PI / 2 }] : [])],
     holds: [W(uDep, holdV)], holdDist: Math.abs(holdV),
     connectors: conn,
     frame: { fx, fz, rx, rz, V, uStand, uDep, holdV },

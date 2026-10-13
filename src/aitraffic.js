@@ -338,6 +338,79 @@ export function slotStraightIn(rwy, circuit, spacing, { ground = null, from = 0 
 }
 
 /**
+ * A further airliner on a runway that already has one (or more): the same
+ * schedule, timed into the gaps of the club traffic AND of the airliners
+ * already flying (`others`, same period). Never two on the runway (or short
+ * final) at once; at least `GROUND_SEP` m apart whenever either is on the
+ * ground (taxiways, stands, hold), and `AIR_SEP` m when both are airborne.
+ * Returns null when no timing works: then it is simply not flown.
+ */
+export function slotAnotherAirliner(rwy, circuit, spacing, { ground, period, others, GROUND_SEP = 75, AIR_SEP = 1200 }) {
+  if (!ground || !others?.length) return null;
+  const P = period, DT = 1, N = Math.round(P / DT);
+  const clubPeriod = circuit.total / circuit.speed;
+  // everything else on the field over one cycle, sampled once
+  const busy = new Uint8Array(N), ox = [], oy = [], oz = [], ov = [], og = [], cx = [], cy = [], cz = [];
+  for (let k = 0; k < N; k++) {
+    const t = k * DT;
+    [0, spacing].forEach(o => {
+      const a = circuit.at((t + o) % clubPeriod);
+      if (a.onRunway || (a.phase === 'final' && a.toAim < 1500)) busy[k] = 1;
+      cx.push(a.x); cy.push(a.y); cz.push(a.z);
+    });
+    for (const j of others) {
+      if (j.occupies(t)) busy[k] = 1;
+      const p = j.at(t);
+      ox.push(p.x); oy.push(p.y); oz.push(p.z); ov.push(p.visible ? 1 : 0); og.push(p.visible && p.agl < 5 ? 1 : 0);
+    }
+  }
+  // pad the busy windows by 2 s each side: the search samples at 1 s
+  const pad = Uint8Array.from(busy);
+  for (let k = 0; k < N; k++) if (busy[k]) for (let e = -2; e <= 2; e++) pad[(k + e + N) % N] = 1;
+  busy.set(pad);
+  const M = others.length;
+  const idx = (t) => ((Math.round(t / DT) % N) + N) % N;
+  // is the jet at cycle time c (with offset off) clear of everything?
+  const clear = (traf, c, off) => {
+    const j = traf.at(c - off);
+    if (!j.visible) return true;
+    const k = idx(c - off);
+    if ((j.onRunway || (j.phase === 'final' && j.toAim < 1500)) && busy[k]) return false;
+    const onG = j.agl < 5;
+    for (let m = 0; m < M; m++) {
+      const q = k * M + m;
+      if (!ov[q]) continue;
+      if (onG || og[q]) { if (Math.hypot(ox[q] - j.x, oz[q] - j.z) < GROUND_SEP) return false; }
+      else if (Math.hypot(ox[q] - j.x, oy[q] - j.y, oz[q] - j.z) < AIR_SEP) return false;
+    }
+    // climbing out: well clear of the club aircraft too
+    if (j.departing && j.agl > 1) for (let i = 0; i < 2; i++) {
+      const q = 2 * k + i;
+      if (Math.hypot(cx[q] - j.x, cy[q] - j.y, cz[q] - j.z) < 600) return false;
+    }
+    return true;
+  };
+  const probe = createStraightInTraffic(rwy, { period: P, ground });
+  if (!probe.ground) return null;
+  const s = probe.schedule;
+  for (let off = 0; off < P; off += 2) {
+    // offset convention as createStraightInTraffic: cycle(t) = t + off, so
+    // cycle time c happens at absolute t = c - off
+    const base = createStraightInTraffic(rwy, { period: P, offset: off, ground });
+    let ok = true;
+    for (let c = probe.tFinal - 60; c < s.tHoldArrive && ok; c += DT) ok = clear(base, c, off);
+    if (!ok) continue;
+    for (let d = 0; d <= 150; d += 3) {
+      const traf = createStraightInTraffic(rwy, { period: P, offset: off, ground, depDelay: d });
+      let good = true;
+      for (let c = s.tHoldArrive; c < traf.dep0 + traf.tTO + 70 && good; c += DT) good = clear(traf, c, off);
+      if (good) return Object.assign(traf, { slotted: true });
+    }
+  }
+  return null;
+}
+
+/**
  * Tower sequencing for the circuit traffic (v12): makes the club aircraft
  * respond to the PLAYER. When you occupy the runway or short final as a club
  * aircraft flies downwind, the tower gives it a left 360 for spacing: it

@@ -248,8 +248,8 @@ export function taxiwayDressing(layout, y, { fillet, buildTaxiGraph }) {
     }
   }
   // stand: a widened pad and a stop bar ahead of the parked nose
-  if (layout.stand) {
-    const s = layout.stand, fx = Math.cos(s.yaw), fz = -Math.sin(s.yaw);
+  for (const s of layout.stands || (layout.stand ? [layout.stand] : [])) {
+    const fx = Math.cos(s.yaw), fz = -Math.sin(s.yaw);
     const px = -fz, pz = fx;
     const P = (a, b) => [s.x + fx * a + px * b, s.z + fz * a + pz * b];
     quad(asphalt, P(-45, -hw - 6), P(35, -hw - 6), P(35, hw + 6), P(-45, hw + 6), 0.025);

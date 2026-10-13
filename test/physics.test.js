@@ -1919,6 +1919,34 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
       `${offLine} samples off the 02C centreline, phases ${[...seen].join(',')}`);
     check('Singapore offers 02C to the AI traffic', sg.singaporeMap.extraRunways?.()[0]?.runway === r2);
   }
+  { // a second airliner on the same runway, parked on the spur stand and timed
+    // into the gaps of the first: checked by an independent fine sampler
+    const { slotAnotherAirliner, createCircuitTraffic: cct } = await import('../src/aitraffic.js');
+    const tn = await import('../src/taxinet.js');
+    for (const [f, n] of [['archipelago', 'archipelagoMap'], ['singapore', 'singaporeMap'], ['alpine', 'alpineMap']]) {
+      const map = (await import(`../src/maps/${f}.js`))[n], r = map.runway, L = map.taxiLayout();
+      const club = cct(r), P = club.total / club.speed;
+      const sU = r.spawn.x * Math.cos(r.headingRad) - r.spawn.z * Math.sin(r.headingRad);
+      const j1 = slotStraightIn(r, club, P / 2, { ground: tn.planGround(r, L, { aim: sU + 300, vapp: 72 }) });
+      const g2 = tn.planGround(r, { ...L, stand: L.stands[1] }, { aim: sU + 300, vapp: 72 });
+      const j2 = slotAnotherAirliner(r, club, P / 2, { ground: g2, period: j1.period, others: [j1] });
+      let both = 0, gMin = 1e9, aMin = 1e9, clubClash = 0; const seen = new Set();
+      const occ = (j) => j.visible && (j.onRunway || (j.phase === 'final' && j.toAim < 1500));
+      for (let t = 0; t < j1.period; t += 0.25) {
+        const a = { ...j1.at(t) }, b = { ...j2.at(t) };
+        if (b.visible) seen.add(b.phase);
+        if (occ(a) && occ(b)) both++;
+        if (occ(b)) for (const o of [0, P / 2]) { const c = club.at(t + o); if (c.onRunway || (c.phase === 'final' && c.toAim < 1500)) clubClash++; }
+        if (!a.visible || !b.visible) continue;
+        if (a.agl < 5 || b.agl < 5) gMin = Math.min(gMin, Math.hypot(a.x - b.x, a.z - b.z));
+        else aMin = Math.min(aMin, Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z));
+      }
+      check(`second airliner (${f}): spur stand, never on the runway with the first or the club traffic, kept apart`,
+        L.stands.length === 2 && !!j2 && both === 0 && clubClash === 0 && gMin >= 70 && aMin >= 1100
+          && ['final', 'runway', 'taxi', 'parked', 'holding', 'lineup', 'departure'].every(p => seen.has(p)),
+        `${both} shared-runway samples, ${clubClash} club clashes, ground min ${gMin.toFixed(0)} m, air min ${aMin.toFixed(0)} m, phases ${[...seen].join(',')}`);
+    }
+  }
   { // the tower sequencing the club traffic around the player (createSequencer)
     const { createSequencer } = await import('../src/aitraffic.js');
     const sq = createSequencer(ai, period / 2);

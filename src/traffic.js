@@ -11,7 +11,7 @@
 // allocation and no Math.random.
 
 import * as THREE from 'three';
-import { createCircuitTraffic, slotStraightIn, createSequencer } from './aitraffic.js';
+import { createCircuitTraffic, slotStraightIn, slotAnotherAirliner, createSequencer } from './aitraffic.js';
 import { planGround } from './taxinet.js';
 import { MESH_BUILDERS } from './aircraft/meshes.js';
 import { loft, surface, mergeGeos, PROFILE } from './aircraft/modelkit.js';
@@ -292,7 +292,7 @@ export function createTraffic(scene, map, opts = {}) {
   // cycles repeat every two circuit laps): one on the map's runway, and one
   // on every other runway the map offers (Singapore's parallel 02C).
   const airliners = [];
-  function addAirliner(r, layout, id, otherRunway, from) {
+  function addAirliner(r, layout, id, otherRunway, from, others = null) {
     // ground movements follow the runway's taxiway network (taxinet.js): the
     // synthetic parallel taxiway on the fictional maps, OSM taxiways on the
     // real ones; none (or one that does not serve the runway) keeps the
@@ -302,7 +302,12 @@ export function createTraffic(scene, map, opts = {}) {
       const spawnU = r.spawn.x * Math.cos(r.headingRad) - r.spawn.z * Math.sin(r.headingRad);
       ground = planGround(r, layout, { aim: spawnU + 300, vapp: 72 });
     } catch { ground = null; }
-    const traf = slotStraightIn(r, aiNominal, AI_SPACING, { ground, from });
+    // a further airliner on a runway that already has one is timed around it
+    // too, and is simply not flown when no timing keeps them apart
+    const traf = others
+      ? slotAnotherAirliner(r, aiNominal, AI_SPACING, { ground, period: others[0].period, others })
+      : slotStraightIn(r, aiNominal, AI_SPACING, { ground, from });
+    if (!traf) return null;
     const anim = MESH_BUILDERS.heavy();
     const mesh = anim.group;
     mesh.rotation.order = 'YXZ';
@@ -317,13 +322,23 @@ export function createTraffic(scene, map, opts = {}) {
     return traf;
   }
   let jet = null;
+  const mainJets = [];
   if (aiNominal) {
     jet = addAirliner(rwy, map.taxiLayout ? map.taxiLayout() : null, 2, false, 0);
+    mainJets.push(jet);
     // other runways: offset half a cycle so the arrivals alternate
-    (map.extraRunways ? map.extraRunways() : []).forEach((ex, k) => addAirliner(ex.runway, ex.taxiLayout, 3 + k, true, jet.period / 2));
+    const extras = map.extraRunways ? map.extraRunways() : [];
+    extras.forEach((ex, k) => addAirliner(ex.runway, ex.taxiLayout, 3 + k, true, jet.period / 2));
+    // a second airliner on the main runway, parked on the spur stand (taxinet
+    // defaultTaxiLayout), when the layout has one and a safe timing exists
+    const lay = map.taxiLayout ? map.taxiLayout() : null;
+    if (lay?.stands?.length > 1) {
+      const j2 = addAirliner(rwy, { ...lay, stand: lay.stands[1] }, 3 + extras.length, false, 0, [jet]);
+      if (j2) mainJets.push(j2);
+    }
   }
-  // the club aircraft go around if the airliner is still on the runway
-  const ai = jet ? createCircuitTraffic(rwy, { occupied: (tt) => jet.occupies(tt) }) : aiNominal;
+  // the club aircraft go around if an airliner is still on the runway
+  const ai = jet ? createCircuitTraffic(rwy, { occupied: (tt) => mainJets.some(j => j.occupies(tt)) }) : aiNominal;
   // the tower sequences the club traffic around YOU: 360s on downwind while
   // you hold the runway or short final, go-arounds if it is already on base
   const seq = ai ? createSequencer(ai, AI_SPACING) : null;

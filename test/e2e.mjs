@@ -928,6 +928,8 @@ check('AI circuit traffic is flying the pattern (the tower never picks a parked 
   !!aiNow && ['runway', 'upwind', 'crosswind', 'downwind', 'base', 'final', 'goAround', 'departure', 'climb'].includes(aiNow.phase), JSON.stringify(aiNow));
 const jetArr = await sim(`(() => { for (let t = 0; t < 700; t += 2) { const j = __sim.traffic.aiStates(t).find(a => a.heavy); if (j) return { t, phase: j.phase, toAim: Math.round(j.toAim) }; } return null; })()`);
 check('an AI airliner arrives on a straight-in ILS', !!jetArr && jetArr.phase === 'final', JSON.stringify(jetArr));
+const jets2 = await sim(`(() => { const ids = new Set(), parked = new Set(); for (let t = 0; t < 1200; t += 3) for (const a of __sim.traffic.aiStates(t)) if (a.heavy && !a.otherRunway && a.visible !== false && a.phase !== 'gone') { ids.add(a.id); if (a.phase === 'parked') parked.add(a.id); } return { ids: [...ids], parked: [...parked] }; })()`);
+check('two airliners work the main runway, each parking on its own stand', jets2.ids.length === 2 && jets2.parked.length === 2, JSON.stringify(jets2));
 // v12 avoidance: park right beside an airborne club aircraft; it steps away vertically
 const avoid0 = await page.evaluate(() => {
   const s = window.__sim, list = s.traffic.aiStates().filter(a => !a.heavy && a.y - s.map.runway.y > 120);
