@@ -1755,12 +1755,22 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
     let shocked = false; c.throttle = 0; fly(ac, c, 90, () => { pin(75, -8)(); if (ac.shockCooling) shocked = true; });
     check('CHT: warm cruise 330-440 F with the rear cylinder hottest, no wear; a power-off dive shock-cools and wears the engine',
       Math.min(...cruise) > 330 && Math.max(...cruise) < 440 && cruise.indexOf(Math.max(...cruise)) === 2 && wear0 === 0 && !shock0 && shocked && ac.engineWear > 0,
-      `cruise ${cruise.join('/')} F, wear after the dive ${ac.engineWear?.toExponential(2)}`);
+      `cruise ${cruise.join('/')} F, wear after the dive ${ac.engineWear?.toExponential(2)} (per cylinder ${ac.cylWear.map(w => w.toExponential(1)).join(' ')})`);
     const a = mk('c172'), b = mk('c172'); b.engineWear = 0.4; const cc = cs({ throttle: 1 }); fly(a, cc, 3); fly(b, cc, 3);
     check('engine wear costs power (40% wear -> -14% thrust)', Math.abs(b.thrust / a.thrust - 0.86) < 0.02, (b.thrust / a.thrust).toFixed(3)); }
   { const a = mk('c172'), b = mk('c172'); const c = cs({ throttle: 0.6 }); b.sys.mags = 'L'; fly(a, c, 3); fly(b, c, 3);
     const drop = (a.rpmNorm - b.rpmNorm) * 2000;              // panel tach: 700 + 2000 x rpmNorm
     check('mag check: one magneto drops ~50-125 rpm and a little power, engine keeps running', drop > 50 && drop < 125 && b.engineRunning && b.thrust < a.thrust, `${drop.toFixed(0)} rpm drop`); }
+  // per-cylinder wear: a worn cylinder loses compression, runs cold on the
+  // engine monitor and misfires; the dive above wore every cylinder
+  { const ac = mk('c172'); const c = cs({ throttle: 0.7 });
+    const pin = () => { ac.q = { x: 0, y: 0, z: 0, w: 1 }; ac.omega = { x: 0, y: 0, z: 0 }; ac.vel = { x: 55, y: 0, z: 0 }; ac.pos.y = 1000; };
+    fly(ac, c, 300, pin); const healthy = ac.cht.map(v => Math.round(v)), rough0 = ac.cylRough;
+    ac.cylWear[2] = 0.8; fly(ac, c, 300, pin); const worn = ac.cht.map(v => Math.round(v));
+    const others = [0, 1, 3].map(i => worn[i]);
+    check('cylinders: a worn cylinder (#3 at 80%) runs cold on the engine monitor and misfires; healthy ones do not',
+      !rough0 && healthy[2] === Math.max(...healthy) && worn[2] < Math.min(...others) - 40 && ac.cylRough,
+      `healthy ${healthy.join('/')} F, with #3 worn ${worn.join('/')} F, rough ${ac.cylRough}`); }
   // spark plugs: a long rich idle fouls them (left side first); the mag check
   // shows it as a big, rough drop on that side; leaned high power burns it off
   { const ac = mk('c172'), idle = cs({ throttle: 0 });

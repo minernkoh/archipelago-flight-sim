@@ -302,6 +302,14 @@ export function drawSteamPanel(x, W, H, ac, hud, ui = null) {
     label(x, ex, gy - r * 0.84, `EGT ${Math.round(num(ac.egt, 70))}\u00b0F`, r * 0.15);
     const warn = ac.shockCooling || hot > 460;
     label(x, ex, gy - r * 0.68, `CHT${ci} ${Math.round(hot)}\u00b0F`, r * 0.13, warn ? '#ffb300' : '#9aa0a6');
+    // engine monitor bars: one per cylinder head (100-500 F); a worn cylinder
+    // shows up as the COLD one
+    const bx = ex - r * 1.02, by = gy - r * 0.62, bw = r * 0.07, bh = r * 0.32;
+    for (let i = 0; i < cht.length; i++) {
+      const f = clamp((cht[i] - 100) / 400, 0, 1), X = bx + i * bw * 1.5;
+      x.fillStyle = '#15171a'; x.fillRect(X, by - bh, bw, bh);
+      x.fillStyle = cht[i] > 460 ? '#ffb300' : '#3fbf4f'; x.fillRect(X, by - bh * f, bw, bh * f);
+    }
   }
   // radio stack: COM, NAV and the transponder, then the autopilot (KAP 140
   // style) when clickable; the clickable stack is compressed so all of it

@@ -135,7 +135,7 @@ export function resetSystems(ac) {
   ac._flapJam = null; ac.gyro = null;
   ac.oilQty = 1; ac.oilT = null; ac.oilLowT = 0;      // oil warms up again from the next update
   ac.cht = null; ac.chtRate = 0; ac.shockCooling = false; ac.engineWear = 0; ac.pitotIce = 0; ac.screenMist = 0;   // a fresh engine on every respawn
-  ac.plugFoul = { L: 0, R: 0 }; ac.plugRough = false;
+  ac.plugFoul = { L: 0, R: 0 }; ac.plugRough = false; ac.cylWear = [0, 0, 0, 0]; ac.chtRates = [0, 0, 0, 0]; ac.cylRough = false;
   ac.breakers = { avn: true, ap: true, flap: true, lts: true, com: true, xpdr: true, tc: true, pitot: true, altFld: true,
     ldg: true, navl: true, strb: true, bcn: true, inst: true };
   // Ready-to-fly: master on, mags BOTH, mixture rich, engine turning, full battery.
@@ -156,7 +156,7 @@ export function setColdStart(ac) {
   ac.batteryCharge = 1; ac.avionics = false;
   ac.oilT = 59; ac.oilP = 0; ac.oilQty = 1; ac.oilLowT = 0;   // a cold engine: oil at ambient
   ac.cht = [70, 70, 70, 70]; ac.egt = 70;
-  ac.plugFoul = { L: 0, R: 0 }; ac.plugRough = false;
+  ac.plugFoul = { L: 0, R: 0 }; ac.plugRough = false; ac.cylWear = [0, 0, 0, 0]; ac.chtRates = [0, 0, 0, 0]; ac.cylRough = false;
 }
 
 // Oil system (piston engines, v12): pressure follows rpm, reads high on cold
@@ -203,31 +203,43 @@ export function mixtureState(mixture, rho) {
 
 // Cylinder heads (start-up pistons, v12): four CHTs heated by the exhaust and
 // cooled by the airflow over the fins, each with its own offset (the rear
-// cylinders run hot). Shock cooling (the hottest head falling faster than
-// 50 F/min, e.g. a power-off descent at speed) and heads over 460 F add to
-// `engineWear` (0..1), which costs power. Healthy flight never wears it, so
-// the cruise hash is untouched.
+// cylinders run hot). Each cylinder wears on its own (`cylWear[i]`): shock
+// cooling (its head falling faster than 50 F/min, e.g. a power-off descent at
+// speed) and its head over 460 F. A worn cylinder loses compression: it
+// burns less, so its head runs COOLER (what an engine monitor shows), and past
+// half worn it misfires (`ac.cylRough`). `engineWear` (0..1, costs power) is
+// their average. Healthy flight never wears it, so the cruise hash holds.
 const CHT_OFFSET = [-14, 4, 18, -6];
 function updateCylinders(ac, dt, V) {
   const kt = V * 1.9438;
   if (!ac.cht) ac.cht = CHT_OFFSET.map(o => (ac.engineRunning ? 360 : 70) + (ac.engineRunning ? o : 0));
+  if (!ac.cylWear) ac.cylWear = [0, 0, 0, 0];
+  if (!ac.chtRates) ac.chtRates = [0, 0, 0, 0];
   const hot0 = Math.max(...ac.cht);
+  let wearSum = 0, worst = 0;
   for (let i = 0; i < 4; i++) {
+    const w = ac.cylWear[i];
     const target = ac.engineRunning
-      ? 70 + (ac.egt - 70) * 0.27 + CHT_OFFSET[i] - 0.9 * Math.max(0, kt - 70)
+      ? 70 + (ac.egt - 70) * 0.27 * (1 - 0.6 * w) + CHT_OFFSET[i] - 0.9 * Math.max(0, kt - 70)
       : 70;
     // heads heat in ~90 s; the fins shed heat faster at speed
     const tau = target > ac.cht[i] ? 90 : Math.max(25, 160 - kt);
+    const before = ac.cht[i];
     ac.cht[i] += (target - ac.cht[i]) * Math.min(1, dt / tau);
+    const r = dt > 0 ? (ac.cht[i] - before) / dt * 60 : 0;
+    ac.chtRates[i] += (r - ac.chtRates[i]) * Math.min(1, dt / 3);
+    let dw = 0;
+    if (ac.engineRunning && ac.chtRates[i] < -50 && ac.cht[i] > 200) dw += (-ac.chtRates[i] - 50) * 2e-6 * dt;
+    if (ac.cht[i] > 460) dw += (ac.cht[i] - 460) * 4e-6 * dt;
+    if (dw > 0) { ac.cylWear[i] = Math.min(1, w + dw); wearSum += dw; }
+    worst = Math.max(worst, ac.cylWear[i]);
   }
   const hot = Math.max(...ac.cht);
   const rate = dt > 0 ? (hot - hot0) / dt * 60 : 0;            // F per minute
   ac.chtRate = (ac.chtRate ?? 0) + (rate - (ac.chtRate ?? 0)) * Math.min(1, dt / 3);
   ac.shockCooling = ac.engineRunning && ac.chtRate < -50 && hot > 200;
-  let wear = 0;
-  if (ac.shockCooling) wear += (-ac.chtRate - 50) * 2e-6 * dt;
-  if (hot > 460) wear += (hot - 460) * 4e-6 * dt;
-  if (wear > 0) ac.engineWear = Math.min(1, (ac.engineWear || 0) + wear);
+  if (wearSum > 0) ac.engineWear = Math.min(1, (ac.engineWear || 0) + wearSum / 4);
+  ac.cylRough = ac.engineRunning && worst > 0.5;
 }
 
 // Electrical load on the bus (amps) for a start-up aircraft: instruments and
