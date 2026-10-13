@@ -338,29 +338,54 @@ export function slotStraightIn(rwy, circuit, spacing, { ground = null, from = 0 
 }
 
 /**
- * An airliner that reacts (v12): `goAround(t)` sends it around from final
- * (the tower does it when YOU hold the runway). It climbs straight ahead at
- * `climbDeg`, accelerating, and leaves; it skips the rest of that cycle
- * (no landing, so no taxi, stand or departure) and flies its schedule again
- * from the next one. Everything else passes straight through to `traf`.
+ * An airliner that reacts (v12). Two tower instructions, both driven by
+ * `react(t, dt, busy)` once per frame (traffic.js; `busy` = playerBusy):
+ *  - GO AROUND: on final inside 3 km while you hold the runway. It climbs
+ *    straight ahead at `climbDeg`, accelerating, leaves after `leave` s and
+ *    skips the rest of that cycle (no landing, taxi, stand or departure).
+ *  - HOLD POSITION: at the hold-short line about to line up while you are on
+ *    the runway or short final, or while other traffic (`setOthers`: the other
+ *    airliners, the club aircraft) will use the runway during its line-up and
+ *    roll. The rest of its departure is held back by `extra` until that is
+ *    clear. A departure pushed into the next cycle keeps the airliner; that
+ *    cycle's arrival appears once it is gone (still 10+ km out), or is skipped
+ *    when the delay is longer (a real delay); the hold can last up to two
+ *    cycles, then it gives up. It always vanishes for a moment before it
+ *    reappears as a new arrival, far out on final, so the model never jumps.
+ * Everything else passes straight through to `traf`.
  */
 export function withGoAround(traf, rwy, { climbDeg = 6, accel = 1.2, vmax = 85, leave = 100 } = {}) {
   const h = rwy.headingRad, fx = Math.cos(h), fz = -Math.sin(h), G = Math.tan(climbDeg * Math.PI / 180);
+  const P = traf.period, GAP = 2;
   let ga = null;                       // { t0, end, x, y, z, v } (absolute times)
+  let hold = null;                     // { start, c0, extra } (start = absolute start of the held cycle)
+  let others = [];
   const out = {};
+  const S = traf.schedule;
   const active = (t) => ga && t >= ga.t0 && t < ga.end;
+  // the held flight is over once its climb-out is (absolute)
+  const lateEnd = () => hold.start + S.dep0 + traf.tTO + traf.tClimb + hold.extra;
+  // the held flight ends inside its own cycle: nothing changes; within the
+  // first minute of the next: that arrival (still 10+ km out) appears after
+  // it; later than that: the next arrival is skipped
+  const holdEnd = () => {
+    const e = lateEnd();
+    return e <= hold.start + P - GAP ? hold.start + P : e <= hold.start + P + 60 ? e + GAP : hold.start + 2 * P;
+  };
+  const inHold = (t) => !!hold && t >= hold.start + hold.c0 && t < holdEnd();
   const w = Object.create(traf);
+  w.setOthers = (list) => { others = list.filter(o => o !== w); };
   w.goAround = (t) => {
-    if (active(t)) return false;
+    if (active(t) || inHold(t)) return false;
     const j = traf.at(t);
     if (!j.visible || j.phase !== 'final') return false;
     // the rest of this cycle is abandoned
-    ga = { t0: t, end: t + (traf.period - traf.cycle(t)), x: j.x, y: j.y, z: j.z, v: j.speed || 72 };
+    ga = { t0: t, end: t + (P - traf.cycle(t)), x: j.x, y: j.y, z: j.z, v: j.speed || 72 };
     return true;
   };
   w.goingAround = (t) => active(t);
-  w.at = (t) => {
-    if (!active(t)) return traf.at(t);
+  w.holding = (t) => inHold(t) && hold.extra > 0;
+  function goAroundPose(t) {
     const j = traf.at(t);              // for the static fields (type, heavy, ...)
     Object.assign(out, j);
     const tt = t - ga.t0, tv = Math.min(tt, (vmax - ga.v) / accel);
@@ -372,8 +397,47 @@ export function withGoAround(traf, rwy, { climbDeg = 6, accel = 1.2, vmax = 85, 
     out.visible = tt < leave;          // then it is off to another approach
     if (!out.visible) out.phase = 'gone';
     return out;
+  }
+  const gone = (t) => {
+    Object.assign(out, traf.at(t));
+    out.visible = false; out.phase = 'gone'; out.onRunway = false; out.toAim = 1e9; out.departing = false;
+    return out;
   };
-  w.occupies = (t) => active(t) ? false : traf.occupies(t);
+  w.at = (t) => {
+    if (active(t)) return goAroundPose(t);
+    if (inHold(t)) {
+      if (t >= holdEnd() - GAP) return gone(t);                // a beat before the next flight
+      const tc = t - hold.extra - hold.start;                   // where the held flight is in its schedule
+      return tc >= P ? gone(t) : traf.at(t - hold.extra);
+    }
+    return traf.at(t);
+  };
+  w.occupies = (t) => {
+    if (active(t)) return false;
+    const j = w.at(t);
+    return j.visible && (j.onRunway || (j.phase === 'final' && j.toAim < 1500));
+  };
+  // does any other traffic use the runway in [t, t + span]?
+  const othersBusy = (t, span) => others.some(o => { for (let u = t; u <= t + span; u += 1) if (o.occupies(u)) return true; return false; });
+  /** Tower logic, once per frame. Returns 'goAround' | 'hold' | null (the call to make). */
+  w.react = (t, dt, busy) => {
+    if (hold && t >= holdEnd()) hold = null;
+    const j = w.at(t);
+    if (busy === 'runway' && j.visible && j.phase === 'final' && j.toAim < 3000 && !active(t)) return w.goAround(t) ? 'goAround' : null;
+    if (!S || active(t) || j.phase !== 'holding') return null;
+    // about to line up?
+    const tc = inHold(t) ? t - hold.extra - hold.start : traf.cycle(t);
+    if (tc + dt < S.tLine) return null;
+    const blocked = !!busy || othersBusy(t, (S.dep0 - S.tLine) + traf.tTO + 12);
+    if (!blocked) return null;
+    let call = null;
+    if (!inHold(t)) {
+      hold = { start: t - traf.cycle(t), c0: traf.cycle(t), extra: 0 };
+      call = busy ? 'hold' : null;     // holding for other traffic needs no call to you
+    }
+    hold.extra += dt;
+    return call;
+  };
   return w;
 }
 

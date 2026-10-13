@@ -1972,6 +1972,35 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
       sent && !again && !landed && jump === 0 && sink === 0 && occ === 0 && [...after].every(p => p === 'gone') && nx.x === bx.x && nx.phase === bx.phase,
       `${jump} jumps, ${sink} sinks, ${occ} occupied, later phases ${[...after].join(',')}, next cycle ${nx.phase}`);
   }
+  { // the airliner holds short while you are on the runway, then lines up once you are clear
+    const { withGoAround, createCircuitTraffic: cct } = await import('../src/aitraffic.js');
+    const tn = await import('../src/taxinet.js');
+    const map = (await import('../src/maps/archipelago.js')).archipelagoMap, r = map.runway;
+    const club = cct(r), P = club.total / club.speed;
+    const sU = r.spawn.x * Math.cos(r.headingRad) - r.spawn.z * Math.sin(r.headingRad);
+    const base = slotStraightIn(r, club, P / 2, { ground: tn.planGround(r, map.taxiLayout(), { aim: sU + 300, vapp: 72 }) });
+    const S = base.schedule;
+    // absolute time of the line-up in the first cycle
+    let tL = 0; while (base.cycle(tL) < S.tLine - 0.01 || base.cycle(tL) > S.tLine + 1) tL += 0.25;
+    for (const [label, busyFor] of [['you on the runway', 70], ['you there for 400 s: the next arrival is skipped', 400]]) {
+      const jet = withGoAround(base, r);
+      const calls = []; let rolledWhileBusy = 0, prev = null, jump = 0, rolledAt = null, phases = new Set();
+      for (let t = tL - 30; t < tL + 560; t += 0.25) {
+        const busy = t >= tL - 5 && t < tL - 5 + busyFor ? 'runway' : false;
+        const call = jet.react(t, 0.25, busy); if (call) calls.push(call);
+        const j = { ...jet.at(t) };
+        if (j.visible) phases.add(j.phase);
+        if (busy && (j.phase === 'lineup' || j.phase === 'departure')) rolledWhileBusy++;
+        if (j.phase === 'departure' && rolledAt == null) rolledAt = t;
+        if (prev && prev.visible && j.visible && Math.hypot(j.x - prev.x, j.z - prev.z) > 0.25 * 75 + 1) jump++;
+        prev = j;
+      }
+      check(`airliner hold short (${label}): holds, calls once, departs after you clear, no jumps`,
+        calls.length === 1 && calls[0] === 'hold' && rolledWhileBusy === 0 && rolledAt > tL - 5 + busyFor && jump === 0 && phases.has('climb')
+          && (busyFor < 100 ? phases.has('final') : !phases.has('final')),
+        `calls ${calls.join(',')}, rolled ${rolledAt == null ? 'never' : (rolledAt - (tL - 5 + busyFor)).toFixed(0) + ' s after you cleared'}, ${jump} jumps, phases ${[...phases].join(',')}`);
+    }
+  }
   { // integration: a player parked on the runway; the tower sends every arriving airliner around
     const THREE = await import('three');
     const { createTraffic } = await import('../src/traffic.js');
@@ -1990,6 +2019,33 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
       jetGa.length >= 2 && landedOnYou === 0 && new Set(jetGa.map(e => e.who)).size === 2,
       `${jetGa.length} airliner go-arounds (${[...new Set(jetGa.map(e => e.who))].join(' / ')}), ${landedOnYou} landing samples`);
     tr.dispose();
+    // you on and off the runway in bursts: the airliners hold, go around and
+    // depart around you, the other jet and the club traffic
+    const tr2 = createTraffic(new THREE.Scene(), map);
+    const away = { x: r.spawn.x + 3000, y: (r.y || 0) + 600, z: r.spawn.z + 3000 };
+    // (only ENTRIES count against the jets: one already rolling when you
+    // teleport onto the runway cannot vanish, as in the real thing)
+    let entries = 0, jets2 = 0, jetClub = 0, jumps = 0; const kinds = {}; const last = {}, prevOcc = {};
+    for (let t = 0; t < 3000; t += 0.5) {
+      const onRwy = (t % 170) < 90;
+      tr2.update(0.5, cam, t, onRwy ? pos : away, null, onRwy ? player : { vel: { x: 60, y: 0, z: 0 }, onGround: false });
+      for (const e of tr2.drainEvents()) kinds[e.kind] = (kinds[e.kind] || 0) + 1;
+      const L = tr2.aiStates(t);
+      const jets = L.filter(a => a.heavy && !a.otherRunway), club = L.filter(a => !a.heavy);
+      const jOcc = jets.filter(a => a.onRunway);
+      for (const a of jets) {
+        if (a.onRunway && !prevOcc[a.id] && onRwy && t % 170 > 1) entries++;
+        prevOcc[a.id] = a.onRunway;
+        const p = last[a.id]; if (p && p.t === t - 0.5 && Math.hypot(a.x - p.x, a.z - p.z) > 0.5 * 90 + 1) jumps++;
+        last[a.id] = { t, x: a.x, z: a.z };
+      }
+      if (jOcc.length > 1) jets2++;
+      if (jOcc.some(a => a.phase === 'lineup' || a.phase === 'departure') && club.some(a => a.onRunway)) jetClub++;
+    }
+    check('airliners work around you, the other jet and the club traffic (hold short, go around), never entering an occupied runway, no jumps',
+      entries === 0 && jets2 === 0 && jetClub === 0 && jumps === 0 && (kinds.hold || 0) > 0 && (kinds.goAround || 0) > 0,
+      `${entries} entries onto your runway, jet+jet ${jets2}, jet departing with club on runway ${jetClub}, ${jumps} jumps, calls ${JSON.stringify(kinds)}`);
+    tr2.dispose();
   }
   { // the tower sequencing the club traffic around the player (createSequencer)
     const { createSequencer } = await import('../src/aitraffic.js');
@@ -2060,6 +2116,9 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   const ac2 = tower();
   ac2.update({ onGround: true, agl: 0, cross: 0, aiCalls: [{ kind: 'orbit', who: 'Cessna two', why: 'runway occupied' }] }, 0);
   check('ATC: the tower is heard working the AI traffic ("make left three-sixty")', said.some(x => x.id === 'aiOrbit' && /Cessna two, make left three-sixty, runway occupied/.test(x.t)), said.map(x => x.t).join(' | '));
+  const ah = tower();
+  ah.update({ onGround: true, agl: 0, cross: 0, aiCalls: [{ kind: 'hold', who: 'Archipelago two one heavy', why: 'traffic on the runway' }] }, 0);
+  check('ATC: the tower holds a departing airliner short ("hold position")', said.some(x => x.id === 'aiHold' && /Archipelago two one heavy, hold position, traffic on the runway/.test(x.t)), said.map(x => x.t).join(' | '));
   const em = tower();
   em.update({ onGround: false, agl: 800, cross: 0 }, 0);
   em.update({ onGround: false, agl: 600, vsFpm: 0, cross: 3000, squawk: 7700 }, 5);

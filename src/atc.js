@@ -54,6 +54,7 @@ export const PHRASES = {
   // the tower working the circuit traffic around you (heard on frequency)
   aiOrbit: (c) => `${c.who}, make left three-sixty, ${c.why}.`,
   aiGoAround: (c) => `${c.who}, go around, ${c.why}.`,
+  aiHold: (c) => `${c.who}, hold position, ${c.why}.`,
   emergency: (c) => `${c.callsign}, ${c.field} tower, roger your emergency squawk. All runways available, wind calm, runway ${c.rwy}, cleared to land.`,
 };
 const NUM = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
@@ -146,7 +147,7 @@ export function createAtc({ field, rwyName, callsign, say } = {}) {
       // instructions to the AI traffic go out between our own calls
       if (aiQueue.length && snap.squawk !== 7700) {
         const e = aiQueue.shift();
-        return emit(e.kind === 'orbit' ? 'aiOrbit' : 'aiGoAround', { who: e.who, why: e.why });
+        return emit(e.kind === 'orbit' ? 'aiOrbit' : e.kind === 'hold' ? 'aiHold' : 'aiGoAround', { who: e.who, why: e.why });
       }
 
       const { onGround, agl = 0, vsFpm = 0, cross = 0, touchdown = null, groundSpeedKt = 0 } = snap;

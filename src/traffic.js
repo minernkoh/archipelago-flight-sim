@@ -345,6 +345,12 @@ export function createTraffic(scene, map, opts = {}) {
   // the tower sequences the club traffic around YOU: 360s on downwind while
   // you hold the runway or short final, go-arounds if it is already on base
   const seq = ai ? createSequencer(ai, AI_SPACING) : null;
+  // a held airliner lines up only when neither the other airliners nor the
+  // club traffic will use the runway during its line-up and roll
+  if (seq) {
+    const club = { occupies: (u) => [0, 1].some(i => { const a = seq.pose(i, u); return a.onRunway || (a.phase === 'final' && a.toAim < 1500); }) };
+    for (const j of mainJets) if (j.setOthers) j.setOthers([...mainJets, club]);
+  }
   const towerEvents = [];
   const rh = rwy ? rwy.headingRad : 0, rfx = Math.cos(rh), rfz = -Math.sin(rh), rrx = Math.sin(rh), rrz = Math.cos(rh);
   const rAim = rwy ? (rwy.spawn.x * rfx + rwy.spawn.z * rfz) + 300 : 0;
@@ -486,12 +492,14 @@ export function createTraffic(scene, map, opts = {}) {
     if (seq && enabled) {
       const busy = playerBusy(player && playerPos ? { pos: playerPos, vel: player.vel, onGround: player.onGround } : null);
       const ev = seq.step(dt, t, busy);
-      // an airliner on final while you hold the runway is sent around too
-      if (busy === 'runway') for (const A of airliners) {
-        if (A.otherRunway || !A.traf.goAround) continue;
-        const j = A.traf.at(t);
-        if (j.visible && j.phase === 'final' && j.toAim < 3000 && A.traf.goAround(t))
-          ev.push({ id: A.id, kind: 'goAround', who: A.callsign, why: 'runway occupied' });
+      // the airliners react too: sent around from final while you hold the
+      // runway, held at the hold-short line while you (or other traffic) are
+      // about to use it (aitraffic.js withGoAround)
+      for (const A of airliners) {
+        if (A.otherRunway || !A.traf.react) continue;
+        const call = A.traf.react(t, dt, busy);
+        if (call === 'goAround') ev.push({ id: A.id, kind: 'goAround', who: A.callsign, why: 'runway occupied' });
+        else if (call === 'hold') ev.push({ id: A.id, kind: 'hold', who: A.callsign, why: busy === 'runway' ? 'traffic on the runway' : 'traffic on final' });
       }
       if (ev.length) towerEvents.push(...ev);
       if (towerEvents.length > 3) towerEvents.splice(0, towerEvents.length - 3);   // never queue stale calls
