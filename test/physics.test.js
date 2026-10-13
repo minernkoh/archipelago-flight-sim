@@ -1761,6 +1761,26 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   { const a = mk('c172'), b = mk('c172'); const c = cs({ throttle: 0.6 }); b.sys.mags = 'L'; fly(a, c, 3); fly(b, c, 3);
     const drop = (a.rpmNorm - b.rpmNorm) * 2000;              // panel tach: 700 + 2000 x rpmNorm
     check('mag check: one magneto drops ~50-125 rpm and a little power, engine keeps running', drop > 50 && drop < 125 && b.engineRunning && b.thrust < a.thrust, `${drop.toFixed(0)} rpm drop`); }
+  // spark plugs: a long rich idle fouls them (left side first); the mag check
+  // shows it as a big, rough drop on that side; leaned high power burns it off
+  { const ac = mk('c172'), idle = cs({ throttle: 0 });
+    const hold = () => { ac.q = { x: 0, y: 0, z: 0, w: 1 }; ac.omega = { x: 0, y: 0, z: 0 }; ac.vel = { x: 0, y: 0, z: 0 }; ac.pos.y = 1.3; };
+    const magDrop = (thr = 0.45) => {   // run-up: BOTH, then L, then R, a few seconds each
+      const c = cs({ throttle: thr }); ac.sys.mags = 'BOTH'; fly(ac, c, 4, hold); const both = ac.rpmNorm;
+      ac.sys.mags = 'L'; fly(ac, c, 3, hold); const L = (both - ac.rpmNorm) * 2000, roughL = ac.plugRough;
+      ac.sys.mags = 'R'; fly(ac, c, 3, hold); const R = (both - ac.rpmNorm) * 2000;
+      ac.sys.mags = 'BOTH'; return { L: Math.round(L), R: Math.round(R), roughL };
+    };
+    const clean = magDrop();
+    fly(ac, idle, 600, hold);                                   // ten minutes idling full rich
+    const foul0 = { ...ac.plugFoul }, fouled = magDrop();
+    ac.sys.mixture = 0.9; fly(ac, cs({ throttle: 0.85 }), 90, hold); ac.sys.mixture = 1;   // lean, high power
+    const cleared = magDrop();
+    const b = mk('c172'); b.sys.mixture = 0.82; fly(b, idle, 600, () => { b.q = { x: 0, y: 0, z: 0, w: 1 }; b.omega = { x: 0, y: 0, z: 0 }; b.vel = { x: 0, y: 0, z: 0 }; b.pos.y = 1.3; });
+    check('plugs: ten minutes of rich idle fouls the left plugs (big, rough left drop), leaning + power clears them, a leaned idle never fouls',
+      clean.L < 125 && Math.abs(clean.L - clean.R) < 10 && fouled.L > 125 && fouled.L - fouled.R > 40 && fouled.roughL && foul0.L > foul0.R
+        && cleared.L < 125 && Math.abs(cleared.L - cleared.R) < 25 && b.plugFoul.L < 0.01,
+      `rough ${fouled.roughL}, leaned idle foul ${b.plugFoul?.L.toFixed(3)}, running ${b.engineRunning}; drops L/R: clean ${clean.L}/${clean.R}, fouled ${fouled.L}/${fouled.R} (foul ${foul0.L.toFixed(2)}/${foul0.R.toFixed(2)}), cleared ${cleared.L}/${cleared.R}`); }
   // windscreen mist: builds in moist air with the cabin heat off; CABIN HT clears it
   { const { updateEngineSystems } = await import('../src/physics/flightModel.js');
     const ac = mk('c172'); const wet = { carbIceRisk: 1 }, dry = { carbIceRisk: 0 };

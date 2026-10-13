@@ -135,6 +135,7 @@ export function resetSystems(ac) {
   ac._flapJam = null; ac.gyro = null;
   ac.oilQty = 1; ac.oilT = null; ac.oilLowT = 0;      // oil warms up again from the next update
   ac.cht = null; ac.chtRate = 0; ac.shockCooling = false; ac.engineWear = 0; ac.pitotIce = 0; ac.screenMist = 0;   // a fresh engine on every respawn
+  ac.plugFoul = { L: 0, R: 0 }; ac.plugRough = false;
   ac.breakers = { avn: true, ap: true, flap: true, lts: true, com: true, xpdr: true, tc: true, pitot: true, altFld: true,
     ldg: true, navl: true, strb: true, bcn: true, inst: true };
   // Ready-to-fly: master on, mags BOTH, mixture rich, engine turning, full battery.
@@ -155,6 +156,7 @@ export function setColdStart(ac) {
   ac.batteryCharge = 1; ac.avionics = false;
   ac.oilT = 59; ac.oilP = 0; ac.oilQty = 1; ac.oilLowT = 0;   // a cold engine: oil at ambient
   ac.cht = [70, 70, 70, 70]; ac.egt = 70;
+  ac.plugFoul = { L: 0, R: 0 }; ac.plugRough = false;
 }
 
 // Oil system (piston engines, v12): pressure follows rpm, reads high on cold
@@ -261,6 +263,25 @@ export function electricalLoad(ac) {
   return a;
 }
 
+// Spark plug fouling (start-up pistons, v12): a long idle on a rich mixture
+// lays lead and carbon on the plugs, the bottom plugs (fired by the LEFT
+// magneto here) fastest. It hides on BOTH and shows on the mag check as a
+// bigger, rough drop on the fouled side; leaning and a minute at high power
+// burns it off, as the POH advises. Normal flight never fouls (idle only), so
+// the cruise hash is untouched. `plugFoul` {L, R} 0..1.
+const PLUG_RATE = { L: 1 / 720, R: 1 / 1300 };
+function updatePlugs(ac, dt) {
+  const f = ac.plugFoul || (ac.plugFoul = { L: 0, R: 0 });
+  if (!ac.engineRunning) { ac.plugRough = false; return; }
+  const rpm = ac.rpmNorm || 0, r = ac.mixRatio ?? 1;
+  for (const m of ['L', 'R']) {
+    if (rpm < 0.45 && r > 0.85) f[m] = Math.min(1, f[m] + dt * PLUG_RATE[m] * Math.min(1.5, (r - 0.85) / 0.15));
+    else if (rpm > 0.6 && f[m] > 0) f[m] = Math.max(0, f[m] - dt / (r < 1.02 ? 30 : 50));   // ~1,900 rpm and up
+  }
+  const mag = ac.sys?.mags;
+  ac.plugRough = (mag === 'L' || mag === 'R') && f[mag] > 0.45;
+}
+
 // Piston start/electrical state machine. Only meaningful for p.startup aircraft;
 // everything else just mirrors the engineFailed flag so behaviour is unchanged.
 export function updateEngineSystems(ac, dt, env = null, throttle = 0) {
@@ -281,6 +302,7 @@ export function updateEngineSystems(ac, dt, env = null, throttle = 0) {
   const magsHot = s.mags === 'L' || s.mags === 'R' || s.mags === 'BOTH' || s.mags === 'START';
   const mx = mixtureState(s.mixture, airDensity(ac.pos.y));
   ac.mixRatio = mx.r; ac.mixRough = ac.engineRunning && mx.rough;
+  updatePlugs(ac, dt);
   const mixOk = s.mixture > 0.3 && !mx.quits;
   // fuel selector OFF: the engine runs on what is in the lines for ~12 s, then starves
   ac.fuelStarveT = s.fuel === 'OFF' ? (ac.fuelStarveT || 0) + dt : 0;
@@ -427,7 +449,11 @@ export function step(ac, controls, env, dt) {
     if (p.startup && !ac.engineRunning) ac.rpmNorm = ac.crankT > 0 ? 0.1 : 0; // cranking blip or dead prop
     else ac.rpmNorm = 0.25 + 0.75 * ac.spool;
     // mag check: one magneto fires one plug per cylinder, a slower burn: ~75 rpm drop at run-up
-    if (p.startup && ac.engineRunning && (ac.sys.mags === 'L' || ac.sys.mags === 'R')) { ac.rpmNorm *= 0.94; thrust *= 0.95; }
+    if (p.startup && ac.engineRunning && (ac.sys.mags === 'L' || ac.sys.mags === 'R')) {
+      // fouled plugs on that side misfire: a bigger drop (updatePlugs)
+      const foul = ac.plugFoul ? ac.plugFoul[ac.sys.mags] : 0;
+      ac.rpmNorm *= 0.94 * (1 - 0.1 * foul); thrust *= 0.95 * (1 - 0.15 * foul);
+    }
   }
   if (ac.systems.power === false && !noPower) thrust *= 0.5;   // rough-running engine
   if (p.startup && (ac.carbIce > 0 || ac.sys.carbHeat)) thrust *= (1 - 0.6 * ac.carbIce) * (ac.sys.carbHeat ? 0.9 : 1);

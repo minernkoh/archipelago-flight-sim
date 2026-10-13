@@ -381,7 +381,7 @@ export function createAudio() {
           setP('ab', 0, t);
         }
         setP('gain', alive ? 1 : 0, t, 0.05);
-        setP('misfire', ac.systems?.power === false || (ac.carbIce || 0) > 0.35 || ac.mixRough ? 1 : 0, t);   // rough: failure, carb ice or too lean
+        setP('misfire', ac.systems?.power === false || (ac.carbIce || 0) > 0.35 || ac.mixRough || ac.plugRough ? 1 : 0, t);   // rough: failure, carb ice, too lean or fouled plugs on one mag
       }
       const legacy = !synth;
       const propOn = legacy && alive && !isJet;
