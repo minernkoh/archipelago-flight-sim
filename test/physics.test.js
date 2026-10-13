@@ -1947,6 +1947,50 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
         `${both} shared-runway samples, ${clubClash} club clashes, ground min ${gMin.toFixed(0)} m, air min ${aMin.toFixed(0)} m, phases ${[...seen].join(',')}`);
     }
   }
+  { // the airliner goes around when the tower sends it (you on the runway)
+    const { withGoAround, createCircuitTraffic: cct } = await import('../src/aitraffic.js');
+    const r = (await import('../src/maps/archipelago.js')).archipelagoMap.runway;
+    const club = cct(r), P = club.total / club.speed;
+    const base = slotStraightIn(r, club, P / 2), jet = withGoAround(base, r);
+    let t0 = 0; while (!(jet.at(t0).phase === 'final' && jet.at(t0).toAim < 2000)) t0 += 0.5;
+    const p0 = { ...jet.at(t0) };
+    const sent = jet.goAround(t0), again = jet.goAround(t0 + 1);
+    let prev = p0, jump = 0, sink = 0, occ = 0, landed = false;
+    for (let t = t0 + 0.25; t < t0 + 90; t += 0.25) {
+      const j = jet.at(t);
+      if (j.phase !== 'goAround') { landed = true; break; }
+      if (Math.hypot(j.x - prev.x, j.z - prev.z) > 0.25 * 90 + 1) jump++;
+      if (j.y < prev.y - 0.01) sink++;
+      if (jet.occupies(t)) occ++;
+      prev = { ...j };
+    }
+    // the rest of that cycle is abandoned (no taxi, stand or departure), the next is normal
+    let after = new Set();
+    for (let t = t0 + 110; t < t0 + (base.period - base.cycle(t0)); t += 2) after.add(jet.at(t).phase);
+    const tn = t0 + (base.period - base.cycle(t0)) + 5, nx = { ...jet.at(tn) }, bx = { ...base.at(tn) };
+    check('airliner go-around: climbs away straight ahead, smoothly, off the runway, then skips that cycle',
+      sent && !again && !landed && jump === 0 && sink === 0 && occ === 0 && [...after].every(p => p === 'gone') && nx.x === bx.x && nx.phase === bx.phase,
+      `${jump} jumps, ${sink} sinks, ${occ} occupied, later phases ${[...after].join(',')}, next cycle ${nx.phase}`);
+  }
+  { // integration: a player parked on the runway; the tower sends every arriving airliner around
+    const THREE = await import('three');
+    const { createTraffic } = await import('../src/traffic.js');
+    const map = (await import('../src/maps/archipelago.js')).archipelagoMap, r = map.runway;
+    const tr = createTraffic(new THREE.Scene(), map);
+    const pos = { x: r.spawn.x, y: (r.y || 0) + 1.3, z: r.spawn.z }, cam = new THREE.Vector3(pos.x, pos.y + 20, pos.z);
+    const player = { vel: { x: 0, y: 0, z: 0 }, onGround: true };
+    const ev = []; let landedOnYou = 0;
+    for (let t = 0; t < 1250; t += 0.5) {
+      tr.update(0.5, cam, t, pos, null, player);
+      ev.push(...tr.drainEvents());
+      for (const a of tr.aiStates(t)) if (a.heavy && !a.otherRunway && a.phase === 'runway') landedOnYou++;
+    }
+    const jetGa = ev.filter(e => e.kind === 'goAround' && /heavy/.test(e.who));
+    check('tower sends arriving airliners around while you hold the runway; none lands on you',
+      jetGa.length >= 2 && landedOnYou === 0 && new Set(jetGa.map(e => e.who)).size === 2,
+      `${jetGa.length} airliner go-arounds (${[...new Set(jetGa.map(e => e.who))].join(' / ')}), ${landedOnYou} landing samples`);
+    tr.dispose();
+  }
   { // the tower sequencing the club traffic around the player (createSequencer)
     const { createSequencer } = await import('../src/aitraffic.js');
     const sq = createSequencer(ai, period / 2);

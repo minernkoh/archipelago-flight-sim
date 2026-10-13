@@ -338,6 +338,46 @@ export function slotStraightIn(rwy, circuit, spacing, { ground = null, from = 0 
 }
 
 /**
+ * An airliner that reacts (v12): `goAround(t)` sends it around from final
+ * (the tower does it when YOU hold the runway). It climbs straight ahead at
+ * `climbDeg`, accelerating, and leaves; it skips the rest of that cycle
+ * (no landing, so no taxi, stand or departure) and flies its schedule again
+ * from the next one. Everything else passes straight through to `traf`.
+ */
+export function withGoAround(traf, rwy, { climbDeg = 6, accel = 1.2, vmax = 85, leave = 100 } = {}) {
+  const h = rwy.headingRad, fx = Math.cos(h), fz = -Math.sin(h), G = Math.tan(climbDeg * Math.PI / 180);
+  let ga = null;                       // { t0, end, x, y, z, v } (absolute times)
+  const out = {};
+  const active = (t) => ga && t >= ga.t0 && t < ga.end;
+  const w = Object.create(traf);
+  w.goAround = (t) => {
+    if (active(t)) return false;
+    const j = traf.at(t);
+    if (!j.visible || j.phase !== 'final') return false;
+    // the rest of this cycle is abandoned
+    ga = { t0: t, end: t + (traf.period - traf.cycle(t)), x: j.x, y: j.y, z: j.z, v: j.speed || 72 };
+    return true;
+  };
+  w.goingAround = (t) => active(t);
+  w.at = (t) => {
+    if (!active(t)) return traf.at(t);
+    const j = traf.at(t);              // for the static fields (type, heavy, ...)
+    Object.assign(out, j);
+    const tt = t - ga.t0, tv = Math.min(tt, (vmax - ga.v) / accel);
+    const d = ga.v * tv + 0.5 * accel * tv * tv + vmax * Math.max(0, tt - tv);
+    const y = ga.y + d * G, agl = y - (rwy.y || 0);
+    out.x = ga.x + fx * d; out.z = ga.z + fz * d; out.y = y; out.yaw = h; out.pitch = 0.12; out.bank = 0;
+    out.speed = Math.min(vmax, ga.v + accel * tt); out.agl = agl;
+    out.phase = 'goAround'; out.departing = true; out.onRunway = false; out.toAim = 1e9;
+    out.visible = tt < leave;          // then it is off to another approach
+    if (!out.visible) out.phase = 'gone';
+    return out;
+  };
+  w.occupies = (t) => active(t) ? false : traf.occupies(t);
+  return w;
+}
+
+/**
  * A further airliner on a runway that already has one (or more): the same
  * schedule, timed into the gaps of the club traffic AND of the airliners
  * already flying (`others`, same period). Never two on the runway (or short

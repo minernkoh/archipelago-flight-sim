@@ -11,7 +11,7 @@
 // allocation and no Math.random.
 
 import * as THREE from 'three';
-import { createCircuitTraffic, slotStraightIn, slotAnotherAirliner, createSequencer } from './aitraffic.js';
+import { createCircuitTraffic, slotStraightIn, slotAnotherAirliner, withGoAround, createSequencer } from './aitraffic.js';
 import { planGround } from './taxinet.js';
 import { MESH_BUILDERS } from './aircraft/meshes.js';
 import { loft, surface, mergeGeos, PROFILE } from './aircraft/modelkit.js';
@@ -292,6 +292,7 @@ export function createTraffic(scene, map, opts = {}) {
   // cycles repeat every two circuit laps): one on the map's runway, and one
   // on every other runway the map offers (Singapore's parallel 02C).
   const airliners = [];
+  const JET_CALLSIGNS = ['Archipelago two one heavy', 'Archipelago four seven heavy', 'Archipelago six three heavy'];
   function addAirliner(r, layout, id, otherRunway, from, others = null) {
     // ground movements follow the runway's taxiway network (taxinet.js): the
     // synthetic parallel taxiway on the fictional maps, OSM taxiways on the
@@ -304,17 +305,19 @@ export function createTraffic(scene, map, opts = {}) {
     } catch { ground = null; }
     // a further airliner on a runway that already has one is timed around it
     // too, and is simply not flown when no timing keeps them apart
-    const traf = others
+    const slotted = others
       ? slotAnotherAirliner(r, aiNominal, AI_SPACING, { ground, period: others[0].period, others })
       : slotStraightIn(r, aiNominal, AI_SPACING, { ground, from });
-    if (!traf) return null;
+    if (!slotted) return null;
+    // the tower can send it around (you on the runway): withGoAround
+    const traf = otherRunway ? slotted : withGoAround(slotted, r);
     const anim = MESH_BUILDERS.heavy();
     const mesh = anim.group;
     mesh.rotation.order = 'YXZ';
     mesh.traverse(o => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
     mesh.visible = false;
     group.add(mesh);
-    airliners.push({ traf, id, otherRunway, runway: r.name, mesh, anim, avoid: 0,
+    airliners.push({ traf, id, otherRunway, runway: r.name, mesh, anim, avoid: 0, callsign: JET_CALLSIGNS[(id - 2) % JET_CALLSIGNS.length],
       ctl: { elevator: 0, aileron: 0, rudder: 0, throttle: 0.35, flaps: 1, brakes: false },
       st: { onGround: false, agl: 300, airspeed: 72, groundSpeed: 72, rpmNorm: 0.5, vel: { x: 0, y: 0, z: 0 }, q: { x: 0, y: 0, z: 0, w: 1 }, flapsEff: 1, gearPos: 1 },
       air: { on: false, x: 0, y: 0, z: 0 } });
@@ -481,7 +484,15 @@ export function createTraffic(scene, map, opts = {}) {
   function update(dt, camPos, t, playerPos = null, ra = null, player = null) {
     coordRa = ra;
     if (seq && enabled) {
-      const ev = seq.step(dt, t, playerBusy(player && playerPos ? { pos: playerPos, vel: player.vel, onGround: player.onGround } : null));
+      const busy = playerBusy(player && playerPos ? { pos: playerPos, vel: player.vel, onGround: player.onGround } : null);
+      const ev = seq.step(dt, t, busy);
+      // an airliner on final while you hold the runway is sent around too
+      if (busy === 'runway') for (const A of airliners) {
+        if (A.otherRunway || !A.traf.goAround) continue;
+        const j = A.traf.at(t);
+        if (j.visible && j.phase === 'final' && j.toAim < 3000 && A.traf.goAround(t))
+          ev.push({ id: A.id, kind: 'goAround', who: A.callsign, why: 'runway occupied' });
+      }
       if (ev.length) towerEvents.push(...ev);
       if (towerEvents.length > 3) towerEvents.splice(0, towerEvents.length - 3);   // never queue stale calls
     }
