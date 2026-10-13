@@ -167,8 +167,11 @@ export function createCockpit(cfg, hud, p = null) {
     { id: 'flap-up', label: 'FLAP ▲' }, { id: 'flap-dn', label: 'FLAP ▼' },
     // circuit breakers (lit = in): avionics bus, autopilot, flap motor, ... and the alternator field
     { id: 'cb-avn', label: 'CB AVN' }, { id: 'cb-ap', label: 'CB AP' }, { id: 'cb-flap', label: 'CB FLP' },
-    { id: 'cb-lts', label: 'CB LTS' }, { id: 'cb-com', label: 'CB COM' }, { id: 'cb-xpdr', label: 'CB XPD' },
-    ...(glass ? [] : [{ id: 'cb-tc', label: 'CB TC' }, { id: 'cb-pitot', label: 'CB PITOT' }]),
+    ...(glass ? [{ id: 'cb-lts', label: 'CB LTS' }] : []), { id: 'cb-com', label: 'CB COM' }, { id: 'cb-xpdr', label: 'CB XPD' },
+    ...(glass ? [] : [{ id: 'cb-tc', label: 'CB TC' }, { id: 'cb-pitot', label: 'CB PITOT' },
+      // the steam panels break the lights out one breaker each, as in the aeroplane
+      { id: 'cb-ldg', label: 'CB LDG LT' }, { id: 'cb-navl', label: 'CB NAV LT' }, { id: 'cb-strb', label: 'CB STROBE' },
+      { id: 'cb-bcn', label: 'CB BCN' }, { id: 'cb-inst', label: 'CB INST LT' }]),
     ...(p?.startup ? [{ id: 'cb-alt', label: 'CB ALT FLD' }] : []),
     // steam cockpits: light switches, fuel selector (start-up aircraft) and the trim wheel
     ...(glass ? [] : [
@@ -300,17 +303,21 @@ export function createCockpit(cfg, hud, p = null) {
   group.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
   group.visible = false;
 
-  let redrawT = 0, night = false;
+  let redrawT = 0, night = false, backlight = true;
+  const applyLight = () => {
+    // the instrument lights need their breaker (INST LT) and a live bus
+    if (panel) panel.mat.emissiveIntensity = night ? (backlight ? 0.85 : 0.03) : 0.12;
+    for (const st of strips) st.mat.emissiveIntensity = night ? (backlight ? 0.7 : 0.03) : 0.25;
+  };
   const pickables = [...strips.map(st => st.mesh), ...(panel && style !== 'airliner' ? [panel.mesh] : [])];
   return {
     group,
     style,
     strips,
-    setNight(on) {
-      night = !!on;
-      if (panel) panel.mat.emissiveIntensity = night ? 0.85 : 0.12;
-      for (const st of strips) st.mat.emissiveIntensity = night ? 0.7 : 0.25;
-    },
+    setNight(on) { night = !!on; applyLight(); },
+    /** Instrument lighting powered (INST LT breaker in, bus alive). */
+    setBacklight(on) { if (backlight !== !!on) { backlight = !!on; applyLight(); } },
+    get backlight() { return backlight; },
     /** Lit/label state for the switch rows (main.js: AP status + switch positions). */
     /** Flip the steam panel's switch column between switches and breakers. */
     togglePage() { if (ui.sysAll && !glass) ui.page ^= 1; return ui.page; },

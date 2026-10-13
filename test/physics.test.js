@@ -1156,6 +1156,19 @@ import { setColdStart } from '../src/physics/flightModel.js';
     const full = endurance(false), shed = endurance(true);
     check('electrical: shedding load stretches the battery (~6 min -> ~50 min)',
       full.t > 240 && full.t < 600 && shed.t > 6 * full.t, `${full.load} A ${(full.t / 60).toFixed(1)} min, ${shed.load} A ${(shed.t / 60).toFixed(1)} min`);
+    // exterior lights: each on its own breaker, and dark without a powered bus
+    const { litLights } = await import('../src/physics/flightModel.js');
+    const l1 = flying(); const all = { ...litLights(l1) };
+    l1.breakers.strb = false; const noStrobe = { ...litLights(l1) }, ampsNoStrobe = electricalLoad(l1);
+    l1.breakers.strb = true; const ampsAll = electricalLoad(l1);
+    l1.sys.battery = false; const dark = { ...litLights(l1) };
+    l1.sys.battery = true; l1.batteryCharge = 0.05; l1.engineRunning = false; l1.charging = false; const flat = { ...litLights(l1) };
+    check('lights: each has its own breaker (strobe out: only the strobe), and none light without a powered bus',
+      all.land && all.nav && all.strobe && all.beacon && !noStrobe.strobe && noStrobe.land && noStrobe.nav && noStrobe.beacon
+        && ampsAll - ampsNoStrobe === 3 && !dark.land && !dark.nav && !flat.land && !flat.beacon,
+      `${JSON.stringify({ all, noStrobe, dark, flat })} load ${ampsAll} -> ${ampsNoStrobe} A`);
+    const hotJet = createAircraft({ params: AIRCRAFT.hornet, pos: v3(0, 1000, 0), vel: v3(150, 0, 0) });
+    check('lights: aircraft without a start-up sequence are always powered', litLights(hotJet).nav && litLights(hotJet).land);
     const e4 = flying(); e4.sys.avMaster = false;
     run(e4, { throttle: 0.4 }, 0.2);
     check('electrical: AV MSTR off darkens the avionics, engine unaffected', e4.avionics === false && e4.engineRunning);

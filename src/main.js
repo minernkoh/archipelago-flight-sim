@@ -100,7 +100,8 @@ function cockpitAction(id) {
     case 'alt': if (s) s.alt = !s.alt; break;
     case 'avm': if (s) s.avMaster = s.avMaster === false; break;
     case 'cb-alt': if (ac.breakers) ac.breakers.altFld = ac.breakers.altFld === false; break;
-    case 'cb-avn': case 'cb-ap': case 'cb-flap': case 'cb-lts': case 'cb-com': case 'cb-xpdr': case 'cb-tc': case 'cb-pitot': { const k = id.slice(3); if (ac.breakers) ac.breakers[k] = !ac.breakers[k]; break; }
+    case 'cb-avn': case 'cb-ap': case 'cb-flap': case 'cb-lts': case 'cb-com': case 'cb-xpdr': case 'cb-tc': case 'cb-pitot':
+    case 'cb-ldg': case 'cb-navl': case 'cb-strb': case 'cb-bcn': case 'cb-inst': { const k = id.slice(3); if (ac.breakers) ac.breakers[k] = !ac.breakers[k]; break; }
     // transponder code knobs: each digit steps 0-7 (squawk codes are octal)
     case 'xp-1': case 'xp-2': case 'xp-3': case 'xp-4': if (s) {
       const d = String(s.xpdr ?? 1200).padStart(4, '0').split(''), i = +id.slice(3) - 1;
@@ -691,6 +692,8 @@ function frame(now) {
     if (inCockpit) cockpit.setNight(env.state().night);
   }
   if (inCockpit) {
+    // instrument lighting: INST LT breaker in and a live bus (start-up aircraft)
+    cockpit.setBacklight?.(ac.breakers?.inst !== false && (!ac.p?.startup || (!!ac.sys?.battery && (ac.batteryCharge > 0.1 || !!ac.charging))));
     const apS = autopilot.status(ac);
     const flapNames = currentCraft?.hud?.flapNames;
     cockpit.setUi({
@@ -712,7 +715,8 @@ function frame(now) {
       'trim-up': (controls.state.trim || 0) > 0.005 ? 'T ' + Math.round(controls.state.trim * 100) : false,
       'trim-dn': (controls.state.trim || 0) < -0.005 ? 'T ' + Math.round(controls.state.trim * 100) : false,
       'cb-avn': ac.breakers?.avn !== false, 'cb-ap': ac.breakers?.ap !== false, 'cb-flap': ac.breakers?.flap !== false,
-      'cb-lts': ac.breakers?.lts !== false, 'cb-com': ac.breakers?.com !== false, 'cb-xpdr': ac.breakers?.xpdr !== false, 'cb-tc': ac.breakers?.tc !== false,
+      'cb-lts': ac.breakers?.lts !== false, 'cb-ldg': ac.breakers?.ldg !== false, 'cb-navl': ac.breakers?.navl !== false,
+      'cb-strb': ac.breakers?.strb !== false, 'cb-bcn': ac.breakers?.bcn !== false, 'cb-inst': ac.breakers?.inst !== false, 'cb-com': ac.breakers?.com !== false, 'cb-xpdr': ac.breakers?.xpdr !== false, 'cb-tc': ac.breakers?.tc !== false,
       ...Object.fromEntries([0, 1, 2, 3].map(i => ['xp-' + (i + 1), String(ac.sys?.xpdr ?? 1200).padStart(4, '0')[i]])),
       'flap-up': controls.flapDetent === 0, 'flap-dn': controls.flapDetent > 0 ? (flapNames?.[controls.flapDetent] ?? true) : false,
     }, ac.avionics === false || ac.breakers?.com === false ? null : {

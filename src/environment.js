@@ -10,6 +10,7 @@ import { createRunwayLights } from './runwayLights.js';
 import { DISPLAY, displayMatch, displayOf } from './display.js';
 import { createVolumetricClouds } from './volclouds.js';
 import { CLOUD_SHADOW } from './cloudshadow.js';
+import { litLights } from './physics/flightModel.js';
 
 const D2R = Math.PI / 180;
 // Sun/moon direction from azimuth (deg, 0 = +x, increasing toward -z) and
@@ -868,7 +869,7 @@ export function createEnvironment(scene, renderer) {
 
       // Landing-light cone: nose-mounted spotlight pointing along body +x. Only
       // lit at night; a single no-shadow light, so it stays cheap.
-      if (tod.night && ac.sys?.lights?.land !== false && ac.breakers?.lts !== false) {   // the cockpit LAND switch
+      if (tod.night && (litLights(ac)?.land ?? true)) {   // the LAND switch, its breaker and a powered bus
         tmpQ.set(ac.q.x, ac.q.y, ac.q.z, ac.q.w);
         fwdV.set(1, 0, 0).applyQuaternion(tmpQ);
         // from AHEAD of the nose (and so of the instrument panel): at the CG the

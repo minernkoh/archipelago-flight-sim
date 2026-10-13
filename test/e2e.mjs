@@ -352,7 +352,17 @@ const onScreen = (ids) => page.evaluate((ids) => {
 const reach0 = await onScreen(['xp-1', 'xp-4', 'page', 'bat', 'alt', 'avm', 'trim-up', 'altstat', 'ap-apr', 'hdg-up']);
 await page.evaluate(() => window.__sim.cockpitAction('page'));
 await page.waitForFunction('!!window.__sim.cockpit.buttonWorld("cb-tc")', { timeout: 60000, polling: 300 });
-const reach1 = await onScreen(['cb-avn', 'cb-tc', 'cb-xpdr', 'cb-alt', 'page']);
+const reach1 = await onScreen(['cb-avn', 'cb-tc', 'cb-xpdr', 'cb-alt', 'cb-ldg', 'cb-inst', 'page']);
+// INST LT breaker: the panel backlight goes out with it (and comes back)
+const inst = await page.evaluate(async () => {
+  const s = window.__sim, wait = async () => { const t0 = s.simTime; while (s.simTime - t0 < 0.2) await new Promise(r => setTimeout(r, 50)); };
+  const before = s.cockpit.backlight;
+  s.cockpitAction('cb-inst'); await wait(); const out = s.cockpit.backlight;
+  s.cockpitAction('cb-strb'); const strb = s.ac.breakers.strb;
+  s.cockpitAction('cb-inst'); s.cockpitAction('cb-strb'); await wait();
+  return { before, out, back: s.cockpit.backlight, strb };
+});
+check('INST LT breaker kills the panel backlight; the lights have their own breakers', inst.before === true && inst.out === false && inst.back === true && inst.strb === false, JSON.stringify(inst));
 await page.evaluate(() => window.__sim.cockpitAction('page'));
 await page.waitForFunction('!!window.__sim.cockpit.buttonWorld("bat")', { timeout: 60000, polling: 300 });
 check('every cockpit control is in the default view (switches, breaker page, XPDR knobs)',

@@ -81,7 +81,8 @@ export function createAircraft(opts = {}) {
     altIndicated: opts.pos ? opts.pos.y : 1000, vsIndicated: 0,   // static-port instruments
     gyro: null,            // drifting gyro attitude after a vacuum failure, else null
     // circuit breakers the pilot can pull (cockpit.js): avionics bus, autopilot, flap motor
-    breakers: { avn: true, ap: true, flap: true, lts: true, com: true, xpdr: true, tc: true, pitot: true, altFld: true },
+    breakers: { avn: true, ap: true, flap: true, lts: true, com: true, xpdr: true, tc: true, pitot: true, altFld: true,
+    ldg: true, navl: true, strb: true, bcn: true, inst: true },
     // v5-R3: piston start/electrical state (only exercised for p.startup aircraft).
     // Defaults are ready-to-fly so every existing caller spawns hot.
     // player switch positions (v12: fuel selector and light switches)
@@ -134,7 +135,8 @@ export function resetSystems(ac) {
   ac._flapJam = null; ac.gyro = null;
   ac.oilQty = 1; ac.oilT = null; ac.oilLowT = 0;      // oil warms up again from the next update
   ac.cht = null; ac.chtRate = 0; ac.shockCooling = false; ac.engineWear = 0; ac.pitotIce = 0; ac.screenMist = 0;   // a fresh engine on every respawn
-  ac.breakers = { avn: true, ap: true, flap: true, lts: true, com: true, xpdr: true, tc: true, pitot: true, altFld: true };
+  ac.breakers = { avn: true, ap: true, flap: true, lts: true, com: true, xpdr: true, tc: true, pitot: true, altFld: true,
+    ldg: true, navl: true, strb: true, bcn: true, inst: true };
   // Ready-to-fly: master on, mags BOTH, mixture rich, engine turning, full battery.
   ac.sys = { battery: true, mags: 'BOTH', mixture: 1, fuel: 'BOTH', lights: { land: true, nav: true, strobe: true, beacon: true },
     carbHeat: false, primes: 2, xpdr: 1200, altStatic: false, cabinHeat: false, vent: false,
@@ -232,11 +234,29 @@ function updateCylinders(ac, dt, V) {
 // without the alternator is proportional to it (game-compressed: ~6 min with
 // everything on, ~50 min shed to the essentials).
 export const BATT_PER_AMP = 0.0001;
+// The exterior lights actually lit: each needs its switch, its own breaker
+// (LDG / NAV / STROBE / BCN; LTS is the glass cockpits' single breaker) and,
+// on a start-up aircraft, a powered bus (battery master on and charged, or
+// the alternator on line). One shared object: read it, do not keep it.
+const _lit = { land: false, nav: false, strobe: false, beacon: false };
+export function litLights(ac) {
+  const s = ac.sys;
+  if (!s || !s.lights) return null;
+  const b = ac.breakers || {};
+  const powered = !ac.p?.startup || (!!s.battery && ((ac.batteryCharge ?? 1) > 0.1 || !!ac.charging));
+  const on = powered && b.lts !== false;
+  _lit.land = on && !!s.lights.land && b.ldg !== false;
+  _lit.nav = on && !!s.lights.nav && b.navl !== false;
+  _lit.strobe = on && !!s.lights.strobe && b.strb !== false;
+  _lit.beacon = on && !!s.lights.beacon && b.bcn !== false;
+  return _lit;
+}
 export function electricalLoad(ac) {
   const s = ac.sys || {}, b = ac.breakers || {};
   let a = 3;
   if (s.avMaster !== false && b.avn !== false) a += 7;
-  if (b.lts !== false && s.lights) a += (s.lights.land ? 8 : 0) + (s.lights.nav ? 3 : 0) + (s.lights.strobe ? 3 : 0) + (s.lights.beacon ? 2 : 0);
+  const L = litLights(ac);
+  if (L) a += (L.land ? 8 : 0) + (L.nav ? 3 : 0) + (L.strobe ? 3 : 0) + (L.beacon ? 2 : 0);
   if (s.pitotHeat && b.pitot !== false) a += 10;
   return a;
 }

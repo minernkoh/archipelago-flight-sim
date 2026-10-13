@@ -16,6 +16,7 @@
 
 import * as THREE from 'three';
 import { AIRCRAFT } from './params.js';
+import { litLights } from '../physics/flightModel.js';
 import {
   loft, surface, wingHalf, hinged, mirrorZ, rod, wheel, wheelY, bladeGeo,
   surfacePoint, stationAt, PROFILE, roundProfile,
@@ -105,12 +106,11 @@ function navMats(col) {
   }
   return [_navCoreMat[col], _navGlowMat[col]];
 }
-// the cockpit light switches, all off when the LTS breaker is pulled (AI
-// traffic passes no state: all on)
-const LIGHTS_OFF = { land: false, nav: false, strobe: false, beacon: false };
+// the cockpit light switches through their breakers and the bus
+// (flightModel.js litLights; AI traffic passes no state: all on)
 function litSwitches(st) {
   if (!st || !st.sys) return null;
-  return st.breakers && st.breakers.lts === false ? LIGHTS_OFF : st.sys.lights;
+  return litLights(st);
 }
 function navLights(parent, s, specs) {
   const blinkers = [], steady = [];
