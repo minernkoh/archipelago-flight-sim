@@ -24,6 +24,7 @@ import { createTrainingSystem } from './training.js';
 import { createEffects } from './effects.js';
 import { createTrails } from './trails.js';
 import { createTraffic } from './traffic.js';
+import { createLightGun } from './lightgun.js';
 import { createWind, WEATHER, WET_WEATHER } from './physics/wind.js';
 import { createWeatherFX } from './weather.js';
 import { createReplay } from './replay.js';
@@ -101,7 +102,7 @@ function cockpitAction(id) {
     case 'avm': if (s) s.avMaster = s.avMaster === false; break;
     case 'cb-alt': if (ac.breakers) ac.breakers.altFld = ac.breakers.altFld === false; break;
     case 'cb-avn': case 'cb-ap': case 'cb-flap': case 'cb-lts': case 'cb-com': case 'cb-xpdr': case 'cb-tc': case 'cb-pitot':
-    case 'cb-ldg': case 'cb-navl': case 'cb-strb': case 'cb-bcn': case 'cb-inst': { const k = id.slice(3); if (ac.breakers) ac.breakers[k] = !ac.breakers[k]; break; }
+    case 'cb-ldg': case 'cb-navl': case 'cb-strb': case 'cb-bcn': case 'cb-inst': case 'cb-navr': { const k = id.slice(3); if (ac.breakers) ac.breakers[k] = !ac.breakers[k]; break; }
     // transponder code knobs: each digit steps 0-7 (squawk codes are octal)
     case 'xp-1': case 'xp-2': case 'xp-3': case 'xp-4': if (s) {
       const d = String(s.xpdr ?? 1200).padStart(4, '0').split(''), i = +id.slice(3) - 1;
@@ -205,6 +206,18 @@ let rings = createRings(scene, { course: currentMap.raceCourse, heightFn: curren
 rings.show(false);
 // Ambient boats / pattern traffic / birds (visual only; off on LOW quality).
 let traffic = createTraffic(scene, currentMap, { enabled: qualityHigh });
+// the tower's light gun (lightgun.js): clearances by light when your COM radio is dead
+const lightGun = createLightGun(scene);
+function placeLightGun(map) {
+  const r = map.runway, t = map.towerPos;
+  if (t) { lightGun.setPos(t.x, t.y, t.z); return; }
+  // no modelled tower: a cab beside the runway, abeam the touchdown zone
+  const fx = Math.cos(r.headingRad), fz = -Math.sin(r.headingRad), rx = Math.sin(r.headingRad), rz = Math.cos(r.headingRad);
+  const u = r.spawn.x * fx + r.spawn.z * fz + 300, v = -((r.halfWidth || 20) + 180);
+  const x = fx * u + rx * v, z = fz * u + rz * v;
+  lightGun.setPos(x, Math.max(map.height(x, z), r.y || 0) + 20, z);
+}
+placeLightGun(currentMap);
 
 // Collision height folds solid obstacles in; aero ground effect and AGL use
 // bare terrain so overflying a rooftop doesn't fake ground effect.
@@ -287,6 +300,7 @@ async function loadMap(map) {
   rings = createRings(scene, { course: map.raceCourse, heightFn: map.height, finalDir: map.finalGateDir });
   rings.show(false);
   traffic = createTraffic(scene, map, { enabled: qualityHigh });
+  placeLightGun(map); lightGun.clear();
   env.applyEnv(traffic.group, 'traffic');
   env.applyEnv(scenery, 'scenery');
   env.setGround(collisionHeight);
@@ -418,6 +432,9 @@ const world = {
   /** The AI circuit aircraft (aitraffic.js) as the tower sees it, or null. */
   /** The tower's instructions to the AI traffic since the last call (modes.js passes them to atc.js). */
   aiEvents() { return traffic?.drainEvents?.() ?? []; },
+  /** atc.js light-gun signal (your COM radio dead): 'green' | 'red' | 'flashGreen'. */
+  towerLight(kind) { lightGun.signal(kind, elapsed); },
+  get lightGun() { return lightGun.state; },
   aiTraffic(pos = ac.pos) {
     // the aircraft that matters to the tower: one on the runway or short final
     // first, otherwise the nearest
@@ -546,7 +563,7 @@ controls.on('ap-wing', () => { if (flying()) autopilot.toggleWing(ac); });
 controls.on('ap-apr', () => {
   if (!flying()) return;
   // APR flies the ILS, so NAV 1 has to be on it (it comes pre-tuned)
-  if ((!radios.ilsTuned || ac.breakers?.com === false) && !autopilot.modes.apr) { hud.message(`APR needs the ILS: tune NAV 1 to ${fmtFreq(radios.ils)}`, 3500); return; }
+  if ((!radios.ilsTuned || ac.breakers?.navr === false) && !autopilot.modes.apr) { hud.message(`APR needs the ILS: tune NAV 1 to ${fmtFreq(radios.ils)}`, 3500); return; }
   autopilot.toggleApr(ac, controls);
 });
 
@@ -716,12 +733,13 @@ function frame(now) {
       'trim-dn': (controls.state.trim || 0) < -0.005 ? 'T ' + Math.round(controls.state.trim * 100) : false,
       'cb-avn': ac.breakers?.avn !== false, 'cb-ap': ac.breakers?.ap !== false, 'cb-flap': ac.breakers?.flap !== false,
       'cb-lts': ac.breakers?.lts !== false, 'cb-ldg': ac.breakers?.ldg !== false, 'cb-navl': ac.breakers?.navl !== false,
-      'cb-strb': ac.breakers?.strb !== false, 'cb-bcn': ac.breakers?.bcn !== false, 'cb-inst': ac.breakers?.inst !== false, 'cb-com': ac.breakers?.com !== false, 'cb-xpdr': ac.breakers?.xpdr !== false, 'cb-tc': ac.breakers?.tc !== false,
+      'cb-strb': ac.breakers?.strb !== false, 'cb-bcn': ac.breakers?.bcn !== false, 'cb-inst': ac.breakers?.inst !== false, 'cb-com': ac.breakers?.com !== false, 'cb-navr': ac.breakers?.navr !== false, 'cb-xpdr': ac.breakers?.xpdr !== false, 'cb-tc': ac.breakers?.tc !== false,
       ...Object.fromEntries([0, 1, 2, 3].map(i => ['xp-' + (i + 1), String(ac.sys?.xpdr ?? 1200).padStart(4, '0')[i]])),
       'flap-up': controls.flapDetent === 0, 'flap-dn': controls.flapDetent > 0 ? (flapNames?.[controls.flapDetent] ?? true) : false,
-    }, ac.avionics === false || ac.breakers?.com === false ? null : {
-      com: { act: fmtFreq(radios.com.act), sby: fmtFreq(radios.com.sby) },
-      nav: { act: fmtFreq(radios.nav.act), sby: fmtFreq(radios.nav.sby), ils: radios.ilsTuned },
+    }, ac.avionics === false ? null : {
+      // each radio dark with its own breaker out (COM, NAV)
+      com: ac.breakers?.com === false ? null : { act: fmtFreq(radios.com.act), sby: fmtFreq(radios.com.sby) },
+      nav: ac.breakers?.navr === false ? null : { act: fmtFreq(radios.nav.act), sby: fmtFreq(radios.nav.sby), ils: radios.ilsTuned },
       tcas: tcasState?.targets ?? null,
     });
     cockpit.update(ac, c, dt);
@@ -762,6 +780,7 @@ function frame(now) {
   if (!mapLoading && currentMap.prefetch) currentMap.prefetch(view.pos.x, view.pos.z, COARSE_TILE_RADIUS);
   env.update(view, dt, elapsed, camera.position, camera);
   // the circuit traffic steps away from you; the intruder of a TCAS RA flies the complementary sense
+  lightGun.update(elapsed);
   traffic.update(dt, camera.position, elapsed, isFlying ? ac.pos : null,
     tcasState?.level === 'RA' ? { id: tcasState.targets.find(x => x.level === 'RA')?.id, sense: tcasState.sense } : null,
     isFlying ? { vel: ac.vel, onGround: ac.onGround } : null);
@@ -778,7 +797,7 @@ function frame(now) {
     hud.setAnnunciators?.(annunciators(ac));
     // ILS receiver: needles live inside the localizer beam out to 18 km (or whenever APR is armed)
     const appr = apS.ils;
-    NAV.ils = radios.ilsTuned && ac.breakers?.com !== false && appr && appr.dist > -300 && appr.dist < 18000 && (apS.apr || Math.abs(appr.locDots) < 5) ? appr : null;
+    NAV.ils = radios.ilsTuned && ac.breakers?.navr !== false && ac.avionics !== false && appr && appr.dist > -300 && appr.dist < 18000 && (apS.apr || Math.abs(appr.locDots) < 5) ? appr : null;
     audioView.x = camera.position.x; audioView.y = camera.position.y; audioView.z = camera.position.z;
     audioView.mode = camRig.modeName;
     audio.update(ac, c, audioView);

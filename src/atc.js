@@ -111,7 +111,17 @@ export const LIMITS = {
  * runwayFrame; vsFpm is positive UP (note the debrief's touchdown.fpm is
  * sink-positive, so the call site negates it there, not here).
  */
-export function createAtc({ field, rwyName, callsign, say } = {}) {
+// Light-gun signals (v12): with your COM radio dead the tower cannot be
+// heard, so the clearances that matter come as light signals from the cab
+// (AIM 4-3-13): steady green = cleared for takeoff / to land, steady red =
+// hold / give way and keep circling, flashing green = cleared to taxi.
+export const LIGHT_SIGNAL = {
+  clearance: 'green', clearLand: 'green', emergency: 'green',
+  holdShort: 'red', goAround: 'red', goAroundTraffic: 'red',
+  landed: 'flashGreen',
+};
+
+export function createAtc({ field, rwyName, callsign, say, light } = {}) {
   const ctx = {
     field: titleCase(field),
     rwy: sayRunway(rwyName),
@@ -123,10 +133,12 @@ export function createAtc({ field, rwyName, callsign, say } = {}) {
   let sinceTraffic = 1e9, sequenced = false, emergencyAck = false;
   const aiQueue = [];
 
+  let radioOk = true;
   function emit(id, extra) {
     const text = buildPhrase(id, extra ? { ...ctx, ...extra } : ctx);
     sinceCall = 0;
-    say?.(text, id);
+    if (radioOk) say?.(text, id);
+    else if (LIGHT_SIGNAL[id]) light?.(LIGHT_SIGNAL[id], id);   // no radio: the light gun
     return id;
   }
 
@@ -142,6 +154,7 @@ export function createAtc({ field, rwyName, callsign, say } = {}) {
       sinceCall += dt;
       sinceTraffic += dt;
       if (!armed || !snap) return null;
+      radioOk = snap.com !== false;   // your COM radio receiving (bus, avionics, COM breaker)
       if (snap.aiCalls && snap.aiCalls.length) { aiQueue.push(...snap.aiCalls); if (aiQueue.length > 3) aiQueue.splice(0, aiQueue.length - 3); }
       if (sinceCall < LIMITS.minGapSec) return null;
       // instructions to the AI traffic go out between our own calls

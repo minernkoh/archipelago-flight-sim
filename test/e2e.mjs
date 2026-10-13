@@ -643,12 +643,12 @@ await press('o');
 const aprRefused = await sim('({ apr: !!__sim.autopilot.modes.apr, msg: document.querySelector("#msg").textContent })');
 check('APR refuses until NAV 1 is on the ILS', !aprRefused.apr && /tune NAV 1/.test(aprRefused.msg), JSON.stringify(aprRefused));
 await page.evaluate(() => { window.__sim.cockpitAction('nav-swap'); });
-// the COM/NAV breaker out: radios dark, so APR refuses even on the right frequency
-await page.evaluate(() => window.__sim.cockpitAction('cb-com'));
+// the NAV radio breaker out: NAV 1 dark, so APR refuses even on the right frequency
+await page.evaluate(() => window.__sim.cockpitAction('cb-navr'));
 await press('o');
 const aprNoCom = await sim('({ apr: !!__sim.autopilot.modes.apr })');
-await page.evaluate(() => window.__sim.cockpitAction('cb-com'));
-check('APR refuses with the COM/NAV breaker pulled', aprNoCom.apr === false, JSON.stringify(aprNoCom));
+await page.evaluate(() => window.__sim.cockpitAction('cb-navr'));
+check('APR refuses with the NAV radio breaker pulled', aprNoCom.apr === false, JSON.stringify(aprNoCom));
 await press('o'); await press('j');
 await page.evaluate(() => { window.__sim.autopilot.sel.ias = 34; });
 await simSettle(12000, '__sim.autopilot.status(__sim.ac).apr?.gs === true && __sim.simTime > 0');
@@ -663,6 +663,16 @@ await page.evaluate(() => { window.__sim.cockpitAction('cb-ap'); });
 await settle(300);
 const cbAp = await sim('({ on: __sim.autopilot.on, warn: __sim.autopilot.status(__sim.ac).warn })');
 check('pulling the AP circuit breaker drops the autopilot', !cbAp.on, JSON.stringify(cbAp));
+// the tower's light gun (COM radio dead): a steady and a flashing signal from the cab
+const gun = await page.evaluate(async () => {
+  const s = window.__sim, wait = async (d) => { const t0 = s.simTime; while (s.simTime - t0 < d) await new Promise(r => setTimeout(r, 40)); };
+  s.world.towerLight('green'); await wait(0.3); const steady = { ...s.world.lightGun };
+  s.world.towerLight('flashGreen'); const seen = new Set(); const t0 = s.simTime;
+  while (s.simTime - t0 < 2.5) { seen.add(s.world.lightGun.lit); await new Promise(r => setTimeout(r, 40)); }
+  s.world.towerLight(null); await wait(0.2);
+  return { steady, flashSeen: [...seen], after: { ...s.world.lightGun } };
+});
+check('tower light gun: steady green lit, flashing green blinks, cleared after', gun.steady.kind === 'green' && gun.steady.lit && gun.flashSeen.length === 2 && !gun.after.lit, JSON.stringify(gun));
 await page.evaluate(() => { window.__sim.cockpitAction('cb-ap'); });
 if (await sim('__sim.autopilot.on')) await press('p'); // AP off (the breaker check already dropped it)
 await settle(150);

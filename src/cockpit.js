@@ -167,7 +167,7 @@ export function createCockpit(cfg, hud, p = null) {
     { id: 'flap-up', label: 'FLAP ▲' }, { id: 'flap-dn', label: 'FLAP ▼' },
     // circuit breakers (lit = in): avionics bus, autopilot, flap motor, ... and the alternator field
     { id: 'cb-avn', label: 'CB AVN' }, { id: 'cb-ap', label: 'CB AP' }, { id: 'cb-flap', label: 'CB FLP' },
-    ...(glass ? [{ id: 'cb-lts', label: 'CB LTS' }] : []), { id: 'cb-com', label: 'CB COM' }, { id: 'cb-xpdr', label: 'CB XPD' },
+    ...(glass ? [{ id: 'cb-lts', label: 'CB LTS' }] : []), { id: 'cb-com', label: 'CB COM' }, { id: 'cb-navr', label: 'CB NAV' }, { id: 'cb-xpdr', label: 'CB XPD' },
     ...(glass ? [] : [{ id: 'cb-tc', label: 'CB TC' }, { id: 'cb-pitot', label: 'CB PITOT' },
       // the steam panels break the lights out one breaker each, as in the aeroplane
       { id: 'cb-ldg', label: 'CB LDG LT' }, { id: 'cb-navl', label: 'CB NAV LT' }, { id: 'cb-strb', label: 'CB STROBE' },

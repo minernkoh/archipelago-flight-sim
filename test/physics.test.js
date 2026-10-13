@@ -2162,6 +2162,19 @@ import { createAtc, callsignFor, sayRunway } from '../src/atc.js';
   const ah = tower();
   ah.update({ onGround: true, agl: 0, cross: 0, aiCalls: [{ kind: 'hold', who: 'Archipelago two one heavy', why: 'traffic on the runway' }] }, 0);
   check('ATC: the tower holds a departing airliner short ("hold position")', said.some(x => x.id === 'aiHold' && /Archipelago two one heavy, hold position, traffic on the runway/.test(x.t)), said.map(x => x.t).join(' | '));
+  { // COM radio dead: nothing is heard; the clearances come as light-gun signals
+    const lights = [];
+    const lt = mkTower({ field: 'ARCHIPELAGO', rwyName: '09', callsign: 'Skyhawk five delta alpha', say: (t, id) => said.push({ t, id }), light: (k, id) => lights.push({ k, id }) });
+    said.length = 0;
+    lt.update({ onGround: true, agl: 0, cross: 0, com: false, aiCalls: [{ kind: 'orbit', who: 'Cessna two', why: 'runway occupied' }] }, 0);
+    const silent = said.length === 0, first = lights[0];
+    lt.update({ onGround: true, agl: 0, cross: 0, com: false }, 30);
+    const lt2 = mkTower({ field: 'ARCHIPELAGO', rwyName: '09', callsign: 'x', say: (t, id) => said.push({ t, id }), light: (k, id) => lights.push({ k, id }) });
+    lt2.update({ onGround: true, agl: 0, cross: 0, com: false, ai: aiAt({ phase: 'final', toAim: 800, y: 40, onRunway: false }) }, 0);
+    check('ATC: with the COM radio dead nothing is heard; takeoff is a steady green, hold is a steady red (light gun)',
+      silent && said.length === 0 && lights.some(l => l.id === 'clearance' && l.k === 'green') && lights.some(l => l.id === 'holdShort' && l.k === 'red'),
+      `said ${said.length}, lights ${lights.map(l => l.id + ':' + l.k).join(' ')}`);
+  }
   const em = tower();
   em.update({ onGround: false, agl: 800, cross: 0 }, 0);
   em.update({ onGround: false, agl: 600, vsFpm: 0, cross: 3000, squawk: 7700 }, 5);

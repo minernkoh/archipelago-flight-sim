@@ -321,7 +321,7 @@ export function drawSteamPanel(x, W, H, ac, hud, ui = null) {
     x.fillStyle = '#121416'; x.fillRect(rx, y, rw, bh);
     x.fillStyle = '#3e4248'; x.fillRect(rx + 4, y + 4, rw - 8, 6);
     x.fillStyle = '#34ff6a'; x.textAlign = 'left'; x.textBaseline = 'middle';
-    if (ui && ui.radio && i < 2) {
+    if (ui && ui.radio && i < 2 && ui.radio[i === 0 ? 'com' : 'nav']) {
       // active frequency big, standby small, then the tune / swap buttons
       const id = i === 0 ? 'com' : 'nav', rd = ui.radio[id];
       x.font = `bold ${Math.min(H * 0.05, rw * 0.09)}px "B612 Mono", monospace`;
@@ -481,7 +481,7 @@ function nd(x, X, Y, S, v, radio = null) {
   x.fillStyle = '#34ff6a'; x.textAlign = 'right';
   x.fillText(`GS ${Math.round(v.ias)}`, X + S * 0.95, Y + S * 0.07);
   x.restore();
-  if (radio) {
+  if (radio && radio.nav) {
     // NAV 1 active / standby in the top corners, magenta when it is the field's ILS
     x.save();
     x.font = `bold ${S * 0.045}px "B612 Mono", monospace`; x.textBaseline = 'top';

@@ -542,6 +542,8 @@ export const archipelagoMap = {
   isRunway,
   runway: RUNWAY,
   taxiLayout: () => TAXI,
+  // the control tower's cab (createScenery puts the tower at 212, 56): the light gun
+  towerPos: { x: 212, y: RUNWAY.y + 17, z: 56 },
   createScenery: createArchipelagoScenery,
   raceCourse,
   obstacleTop() { return -Infinity; },  // no solid obstacles on this map

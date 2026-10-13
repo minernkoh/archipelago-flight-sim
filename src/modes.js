@@ -403,6 +403,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
     atc = createAtc({
       field: map.name, rwyName: map.runway.name,
       callsign: callsignFor(flightAircraft), say: sayAtc,
+      light: (kind) => world.towerLight?.(kind),   // radio dead: the tower's light gun
     });
     atc.setArmed(settings.atc);
     state = 'flying';
@@ -723,6 +724,7 @@ export function createGameFlow({ ac, hud, audio, controls, camRig, world, fx, au
           ai: world.aiTraffic?.() || null,
           aiCalls: world.aiEvents?.() || null,
           squawk: ac.breakers?.xpdr === false ? null : ac.sys?.xpdr ?? 1200,   // no transponder, no squawk
+          com: ac.avionics !== false && ac.breakers?.com !== false,           // can you hear the tower?
         }, dt);
       }
 

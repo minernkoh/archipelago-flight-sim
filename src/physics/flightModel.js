@@ -82,7 +82,7 @@ export function createAircraft(opts = {}) {
     gyro: null,            // drifting gyro attitude after a vacuum failure, else null
     // circuit breakers the pilot can pull (cockpit.js): avionics bus, autopilot, flap motor
     breakers: { avn: true, ap: true, flap: true, lts: true, com: true, xpdr: true, tc: true, pitot: true, altFld: true,
-    ldg: true, navl: true, strb: true, bcn: true, inst: true },
+    ldg: true, navl: true, strb: true, bcn: true, inst: true, navr: true },
     // v5-R3: piston start/electrical state (only exercised for p.startup aircraft).
     // Defaults are ready-to-fly so every existing caller spawns hot.
     // player switch positions (v12: fuel selector and light switches)
@@ -137,7 +137,7 @@ export function resetSystems(ac) {
   ac.cht = null; ac.chtRate = 0; ac.shockCooling = false; ac.engineWear = 0; ac.pitotIce = 0; ac.screenMist = 0;   // a fresh engine on every respawn
   ac.plugFoul = { L: 0, R: 0 }; ac.plugRough = false; ac.cylWear = [0, 0, 0, 0]; ac.chtRates = [0, 0, 0, 0]; ac.cylRough = false;
   ac.breakers = { avn: true, ap: true, flap: true, lts: true, com: true, xpdr: true, tc: true, pitot: true, altFld: true,
-    ldg: true, navl: true, strb: true, bcn: true, inst: true };
+    ldg: true, navl: true, strb: true, bcn: true, inst: true, navr: true };
   // Ready-to-fly: master on, mags BOTH, mixture rich, engine turning, full battery.
   ac.sys = { battery: true, mags: 'BOTH', mixture: 1, fuel: 'BOTH', lights: { land: true, nav: true, strobe: true, beacon: true },
     carbHeat: false, primes: 2, xpdr: 1200, altStatic: false, cabinHeat: false, vent: false,
